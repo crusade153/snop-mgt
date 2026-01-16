@@ -2,17 +2,16 @@
 import { getLatestOrders } from '@/actions/order-actions';
 import { getInventoryStatus } from '@/actions/inventory-actions';
 import { getProductionPlan } from '@/actions/production-actions';
-import { aggregateData } from '@/utils/snop-aggregation';
+// 👇 경로가 @/lib/... 인지 확인하세요
+import { aggregateData } from '@/lib/snop-aggregation';
 
 export default async function DashboardPage() {
-  // 1. 3가지 데이터를 병렬로 동시에 가져옵니다 (속도 최적화)
   const [orders, inventory, production] = await Promise.all([
     getLatestOrders(),
     getInventoryStatus(),
     getProductionPlan()
   ]);
 
-  // 2. 가져온 데이터를 주차별, 제품별로 하나로 합칩니다.
   const snopData = aggregateData(orders, inventory, production);
 
   return (
@@ -20,7 +19,7 @@ export default async function DashboardPage() {
       <h1 className="text-3xl font-bold mb-2 text-gray-800">📊 S&OP 통합 대시보드</h1>
       <p className="text-gray-500 mb-8">판매, 생산, 재고 현황을 주차별로 통합하여 보여줍니다.</p>
 
-      {/* 요약 카드 영역 */}
+      {/* 요약 카드 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="bg-blue-50 p-6 rounded-xl border border-blue-100">
           <h3 className="text-blue-600 font-semibold mb-1">총 수요 (Orders)</h3>
@@ -45,7 +44,7 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* 통합 데이터 테이블 */}
+      {/* 테이블 */}
       <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
         <table className="w-full text-sm text-left">
           <thead className="bg-gray-100 text-gray-700 font-semibold">
@@ -54,7 +53,7 @@ export default async function DashboardPage() {
               <th className="px-6 py-4">자재명 (Product)</th>
               <th className="px-6 py-4 text-right bg-blue-50/50">수요 (Demand)</th>
               <th className="px-6 py-4 text-right bg-green-50/50">공급 (Supply)</th>
-              <th className="px-6 py-4 text-right bg-gray-50/50">재고 변동 (Delta)</th>
+              <th className="px-6 py-4 text-right bg-gray-50/50">재고 변동</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -83,7 +82,6 @@ export default async function DashboardPage() {
             })}
           </tbody>
         </table>
-        
         {snopData.length === 0 && (
           <div className="p-12 text-center text-gray-500">
             데이터가 충분하지 않아 집계할 수 없습니다.

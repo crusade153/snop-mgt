@@ -1,4 +1,3 @@
-// app/stock/page.tsx
 'use client'
 
 import { useState, useMemo } from 'react';
@@ -6,8 +5,8 @@ import { useDashboardData } from '@/hooks/use-dashboard';
 import { 
   Search, Calendar, ChevronLeft, ChevronRight 
 } from 'lucide-react';
+import { IntegratedItem } from '@/types/analysis'; // ✅ 타입 Import
 
-// 🚨 [수정] TabType에 'imminent' 추가
 type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed';
 
 export default function StockStatusPage() {
@@ -23,24 +22,26 @@ export default function StockStatusPage() {
   const filteredData = useMemo(() => {
     if (!data) return [];
 
-    let items = data.integratedArray.filter(item => item.inventory.totalStock > 0);
+    // ✅ [수정] item에 IntegratedItem 타입 명시
+    let items = data.integratedArray.filter((item: IntegratedItem) => item.inventory.totalStock > 0);
 
     // 탭 필터
     if (activeTab !== 'all') {
-      items = items.filter(item => item.inventory.status === activeTab);
+      items = items.filter((item: IntegratedItem) => item.inventory.status === activeTab);
     }
 
     // 검색 필터
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
-      items = items.filter(item => 
+      items = items.filter((item: IntegratedItem) => 
         item.name.toLowerCase().includes(lower) || 
         item.code.includes(lower)
       );
     }
 
     // 정렬 (임박/폐기 우선, 그 다음 잔여일 짧은 순)
-    items.sort((a, b) => a.inventory.remainingDays - b.inventory.remainingDays);
+    // ✅ [수정] a, b에 IntegratedItem 타입 명시
+    items.sort((a: IntegratedItem, b: IntegratedItem) => a.inventory.remainingDays - b.inventory.remainingDays);
 
     return items;
   }, [data, activeTab, searchTerm]);
@@ -71,9 +72,10 @@ export default function StockStatusPage() {
 
       {/* 🎛️ 컨트롤 패널 (탭 + 검색) */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-        {/* Tabs - 🚨 [수정] 탭 구성 변경: 양호 / 긴급 / 임박 / 폐기 */}
+        {/* Tabs */}
         <div className="flex bg-neutral-100 p-1 rounded-lg">
-          <TabButton label="전체" count={data.integratedArray.filter(i=>i.inventory.totalStock>0).length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
+          {/* ✅ [수정] filter 내부 타입 명시 */}
+          <TabButton label="전체" count={data.integratedArray.filter((i: IntegratedItem)=>i.inventory.totalStock>0).length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
           <TabButton label="양호" count={data.stockHealth.healthy} active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
           <TabButton label="긴급 (60일↓)" count={data.stockHealth.critical} active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
           <TabButton label="임박 (30일↓)" count={data.stockHealth.imminent} active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
@@ -111,12 +113,12 @@ export default function StockStatusPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {paginatedItems.map((item, idx) => {
+              {/* ✅ [수정] map 인자 타입 명시 */}
+              {paginatedItems.map((item: IntegratedItem, idx: number) => {
                 const worstBatch = item.inventory.batches.sort((a, b) => a.remainDays - b.remainDays)[0];
                 const expiryDate = worstBatch ? worstBatch.expirationDate : '-';
                 const remainRate = worstBatch ? worstBatch.remainRate : 0;
 
-                // 잔여일수 색상 처리 (임박이면 빨강, 긴급이면 주황)
                 const daysColor = item.inventory.status === 'imminent' ? 'text-[#E65100] font-bold' : 
                                   (item.inventory.status === 'critical' ? 'text-[#F57F17] font-bold' : 'text-neutral-600');
 
@@ -202,12 +204,11 @@ function TabButton({ label, count, active, onClick, color }: any) {
   );
 }
 
-// 🚨 [수정] 뱃지 색상 및 라벨 업데이트
 function StatusBadge({ status }: { status: string }) {
   const config: any = {
     healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' },
-    critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, // 30~60일 (Yellow/Orange)
-    imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' }, // 0~30일 (Dark Orange)
+    critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, 
+    imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' }, 
     disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
   };
   const current = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };

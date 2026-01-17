@@ -35,7 +35,9 @@ export default function FulfillmentPage() {
   if (!data) return <ErrorDisplay />;
 
   const { summary, byCustomer } = data.fulfillment;
-  const sortedCustomers = [...byCustomer].sort((a, b) => b.totalRevenue - a.totalRevenue);
+  
+  // ✅ [수정] sort 인자 타입 명시 (CustomerStat)
+  const sortedCustomers = [...byCustomer].sort((a: CustomerStat, b: CustomerStat) => b.totalRevenue - a.totalRevenue);
   
   const totalPages = Math.ceil(sortedCustomers.length / itemsPerPage);
   const paginatedCustomers = sortedCustomers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -74,7 +76,8 @@ export default function FulfillmentPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {paginatedCustomers.map((cust, idx) => {
+              {/* ✅ [수정] map 인자 타입 명시 (CustomerStat) */}
+              {paginatedCustomers.map((cust: CustomerStat, idx: number) => {
                 const rowNo = (currentPage - 1) * itemsPerPage + idx + 1;
                 return (
                   <tr 
@@ -180,7 +183,6 @@ export default function FulfillmentPage() {
                         </div>
                         <div className="text-right">
                           <div className="font-bold text-red-600 text-lg">{order.qty.toLocaleString()}<span className="text-sm font-normal">개</span></div>
-                          {/* Cause Badge (내부 컴포넌트 사용) */}
                           <CauseBadge cause={order.cause} />
                         </div>
                       </div>
@@ -201,7 +203,6 @@ export default function FulfillmentPage() {
   );
 }
 
-// --- 공통 컴포넌트 ---
 function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
   return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div><div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div></div>);
 }
@@ -210,11 +211,10 @@ function KpiBox({ label, value, unit, type }: any) {
   const s = styles[type] || styles.neutral;
   return (<div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${s.bg}`}><div className={`text-[12px] font-medium mb-1 ${s.label}`}>{label}</div><div className={`text-[24px] font-bold ${s.text}`}>{value}<span className="text-[12px] font-normal ml-1 opacity-70">{unit}</span></div></div>);
 }
-// 🚨 [수정] 원인 뱃지 - '당일 재고 부족' 추가
 function CauseBadge({ cause }: { cause: string }) {
   const styles: Record<string, string> = { 
-    '재고 부족': 'bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]', // Red
-    '당일 재고 부족': 'bg-[#FFF3E0] text-[#EF6C00] border border-[#FFE0B2]', // Orange
+    '재고 부족': 'bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]', 
+    '당일 재고 부족': 'bg-[#FFF3E0] text-[#EF6C00] border border-[#FFE0B2]', 
   };
   return (<span className={`px-2 py-1 rounded text-[11px] font-bold border mt-1 inline-block ${styles[cause] || 'bg-[#F5F5F5] text-[#616161] border-[#E0E0E0]'}`}>{cause}</span>);
 }

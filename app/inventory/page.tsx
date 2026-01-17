@@ -8,6 +8,7 @@ import {
   ShieldAlert 
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
+import { IntegratedItem } from '@/types/analysis'; // ✅ 타입 Import 추가
 
 type AdsPeriod = 30 | 60 | 90;
 
@@ -17,8 +18,6 @@ export default function InventoryPage() {
   // 1. 사용자 입력 상태
   const [adsPeriod, setAdsPeriod] = useState<AdsPeriod>(60);
   const [targetDays, setTargetDays] = useState<number>(14);
-  
-  // ✅ [수정됨] 납품 허용 기준 (최소 잔여 유통기한)
   const [minShelfLife, setMinShelfLife] = useState<number>(30); 
 
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -40,7 +39,8 @@ export default function InventoryPage() {
   const simulation = useMemo(() => {
     if (!data) return { all: [], totalCount: 0, filteredCount: 0 };
 
-    let items = data.integratedArray.filter(item => {
+    // ✅ [수정] filter 내부 item에 타입(IntegratedItem) 명시
+    let items = data.integratedArray.filter((item: IntegratedItem) => {
       const hasStock = item.inventory.totalStock > 0;
       const matchesSearch = searchTerm === '' || 
         item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -48,30 +48,30 @@ export default function InventoryPage() {
       return hasStock && matchesSearch;
     });
 
-    const simulatedItems = items.map(item => {
+    // ✅ [수정] map 내부 item에 타입(IntegratedItem) 명시
+    const simulatedItems = items.map((item: IntegratedItem) => {
       const currentADS = item.inventory.ads || 0;
       
-      // ✅ [핵심] 유효 재고 계산 (시뮬레이션)
-      // 전체 재고 중, 설정한 '최소 잔여일(minShelfLife)' 이상 남은 배치만 합산
+      // 유효 재고 계산
       const usableStock = item.inventory.batches
         .filter(b => b.remainDays >= minShelfLife)
         .reduce((sum, b) => sum + b.quantity, 0);
 
-      // 폐기/부실 재고 (조건 미달)
+      // 폐기/부실 재고
       const wasteStock = item.inventory.totalStock - usableStock;
 
       // 목표 재고량
       const targetStock = Math.ceil(currentADS * targetDays);
       
-      // 보유일수 (유효 재고 기준!)
+      // 보유일수
       const stockDays = currentADS > 0 ? usableStock / currentADS : 999;
 
-      // 상태 판정 (유효 재고 기준)
+      // 상태 판정
       let simStatus: 'shortage' | 'excess' | 'good' = 'good';
       if (stockDays < targetDays * 0.5) simStatus = 'shortage';
       else if (stockDays > targetDays * 2) simStatus = 'excess';
 
-      // 리스크: 부족한데 생산계획도 없음
+      // 리스크
       const isRisk = simStatus === 'shortage' && item.production.planQty === 0;
 
       return {
@@ -82,13 +82,13 @@ export default function InventoryPage() {
           stockDays, 
           simStatus, 
           isRisk,
-          usableStock, // 유효 재고
-          wasteStock   // 조건 미달 재고 (잠재적 폐기)
+          usableStock, 
+          wasteStock   
         }
       };
     });
 
-    // 정렬: 유효 재고 수량 많은 순
+    // 정렬
     simulatedItems.sort((a, b) => b.sim.usableStock - a.sim.usableStock);
 
     return {
@@ -145,7 +145,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* 🎛️ 시뮬레이션 컨트롤러 (3단 구성) */}
+      {/* 🎛️ 시뮬레이션 컨트롤러 */}
       <div className="bg-white p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
           
@@ -177,7 +177,7 @@ export default function InventoryPage() {
             <div className="flex justify-between text-[10px] text-neutral-400 mt-1"><span>7일 (타이트)</span><span>60일 (여유)</span></div>
           </div>
 
-          {/* 3. 납품 허용 기준 (수정됨: Max 360일) */}
+          {/* 3. 납품 허용 기준 */}
           <div>
             <div className="flex justify-between items-center mb-3">
               <div className="text-xs font-bold text-neutral-500 uppercase tracking-wide flex items-center gap-1 text-[#E65100]">
@@ -185,7 +185,6 @@ export default function InventoryPage() {
               </div>
               <span className="text-lg font-bold text-[#E65100]">{minShelfLife}일 이상</span>
             </div>
-            {/* ✅ max="360"으로 수정됨 */}
             <input type="range" min="0" max="360" step="5" value={minShelfLife} onChange={(e) => setMinShelfLife(Number(e.target.value))}
               className="w-full h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-[#E65100]" />
             <p className="text-[11px] text-neutral-400 mt-2 text-right">
@@ -201,7 +200,6 @@ export default function InventoryPage() {
         <SimulationKpi title="적정 (Good)" value={kpi.good} color="green" icon={CheckCircle} />
         <SimulationKpi title="부족 예상 (Short)" value={kpi.shortage} sub={`리스크: ${kpi.risk}건`} color="red" icon={AlertTriangle} />
         <SimulationKpi title="과잉 예상 (Excess)" value={kpi.excess} color="orange" icon={XCircle} />
-        {/* 폐기 잠재 KPI 추가 */}
         <SimulationKpi title="가용불가(폐기위험)" value={kpi.totalWaste.toLocaleString()} sub="Box (조건 미달)" color="gray" icon={ShieldAlert} />
       </div>
 

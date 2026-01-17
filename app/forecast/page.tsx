@@ -23,9 +23,12 @@ export default function ForecastPage() {
     setLoading(true);
     const res = await getForecastDashboard(term);
     if (res.success) {
-      setItems(res.data);
-      if (res.data.length > 0) {
-        setSelectedSku(res.data[0].info.id);
+      // 🚨 [수정] 타입 에러 방지: 데이터가 undefined일 경우 빈 배열 할당
+      const data = res.data || [];
+      setItems(data);
+      
+      if (data.length > 0) {
+        setSelectedSku(data[0].info.id);
       } else {
         setSelectedSku(null);
       }
@@ -58,7 +61,6 @@ export default function ForecastPage() {
             🔮 수요 예측 (Sales Forecast)
           </h1>
           
-          {/* ✅ 변경된 툴팁: 추세선 기반 설명 */}
           <div className="mt-2 flex items-center gap-2 text-sm text-neutral-600 bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg w-fit">
             <HelpCircle size={16} className="text-primary-blue" />
             <span>

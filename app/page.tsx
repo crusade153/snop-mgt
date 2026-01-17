@@ -28,8 +28,8 @@ export default function Home() {
             오신 것을 환영합니다.
           </h1>
           <p className="text-neutral-600 text-lg mb-8 leading-relaxed">
-            본 시스템은 <strong>SAP 납품(SD), 재고(MM), 생산(PP)</strong> 데이터를 실시간으로 통합 분석하여 
-            최적의 S&OP 의사결정을 지원합니다.
+            본 시스템은 <strong>SAP 납품(SD), 재고(MM), 생산(PP)</strong> 데이터를 실시간으로 통합 분석하여 최적의 S&OP 의사결정을 지원합니다.
+            
           </p>
           
           <div className="flex gap-3">

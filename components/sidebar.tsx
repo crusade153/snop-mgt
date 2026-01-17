@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
   LayoutDashboard, Truck, ClipboardList, FileText, 
-  Package, Factory, CalendarDays, GitCommit, ChevronRight,
+  Package, Factory, ChevronRight,
   Boxes, 
-  BrainCircuit, // ✅ 추가됨: 수요 예측 아이콘
-  LineChart     // ✅ 추가됨: 시뮬레이션 아이콘
+  BrainCircuit, 
+  LineChart 
 } from 'lucide-react';
 
+// 메뉴 목록에서 '일일 관리'와 '수주-생산 연계'를 제거했습니다.
 const menuItems = [
   { name: '종합 현황', href: '/dashboard', icon: LayoutDashboard },
   { name: '납품 현황', href: '/fulfillment', icon: Truck },
@@ -18,10 +19,8 @@ const menuItems = [
   { name: '재고 현황', href: '/stock', icon: Boxes },
   { name: '재고 분석', href: '/inventory', icon: Package },
   { name: '생산 분석', href: '/production', icon: Factory },
-  { name: '수요 예측', href: '/forecast', icon: BrainCircuit }, // ✅ 정상 작동
-  { name: '시뮬레이션', href: '/simulation', icon: LineChart }, // ✅ 정상 작동
-  { name: '일일 관리', href: '/daily', icon: CalendarDays },
-  { name: '수주-생산 연계', href: '/linkage', icon: GitCommit },
+  { name: '수요 예측', href: '/forecast', icon: BrainCircuit },
+  { name: '시뮬레이션', href: '/simulation', icon: LineChart },
 ];
 
 export default function Sidebar() {

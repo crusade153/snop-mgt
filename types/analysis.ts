@@ -1,123 +1,120 @@
-// types/analysis.ts
 import { SapInventory, SapOrder, SapProduction } from './sap';
 
-
-import { useState, useEffect } from 'react';
-import { getDashboardData } from '@/actions/dashboard-actions';
-import { DashboardAnalysis } from '@/types/analysis';
-import { format, startOfMonth } from 'date-fns';
-
-export default function DeliveryPage() {
-  const [data, setData] = useState<DashboardAnalysis | null>(null);
-  const [loading, setLoading] = useState(true);
+/**
+ * 📊 통합된 아이템 구조 (IntegratedItem)
+ * : 납품, 재고, 생산 정보를 품목(Material) 단위로 하나로 합친 객체입니다.
+ */
+export interface IntegratedItem {
+  // --- 기본 정보 ---
+  code: string;       // 자재코드 (MATNR)
+  name: string;       // 제품명
+  unit: string;       // 단위
+  brand: string;      // 브랜드 (예: 하림)
+  category: string;   // 카테고리 (예: 상온)
+  family: string;     // 제품군 (예: 즉석밥)
   
-  const startDate = format(startOfMonth(new Date()), 'yyyy-MM-dd');
-  const endDate = format(new Date(), 'yyyy-MM-dd');
+  // --- KPI 집계 (매출/미납) ---
+  totalReqQty: number;           // 총 요청 수량
+  totalActualQty: number;        // 총 실 납품 수량
+  totalUnfulfilledQty: number;   // 총 미납 수량
+  totalUnfulfilledValue: number; // 총 미납 금액 (손실액)
+  totalSalesAmount: number;      // 총 매출액
 
-  useEffect(() => {
-    async function init() {
-      setLoading(true);
-      const res = await getDashboardData(startDate, endDate);
-      if (res.success && res.data) setData(res.data);
-      setLoading(false);
-    }
-    init();
-  }, []);
+  // --- 📦 재고 분석 정보 ---
+  inventory: {
+    stock: number;            // 현재고 (BOX 환산)
+    status: 'healthy' | 'critical' | 'disposed'; // 상태 (양호/긴급/폐기)
+    remainingDays: number;    // 잔여 유통기한 (일)
+    riskScore: number;        // 위험도 점수 (정렬용)
+    ads: number;              // 일평균 판매량 (Velocity) - 기간에 따라 변동
+    recommendedStock: number; // 적정 재고 (권장량)
+  };
 
-  if (loading) return <div className="p-10 text-center text-gray-500">🚚 미납 내역 분석 중...</div>;
-  if (!data) return <div className="p-10 text-center text-red-500">데이터 로드 실패</div>;
+  // --- 🏭 생산 분석 정보 ---
+  production: {
+    planQty: number;          // 계획 수량
+    receivedQty: number;      // 입고 실적
+    achievementRate: number;  // 달성률 (%)
+    lastReceivedDate: string | null; // 최근 입고일 (YYYY-MM-DD)
+    nextPlanDate?: string;    // 다음 생산 계획일 (선택 사항)
+  };
 
-  // 미납이 있는 품목만 필터링
-  const unfulfilledList = data.integratedArray.filter(item => item.totalUnfulfilledQty > 0);
-  
-  // KPI
-  const totalUnfulfilledCount = unfulfilledList.reduce((acc, cur) => acc + cur.unfulfilledOrders.length, 0);
-
-  return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
-      <div className="border-b pb-4">
-        <h1 className="text-2xl font-bold text-gray-900">🚨 미납 리스트</h1>
-        <p className="text-sm text-gray-500 mt-1">고객 약속 미이행 건 및 원인 분석</p>
-      </div>
-
-      {/* KPI 카드 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="p-5 rounded-xl border bg-red-50 border-red-200 text-red-900">
-          <div className="text-sm font-bold opacity-80 mb-1">총 미납 주문 건수</div>
-          <div className="text-2xl font-extrabold">{totalUnfulfilledCount.toLocaleString()}<span className="text-sm font-normal ml-1">건</span></div>
-        </div>
-        <div className="p-5 rounded-xl border bg-red-50 border-red-200 text-red-900">
-          <div className="text-sm font-bold opacity-80 mb-1">총 미납 손실액</div>
-          <div className="text-2xl font-extrabold">{data.kpis.totalUnfulfilledValue.toLocaleString()}<span className="text-sm font-normal ml-1">원</span></div>
-        </div>
-      </div>
-
-      {/* 상세 테이블 */}
-      <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-xs">
-            <tr>
-              <th className="px-4 py-3">제품명</th>
-              <th className="px-4 py-3 text-right">미납수량</th>
-              <th className="px-4 py-3 text-right">미납금액</th>
-              <th className="px-4 py-3 text-center">주요 원인</th>
-              <th className="px-4 py-3 text-center">지연일(Max)</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {unfulfilledList
-              .sort((a, b) => b.totalUnfulfilledValue - a.totalUnfulfilledValue) // 금액 높은 순
-              .map((item) => {
-                // 가장 빈도 높은 원인 찾기
-                const causes = item.unfulfilledOrders.map(o => o.cause);
-                const majorCause = causes.sort((a,b) => 
-                  causes.filter(v => v===a).length - causes.filter(v => v===b).length
-                ).pop() || '기타';
-                
-                const maxDelay = Math.max(...item.unfulfilledOrders.map(o => o.daysDelayed));
-
-                return (
-                  <tr key={item.code} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-gray-900">{item.name}</div>
-                      <div className="text-xs text-gray-400 font-mono">{item.code}</div>
-                    </td>
-                    <td className="px-4 py-3 text-right font-bold text-red-600">
-                      {item.totalUnfulfilledQty.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-700">
-                      {item.totalUnfulfilledValue.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <CauseBadge cause={majorCause} />
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`font-bold ${maxDelay >= 7 ? 'text-red-600' : 'text-gray-600'}`}>
-                        {maxDelay}일
-                      </span>
-                    </td>
-                  </tr>
-                );
-            })}
-            {unfulfilledList.length === 0 && (
-              <tr><td colSpan={5} className="p-8 text-center text-gray-400">🎉 현재 미납 건이 없습니다!</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  // --- 🚚 미납 상세 리스트 (Drill-down용) ---
+  unfulfilledOrders: UnfulfilledOrder[];
 }
 
-function CauseBadge({ cause }: { cause: string }) {
-  const styles: Record<string, string> = {
-    '재고 부족': 'bg-blue-100 text-blue-700 border-blue-200',
-    '생산 차질': 'bg-green-100 text-green-700 border-green-200',
-    '물류/출하 지연': 'bg-orange-100 text-orange-700 border-orange-200',
+/**
+ * 📝 미납 주문 상세 정보
+ */
+export interface UnfulfilledOrder {
+  place: string;       // 납품처 (고객명)
+  qty: number;         // 미납 수량
+  value: number;       // 미납 금액
+  unitPrice: number;   // 단가
+  reqDate: string;     // 납품 요청일
+  daysDelayed: number; // 지연 일수
+  cause: string;       // 원인 (재고부족 / 생산차질 / 물류지연)
+}
+
+/**
+ * 🏢 거래처별 통계 (CustomerStat)
+ * : 납품 현황 페이지에서 사용
+ */
+export interface CustomerStat {
+  id: string;             // 거래처 코드
+  name: string;           // 거래처명
+  orderCount: number;     // 총 주문 라인 수
+  fulfilledCount: number; // 완전 납품 건수
+  totalRevenue: number;   // 총 매출액
+  missedRevenue: number;  // 미납으로 인한 손실액
+  fulfillmentRate: number;// 납품 준수율 (%)
+}
+
+/**
+ * 📊 납품 분석 결과 래퍼
+ */
+export interface FulfillmentAnalysis {
+  summary: {
+    totalOrders: number;
+    fulfilledOrders: number;
+    unfulfilledCount: number;
+    totalCustomers: number;
+    averageRate: number;
   };
-  return (
-    <span className={`px-2 py-1 rounded text-xs font-bold border ${styles[cause] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-      {cause}
-    </span>
-  );
+  byCustomer: CustomerStat[];
+}
+
+/**
+ * 📈 대시보드 최종 리턴 데이터 (DashboardAnalysis)
+ * : 클라이언트로 전송되는 최종 데이터 구조
+ */
+export interface DashboardAnalysis {
+  // 상단 KPI 카드 데이터
+  kpis: {
+    productSales: number;         // 제품 매출
+    merchandiseSales: number;     // 상품 매출
+    overallFulfillmentRate: string; // 전체 생산 달성률
+    totalUnfulfilledValue: number;  // 총 미납 손실액
+    criticalDeliveryCount: number;  // 긴급 납품 건수
+  };
+
+  // 재고 건전성 요약
+  stockHealth: {
+    disposed: number; // 폐기
+    critical: number; // 긴급
+    healthy: number;  // 양호
+  };
+
+  // 매출 랭킹 데이터
+  salesAnalysis: {
+    byBrand: { name: string; value: number }[];
+    byCategory: { name: string; value: number }[];
+    byFamily: { name: string; value: number }[];
+  };
+
+  // 전체 통합 데이터 리스트 (핵심)
+  integratedArray: IntegratedItem[];
+
+  // 납품 현황 분석 데이터
+  fulfillment: FulfillmentAnalysis; 
 }

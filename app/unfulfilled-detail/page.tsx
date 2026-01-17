@@ -155,7 +155,8 @@ export default function UnfulfilledDetailPage() {
   );
 }
 
-// --- Sub Components (Header, Loader 등은 위와 동일) ---
+// --- Sub Components ---
+
 function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
   return (
     <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">

@@ -12,7 +12,7 @@ const notoSansKr = Noto_Sans_KR({
 });
 
 export const metadata: Metadata = {
-  title: "하림 그룹웨어 Dashboard",
+  title: "하림산업 S&OP Dashboard",
   description: "Harim Nexus S&OP System",
 };
 

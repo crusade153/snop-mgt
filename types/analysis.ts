@@ -1,6 +1,18 @@
 import { SapInventory, SapOrder, SapProduction } from './sap';
 
 /**
+ * 📦 재고 배치(Batch) 정보
+ * : 같은 품목이라도 유통기한/창고위치에 따라 구분되는 상세 재고 단위
+ */
+export interface InventoryBatch {
+  quantity: number;       // 수량
+  expirationDate: string; // 유통기한 (YYYY-MM-DD)
+  remainDays: number;     // 잔여일수
+  remainRate: number;     // 🆕 추가됨: 잔여율(%)
+  location: string;       // 창고명 (LGOBE)
+}
+
+/**
  * 📊 통합된 아이템 구조 (IntegratedItem)
  * : 납품, 재고, 생산 정보를 품목(Material) 단위로 하나로 합친 객체입니다.
  */
@@ -20,14 +32,19 @@ export interface IntegratedItem {
   totalUnfulfilledValue: number; // 총 미납 금액 (손실액)
   totalSalesAmount: number;      // 총 매출액
 
-  // --- 📦 재고 분석 정보 ---
+  // --- 📦 재고 분석 정보 (고도화됨) ---
   inventory: {
-    stock: number;            // 현재고 (BOX 환산)
-    status: 'healthy' | 'critical' | 'disposed'; // 상태 (양호/긴급/폐기)
-    remainingDays: number;    // 잔여 유통기한 (일)
-    riskScore: number;        // 위험도 점수 (정렬용)
-    ads: number;              // 일평균 판매량 (Velocity) - 기간에 따라 변동
-    recommendedStock: number; // 적정 재고 (권장량)
+    totalStock: number;       // 물리적 총 재고
+    usableStock: number;      // (시뮬레이션용) 유효 가용 재고
+    
+    status: 'healthy' | 'critical' | 'disposed'; // 대표 상태
+    remainingDays: number;    // 대표 잔여일수 (가장 임박한 것 기준)
+    riskScore: number;        // 위험도 점수
+    ads: number;              // 일평균 판매량 (Velocity)
+    recommendedStock: number; // 적정 재고 권장량
+    
+    // 👇 [핵심] 유통기한별 상세 배치 리스트
+    batches: InventoryBatch[]; 
   };
 
   // --- 🏭 생산 분석 정보 ---
@@ -35,8 +52,8 @@ export interface IntegratedItem {
     planQty: number;          // 계획 수량
     receivedQty: number;      // 입고 실적
     achievementRate: number;  // 달성률 (%)
-    lastReceivedDate: string | null; // 최근 입고일 (YYYY-MM-DD)
-    nextPlanDate?: string;    // 다음 생산 계획일 (선택 사항)
+    lastReceivedDate: string | null; // 최근 입고일
+    nextPlanDate?: string;    // 다음 생산 계획일
   };
 
   // --- 🚚 미납 상세 리스트 (Drill-down용) ---

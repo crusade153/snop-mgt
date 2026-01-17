@@ -9,18 +9,16 @@ import { unstable_cache } from 'next/cache';
 async function fetchRawData(sDate: string, eDate: string) {
   console.log(`🔥 [Cache Miss] BigQuery 정밀 조회 시작: ${sDate} ~ ${eDate}`);
   
-  // 1. 납품(주문) 데이터: 미납 계산 및 분류를 위한 필수 컬럼 확보
+  // 1. 납품(주문) 데이터: 미납 계산 및 분류를 위한 필수 컬럼
   const orderQuery = `
     SELECT 
-      VBELN, POSNR,           -- PK
-      MATNR, ARKTX,           -- 자재 정보
-      KWMENG, VRKME,          -- 주문 수량/단위
-      NETWR, WAERK,           -- 금액 정보
-      VDATU,                  -- 납품 요청일
-      NAME1, KUNNR,           -- 거래처 정보
-      -- 👇 [중요] 미납 계산용 컬럼 (없으면 0 처리)
+      VBELN, POSNR,           
+      MATNR, ARKTX,           
+      KWMENG, VRKME,          
+      NETWR, WAERK,           
+      VDATU,                  
+      NAME1, KUNNR,           
       IFNULL(LFIMG_LIPS, 0) as LFIMG_LIPS, 
-      -- 👇 [중요] 분류 분석용 (없으면 NULL)
       VKGRP, BEZEI_TVGRT      
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\`
     WHERE VDATU BETWEEN '${sDate}' AND '${eDate}'
@@ -29,26 +27,25 @@ async function fetchRawData(sDate: string, eDate: string) {
   // 2. 생산 계획: 달성률 계산용 컬럼
   const productionQuery = `
     SELECT 
-      AUFNR,                  -- 오더 번호
-      MATNR, MAKTX, MEINS,    -- 자재 정보
-      GSTRP,                  -- 계획일
-      PSMNG,                  -- 계획 수량
-      LMNGA                   -- 실적 수량
+      AUFNR,                  
+      MATNR, MAKTX, MEINS,    
+      GSTRP,                  
+      PSMNG,                  
+      LMNGA                   
     FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\`
     WHERE GSTRP BETWEEN '${sDate}' AND '${eDate}'
   `;
 
-  // 3. 재고: 건전성 평가를 위한 핵심 컬럼 (잔여일, 박스환산 등)
+  // 3. 재고: 건전성 및 배치 분석을 위한 핵심 컬럼 (VFDAT, LGOBE 필수)
   const inventoryQuery = `
     SELECT 
-      MATNR, MATNR_T, MEINS,  -- 자재 정보
-      CLABS,                  -- 가용 재고
-      VFDAT, HSDAT,           -- 유통기한, 제조일
-      lgobe,                  -- 창고명
-      -- 👇 [복구됨] 재고 건전성 로직의 핵심
+      MATNR, MATNR_T, MEINS,  
+      CLABS,                  
+      VFDAT, HSDAT,           
+      LGOBE,                  
       remain_day, 
       remain_rate,
-      UMREZ_BOX               -- 박스 환산 계수
+      UMREZ_BOX               
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
     WHERE CLABS > 0
   `;
@@ -65,9 +62,9 @@ async function fetchRawData(sDate: string, eDate: string) {
       production: prodRes[0] as SapProduction[],
       inventory: invRes[0] as SapInventory[]
     };
-  } catch (e) {
-    console.error("BigQuery Query Error:", e);
-    throw e;
+  } catch (e: any) {
+    console.error("🚨 BigQuery Query Error:", e.message);
+    throw new Error(`데이터베이스 조회 실패: ${e.message}`);
   }
 }
 
@@ -78,24 +75,36 @@ export async function getDashboardData(startDate: string, endDate: string) {
   const eDate = endDate.replace(/-/g, '');
 
   try {
-    // 캐시 키에 날짜를 포함하여 기간별 데이터 분리 저장
+    // ✅ 캐시 키 버전 업 (v2 -> v3) : 기존 캐시 무효화 및 새로고침 강제
     const getCachedData = unstable_cache(
       async () => fetchRawData(sDate, eDate),
-      [`dashboard-data-${sDate}-${eDate}-v2`], // v2로 버전 변경하여 기존 캐시 무효화
+      [`dashboard-data-${sDate}-${eDate}-v3`], 
       { revalidate: 3600 } 
     );
 
     const { orders, production, inventory } = await getCachedData();
 
+    // 데이터가 아예 없는 경우 방어 코드
     if ((!orders || orders.length === 0) && (!inventory || inventory.length === 0)) {
-        return { success: false, message: "조회된 데이터가 없습니다." };
+        console.warn("⚠️ 조회된 데이터가 없습니다.");
+        // 빈 데이터라도 분석 함수를 돌려 빈 결과를 리턴해야 함 (안 그러면 클라이언트 에러)
+        const emptyResult = analyzeSnopData([], [], [], startDate, endDate);
+        return { success: true, data: emptyResult };
     }
 
-    const result = analyzeSnopData(orders || [], inventory || [], production || []);
+    // 날짜 정보와 함께 분석 엔진 실행
+    const result = analyzeSnopData(
+      orders || [], 
+      inventory || [], 
+      production || [], 
+      startDate, 
+      endDate
+    );
+    
     return { success: true, data: result };
 
   } catch (error: any) {
     console.error('❌ [Server Action Error] 조회 실패:', error);
-    return { success: false, message: error.message || "서버 오류가 발생했습니다." };
+    return { success: false, message: error.message || "서버 통신 중 알 수 없는 오류가 발생했습니다." };
   }
 }

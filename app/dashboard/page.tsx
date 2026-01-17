@@ -1,10 +1,9 @@
 'use client'
 
-import { useDashboardData } from '@/hooks/use-dashboard'; // ✅ 최적화된 훅 사용
+import { useDashboardData } from '@/hooks/use-dashboard'; 
 import { Calendar as CalendarIcon, Filter } from 'lucide-react';
 
 export default function DashboardPage() {
-  // ✅ 훅 한 줄로 데이터, 로딩상태, 날짜변경 기능까지 모두 가져옴 (캐싱 자동 적용)
   const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
 
   // 로딩 상태 UI
@@ -45,7 +44,7 @@ export default function DashboardPage() {
           />
           <div className="w-[1px] h-4 bg-neutral-200 mx-1"></div>
           <button 
-            onClick={() => refetch()} // ✅ 수동 조회 시 캐시 무시하고 갱신 시도
+            onClick={() => refetch()} 
             className="text-xs font-bold text-primary-blue hover:text-blue-700 transition-colors"
           >
             조회
@@ -53,44 +52,13 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 2. KPI Cards (Design System: Information Widget) */}
+      {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {/* 제품 매출: Primary Blue 사용 */}
-        <KpiCard 
-          title="제품 매출" 
-          value={data.kpis.productSales} 
-          unit="원" 
-          type="blue" 
-        />
-        {/* 상품 매출: Neutral + Accent */}
-        <KpiCard 
-          title="상품 매출" 
-          value={data.kpis.merchandiseSales} 
-          unit="원" 
-          type="neutral" 
-        />
-        {/* 미납: Harim Red (Primary Brand) */}
-        <KpiCard 
-          title="미납 손실액" 
-          value={data.kpis.totalUnfulfilledValue} 
-          unit="원" 
-          type="brand" 
-          alert={true}
-        />
-        {/* 긴급 납품: Warning Color */}
-        <KpiCard 
-          title="긴급 납품" 
-          value={data.kpis.criticalDeliveryCount} 
-          unit="건" 
-          type="warning" 
-        />
-        {/* 재고 이슈: Warning Color */}
-        <KpiCard 
-          title="재고 폐기/임박" 
-          value={data.stockHealth.disposed + data.stockHealth.critical} 
-          unit="건" 
-          type="warning" 
-        />
+        <KpiCard title="제품 매출" value={data.kpis.productSales} unit="원" type="blue" />
+        <KpiCard title="상품 매출" value={data.kpis.merchandiseSales} unit="원" type="neutral" />
+        <KpiCard title="미납 손실액" value={data.kpis.totalUnfulfilledValue} unit="원" type="brand" alert={true} />
+        <KpiCard title="긴급 납품" value={data.kpis.criticalDeliveryCount} unit="건" type="warning" />
+        <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.critical} unit="건" type="warning" />
       </div>
 
       {/* 3. Analysis Section */}
@@ -104,7 +72,6 @@ export default function DashboardPage() {
             <h2 className="text-[16px] font-semibold text-neutral-900">📦 재고 건전성</h2>
           </div>
           <div className="space-y-5">
-            {/* Design System Status Colors 적용 */}
             <StockBar label="양호 (Healthy)" value={data.stockHealth.healthy} total={data.integratedArray.length} color="bg-[#42A5F5]" />
             <StockBar label="긴급 (Critical)" value={data.stockHealth.critical} total={data.integratedArray.length} color="bg-[#FFA726]" />
             <StockBar label="폐기 (Disposed)" value={data.stockHealth.disposed} total={data.integratedArray.length} color="bg-[#E53935]" />
@@ -112,7 +79,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 4. Table Section (Design System: Data Grid) */}
+      {/* 4. Table Section */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden mt-2">
         <div className="p-5 border-b border-neutral-200 flex justify-between items-center bg-white">
           <h2 className="text-[16px] font-semibold text-neutral-900">📋 통합 S&OP 상세 현황 (Top 20 위험 항목)</h2>
@@ -144,7 +111,8 @@ export default function DashboardPage() {
                     {item.totalUnfulfilledValue.toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-right text-neutral-700">
-                    {item.inventory.stock.toLocaleString()}
+                    {/* ✅ 수정됨: stock -> totalStock */}
+                    {item.inventory.totalStock.toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <StatusBadge status={item.inventory.status} />
@@ -162,19 +130,16 @@ export default function DashboardPage() {
   );
 }
 
-// --- UI Components (Design System Applied) ---
+// --- UI Components ---
 
 function KpiCard({ title, value, unit, type, alert }: any) {
-  // Color Logic based on JSON
   const styles: any = {
-    brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' }, // Harim Red Light
-    blue: { bg: 'bg-[#E3F2FD]', text: 'text-[#1565C0]', label: 'text-[#4A90E2]' }, // Primary Blue Light
-    warning: { bg: 'bg-[#FFF3E0]', text: 'text-[#EF6C00]', label: 'text-[#FFA726]' }, // Waiting Orange
-    neutral: { bg: 'bg-[#FAFAFA]', text: 'text-[#424242]', label: 'text-[#757575]' }, // Neutral
+    brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },
+    blue: { bg: 'bg-[#E3F2FD]', text: 'text-[#1565C0]', label: 'text-[#4A90E2]' },
+    warning: { bg: 'bg-[#FFF3E0]', text: 'text-[#EF6C00]', label: 'text-[#FFA726]' },
+    neutral: { bg: 'bg-[#FAFAFA]', text: 'text-[#424242]', label: 'text-[#757575]' },
   };
-  
   const currentStyle = styles[type] || styles.neutral;
-
   return (
     <div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${currentStyle.bg} transition hover:-translate-y-1`}>
       <div className={`text-[12px] font-medium mb-1 ${currentStyle.label}`}>{title}</div>
@@ -226,20 +191,14 @@ function StockBar({ label, value, total, color }: any) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  // Mapping logic states to Design System Status Colors
   const config: Record<string, { bg: string, text: string, label: string }> = {
-    healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' }, // Success -> Blue
-    critical: { bg: '#FFF3E0', text: '#FB8C00', label: '긴급' }, // Waiting -> Orange
-    disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' }, // Fail/Brand -> Red
+    healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' },
+    critical: { bg: '#FFF3E0', text: '#FB8C00', label: '긴급' },
+    disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
   };
-  
   const current = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };
-
   return (
-    <span 
-      className="px-2 py-1 rounded text-[11px] font-bold"
-      style={{ backgroundColor: current.bg, color: current.text }}
-    >
+    <span className="px-2 py-1 rounded text-[11px] font-bold" style={{ backgroundColor: current.bg, color: current.text }}>
       {current.label}
     </span>
   );

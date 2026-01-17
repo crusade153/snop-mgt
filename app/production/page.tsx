@@ -2,6 +2,7 @@
 
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { Calendar as CalendarIcon } from 'lucide-react';
+import { IntegratedItem } from '@/types/analysis'; // ✅ 타입 Import 추가
 
 export default function ProductionPage() {
   const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
@@ -9,14 +10,19 @@ export default function ProductionPage() {
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
+  // ✅ [수정] filter 인자 타입 명시
   const productionList = data.integratedArray.filter(
-    item => item.production.planQty > 0 || item.production.receivedQty > 0
+    (item: IntegratedItem) => item.production.planQty > 0 || item.production.receivedQty > 0
   );
 
-  const totalPlan = productionList.reduce((acc, cur) => acc + cur.production.planQty, 0);
-  const totalActual = productionList.reduce((acc, cur) => acc + cur.production.receivedQty, 0);
+  // ✅ [수정] reduce 인자 타입 명시 (acc: number, cur: IntegratedItem)
+  const totalPlan = productionList.reduce((acc: number, cur: IntegratedItem) => acc + cur.production.planQty, 0);
+  const totalActual = productionList.reduce((acc: number, cur: IntegratedItem) => acc + cur.production.receivedQty, 0);
+  
   const overallRate = totalPlan > 0 ? (totalActual / totalPlan) * 100 : 0;
-  const poorItems = productionList.filter(item => item.production.achievementRate < 90).length;
+  
+  // ✅ [수정] filter 인자 타입 명시
+  const poorItems = productionList.filter((item: IntegratedItem) => item.production.achievementRate < 90).length;
 
   return (
     <div className="space-y-6">
@@ -42,7 +48,10 @@ export default function ProductionPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200">
-            {productionList.sort((a, b) => a.production.achievementRate - b.production.achievementRate).map((item) => {
+            {/* ✅ [수정] sort 및 map 인자 타입 명시 */}
+            {productionList
+              .sort((a: IntegratedItem, b: IntegratedItem) => a.production.achievementRate - b.production.achievementRate)
+              .map((item: IntegratedItem) => {
                 const prod = item.production;
                 const gap = prod.planQty - prod.receivedQty;
                 const isPoor = prod.achievementRate < 90;
@@ -73,8 +82,15 @@ export default function ProductionPage() {
   );
 }
 
-// ... 공통 컴포넌트 (PageHeader, LoadingSpinner, ErrorDisplay는 InventoryPage와 동일하므로 복사 사용 권장) ...
-// KpiBox는 Dashboard의 것과 동일
+// ... 공통 컴포넌트 ...
+function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
+  return (
+    <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
+      <div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div>
+      <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div>
+    </div>
+  );
+}
 function KpiBox({ label, value, unit, type }: any) {
   const styles: any = {
     brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },
@@ -88,17 +104,6 @@ function KpiBox({ label, value, unit, type }: any) {
     <div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${s.bg}`}>
       <div className={`text-[12px] font-medium mb-1 ${s.label}`}>{label}</div>
       <div className={`text-[24px] font-bold ${s.text}`}>{value}<span className="text-[12px] font-normal ml-1 opacity-70">{unit}</span></div>
-    </div>
-  );
-}
-
-// (PageHeader, LoadingSpinner, ErrorDisplay는 위 InventoryPage 코드에서 복사해서 사용해주세요!)
-// 편의를 위해 PageHeader만 다시 제공합니다.
-function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
-  return (
-    <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
-      <div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div>
-      <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div>
     </div>
   );
 }

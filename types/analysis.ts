@@ -1,3 +1,4 @@
+// types/analysis.ts
 import { SapInventory, SapOrder, SapProduction } from './sap';
 
 /**
@@ -16,7 +17,7 @@ export interface InventoryBatch {
  */
 export interface UnfulfilledOrder {
   place: string;       // 납품처/거래처명
-  productName: string; // 제품명 (추가됨)
+  productName: string; // 제품명
   qty: number;         // 미납 수량
   value: number;       // 미납 금액
   unitPrice: number;   // 단가
@@ -49,7 +50,8 @@ export interface IntegratedItem {
     totalStock: number;       
     usableStock: number;      
     
-    status: 'healthy' | 'critical' | 'disposed'; 
+    // 🚨 [수정] status 타입에 'imminent' 추가
+    status: 'healthy' | 'critical' | 'imminent' | 'disposed'; 
     remainingDays: number;    
     riskScore: number;        
     ads: number;              
@@ -72,7 +74,7 @@ export interface IntegratedItem {
 }
 
 /**
- * 🏢 거래처별 통계 (필드 추가됨!)
+ * 🏢 거래처별 통계
  */
 export interface CustomerStat {
   id: string;             // 거래처 코드
@@ -83,7 +85,6 @@ export interface CustomerStat {
   missedRevenue: number;  // 미납으로 인한 손실액
   fulfillmentRate: number;// 납품 준수율 (%)
   
-  // 🚨 [추가] 상세 분석용 데이터
   topBoughtProducts: { name: string; value: number; qty: number }[]; // 많이 산 제품 Top 10
   unfulfilledDetails: UnfulfilledOrder[]; // 이 거래처의 미납 건들
 }
@@ -114,9 +115,11 @@ export interface DashboardAnalysis {
     criticalDeliveryCount: number;  
   };
 
+  // 🚨 [수정] stockHealth 타입에 'imminent' 추가
   stockHealth: {
     disposed: number; 
-    critical: number; 
+    imminent: number; // 임박 (0~30일)
+    critical: number; // 긴급 (30~60일)
     healthy: number;  
   };
 

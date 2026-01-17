@@ -1,9 +1,11 @@
+// lib/analysis.ts
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder } from '@/types/analysis';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 
 const THRESHOLDS = {
-  CRITICAL_DAYS: 30, 
+  IMMINENT_DAYS: 30, // 🚨 [수정] 임박 기준 (30일 이하)
+  CRITICAL_DAYS: 60, // 🚨 [수정] 긴급 기준 (60일 이하)
   SAFETY_BUFFER_DAYS: 14, 
 };
 
@@ -24,11 +26,12 @@ function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, n
   return map;
 }
 
-// 2. 재고 상태 판별
-function getStockStatus(days: number): 'disposed' | 'critical' | 'healthy' {
-  if (days <= 0) return 'disposed';
-  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical';
-  return 'healthy';
+// 2. 🚨 [수정] 재고 상태 판별 로직 변경 (4단계)
+function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
+  if (days <= 0) return 'disposed';                    // 폐기 (0일 이하)
+  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; // 임박 (1~30일)
+  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; // 긴급 (31~60일)
+  return 'healthy';                                    // 양호 (61일 이상)
 }
 
 // 3. 제품명 기반 브랜드/카테고리 추론
@@ -108,7 +111,6 @@ export function analyzeSnopData(
     if (code.startsWith('5')) productSales += supplyPrice;
     else merchandiseSales += supplyPrice;
 
-    // 상세 미납 정보 생성
     let unfulfilledInfo: UnfulfilledOrder | null = null;
 
     if (unfulfilled > 0) {
@@ -118,14 +120,9 @@ export function analyzeSnopData(
         if (reqQty > 0) unitPrice = Math.abs(supplyPrice) / reqQty;
         item.totalUnfulfilledValue += unfulfilled * unitPrice;
 
-        // 🚨 [수정 완료] 미납 원인 로직 변경 (물류 지연 제거)
         let cause = '재고 부족';
         if (item.inventory.totalStock > 0) {
-            // 현재 재고는 있으나, 주문 당시 없었으므로 '당일 재고 부족'
             cause = '당일 재고 부족'; 
-        } else {
-            // 현재도 재고가 없음
-            cause = '재고 부족';
         }
 
         let daysDelayed = 0;
@@ -150,7 +147,6 @@ export function analyzeSnopData(
         item.unfulfilledOrders.push(unfulfilledInfo);
     }
 
-    // --- 거래처 집계 ---
     const custId = order.KUNNR || 'UNKNOWN';
     if (!customerMap.has(custId)) {
         customerMap.set(custId, {
@@ -202,7 +198,8 @@ export function analyzeSnopData(
   const integratedArray = Array.from(integratedMap.values());
   let totalUnfulfilledValue = 0;
   let criticalDeliveryCount = 0;
-  const stockHealth = { disposed: 0, critical: 0, healthy: 0 };
+  // 🚨 [수정] 카운터 초기화 (imminent 추가)
+  const stockHealth = { disposed: 0, imminent: 0, critical: 0, healthy: 0 };
 
   integratedArray.forEach(item => {
     if (item.production.planQty > 0) {
@@ -211,12 +208,10 @@ export function analyzeSnopData(
     totalUnfulfilledValue += item.totalUnfulfilledValue;
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
-    if (item.inventory.totalStock === 0) {
-        if (item.totalUnfulfilledQty > 0) item.inventory.status = 'critical'; 
-    }
-
+    // 재고 상태 카운팅 (재고가 있는 경우만)
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
+        else if (item.inventory.status === 'imminent') stockHealth.imminent++; // 🚨 임박 카운트
         else if (item.inventory.status === 'critical') stockHealth.critical++;
         else stockHealth.healthy++;
     }
@@ -291,7 +286,11 @@ function initializeItem(
   }
 
   const status = invData ? getStockStatus(minRemaining) : 'healthy';
-  const riskScore = status === 'critical' ? 100 : (status === 'disposed' ? 50 : 0);
+  // 🚨 [수정] 리스크 점수 로직 (임박이 가장 높음)
+  let riskScore = 0;
+  if (status === 'disposed') riskScore = 50;
+  else if (status === 'imminent') riskScore = 100; // 임박이 가장 위험
+  else if (status === 'critical') riskScore = 80;  // 긴급이 그 다음
 
   let brand = '기타';
   let category = '미지정';

@@ -1,3 +1,4 @@
+// app/dashboard/page.tsx
 'use client'
 
 import { useDashboardData } from '@/hooks/use-dashboard'; 
@@ -51,17 +52,12 @@ export default function DashboardPage() {
 
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {/* 순매출(반품차감) & 백만원 단위 적용 */}
         <KpiCard title="제품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
         <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
-        
-        {/* 미납 손실액 (툴팁 추가) */}
         <KpiCard title="미납 손실액" value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)} unit="백만원" type="brand" alert={true} tooltip="미납수량 × 정상단가 합계" />
-        
         <KpiCard title="긴급 납품" value={data.kpis.criticalDeliveryCount} unit="건" type="warning" />
-        
-        {/* 재고 단위 '개 제품' */}
-        <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.critical} unit="개 제품" type="warning" />
+        {/* 🚨 [수정] 재고 위험군 (임박 + 폐기) 합계 표시 */}
+        <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.imminent} unit="개 제품" type="warning" />
       </div>
 
       {/* 3. Analysis Section */}
@@ -76,7 +72,9 @@ export default function DashboardPage() {
           </div>
           <div className="space-y-5">
             <StockBar label="양호 (Healthy)" value={data.stockHealth.healthy} total={data.integratedArray.length} color="bg-[#42A5F5]" />
-            <StockBar label="긴급 (Critical)" value={data.stockHealth.critical} total={data.integratedArray.length} color="bg-[#FFA726]" />
+            {/* 🚨 [수정] 긴급/임박/폐기 3단 구성으로 변경 */}
+            <StockBar label="긴급 (Critical)" value={data.stockHealth.critical} total={data.integratedArray.length} color="bg-[#FBC02D]" />
+            <StockBar label="임박 (Imminent)" value={data.stockHealth.imminent} total={data.integratedArray.length} color="bg-[#F57C00]" />
             <StockBar label="폐기 (Disposed)" value={data.stockHealth.disposed} total={data.integratedArray.length} color="bg-[#E53935]" />
           </div>
         </div>
@@ -170,20 +168,13 @@ function RankingCard({ title, data }: any) {
       </div>
       <ul className="space-y-3">
         {topList.map((item: any, idx: number) => (
-          // 🚨 [수정 완료] Flex 레이아웃으로 변경하여 이름이 남는 공간을 모두 차지하도록 수정
           <li key={idx} className="flex items-center text-sm gap-3">
-            
-            {/* 순위 (고정 너비) */}
             <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${idx < 3 ? 'bg-primary-blue text-white' : 'bg-neutral-100 text-neutral-500'}`}>
               {idx + 1}
             </span>
-            
-            {/* 이름 (유동적 너비, 남는 공간 채움, 말줄임 적용) */}
             <span className="text-neutral-700 truncate flex-1 min-w-0" title={item.name}>
               {item.name}
             </span>
-            
-            {/* 금액 (고정 너비, 줄바꿈 방지) */}
             <span className="font-bold text-neutral-900 shrink-0 whitespace-nowrap">
                 {Math.round(item.value / 1000000).toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">백만</span>
             </span>
@@ -210,10 +201,12 @@ function StockBar({ label, value, total, color }: any) {
   );
 }
 
+// 🚨 [수정] 뱃지 색상 및 텍스트 업데이트
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string, text: string, label: string }> = {
     healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' },
-    critical: { bg: '#FFF3E0', text: '#FB8C00', label: '긴급' },
+    critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, 
+    imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' },
     disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
   };
   const current = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };

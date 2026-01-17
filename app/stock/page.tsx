@@ -1,13 +1,14 @@
+// app/stock/page.tsx
 'use client'
 
 import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { 
-  Search, Package, Calendar, AlertTriangle, 
-  CheckCircle, XCircle, ChevronLeft, ChevronRight, Filter
+  Search, Calendar, ChevronLeft, ChevronRight 
 } from 'lucide-react';
 
-type TabType = 'all' | 'healthy' | 'critical' | 'disposed';
+// 🚨 [수정] TabType에 'imminent' 추가
+type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed';
 
 export default function StockStatusPage() {
   const { data, isLoading } = useDashboardData();
@@ -38,7 +39,7 @@ export default function StockStatusPage() {
       );
     }
 
-    // 정렬 (긴급/폐기 우선, 그 다음 잔여일 짧은 순)
+    // 정렬 (임박/폐기 우선, 그 다음 잔여일 짧은 순)
     items.sort((a, b) => a.inventory.remainingDays - b.inventory.remainingDays);
 
     return items;
@@ -70,12 +71,13 @@ export default function StockStatusPage() {
 
       {/* 🎛️ 컨트롤 패널 (탭 + 검색) */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-        {/* Tabs */}
+        {/* Tabs - 🚨 [수정] 탭 구성 변경: 양호 / 긴급 / 임박 / 폐기 */}
         <div className="flex bg-neutral-100 p-1 rounded-lg">
-          <TabButton label="전체 목록" count={data.integratedArray.filter(i=>i.inventory.totalStock>0).length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
-          <TabButton label="양호 (Healthy)" count={data.stockHealth.healthy} active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
-          <TabButton label="긴급 (Critical)" count={data.stockHealth.critical} active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#EF6C00]" />
-          <TabButton label="폐기 (Disposed)" count={data.stockHealth.disposed} active={activeTab === 'disposed'} onClick={() => { setActiveTab('disposed'); setCurrentPage(1); }} color="text-[#C62828]" />
+          <TabButton label="전체" count={data.integratedArray.filter(i=>i.inventory.totalStock>0).length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
+          <TabButton label="양호" count={data.stockHealth.healthy} active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
+          <TabButton label="긴급 (60일↓)" count={data.stockHealth.critical} active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
+          <TabButton label="임박 (30일↓)" count={data.stockHealth.imminent} active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
+          <TabButton label="폐기" count={data.stockHealth.disposed} active={activeTab === 'disposed'} onClick={() => { setActiveTab('disposed'); setCurrentPage(1); }} color="text-[#C62828]" />
         </div>
 
         {/* Search */}
@@ -110,10 +112,13 @@ export default function StockStatusPage() {
             </thead>
             <tbody className="divide-y divide-neutral-200">
               {paginatedItems.map((item, idx) => {
-                // 가장 상태가 안 좋은 배치(유통기한 임박) 정보 찾기
                 const worstBatch = item.inventory.batches.sort((a, b) => a.remainDays - b.remainDays)[0];
                 const expiryDate = worstBatch ? worstBatch.expirationDate : '-';
                 const remainRate = worstBatch ? worstBatch.remainRate : 0;
+
+                // 잔여일수 색상 처리 (임박이면 빨강, 긴급이면 주황)
+                const daysColor = item.inventory.status === 'imminent' ? 'text-[#E65100] font-bold' : 
+                                  (item.inventory.status === 'critical' ? 'text-[#F57F17] font-bold' : 'text-neutral-600');
 
                 return (
                   <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
@@ -135,7 +140,7 @@ export default function StockStatusPage() {
                         {expiryDate}
                       </div>
                     </td>
-                    <td className={`px-4 py-3 text-right font-bold ${item.inventory.remainingDays <= 30 ? 'text-[#E53935]' : 'text-neutral-600'}`}>
+                    <td className={`px-4 py-3 text-right ${daysColor}`}>
                       {item.inventory.remainingDays}일
                     </td>
                     <td className="px-4 py-3 text-right">
@@ -163,29 +168,7 @@ export default function StockStatusPage() {
             >
               <ChevronLeft size={20} />
             </button>
-            
-            <div className="flex gap-1">
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                let pNum = i + 1;
-                if (totalPages > 5 && currentPage > 3) {
-                  pNum = currentPage - 2 + i;
-                  if (pNum > totalPages) pNum = totalPages - (4 - i);
-                }
-                return (
-                  <button
-                    key={pNum}
-                    onClick={() => setCurrentPage(pNum)}
-                    className={`w-8 h-8 rounded text-sm font-bold transition-colors
-                      ${currentPage === pNum 
-                        ? 'bg-primary-blue text-white' 
-                        : 'bg-white text-neutral-600 border border-neutral-300 hover:bg-neutral-100'}`}
-                  >
-                    {pNum}
-                  </button>
-                );
-              })}
-            </div>
-
+            <span className="text-sm font-bold text-neutral-600">{currentPage} / {totalPages}</span>
             <button 
               onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
@@ -207,7 +190,7 @@ function TabButton({ label, count, active, onClick, color }: any) {
     <button
       onClick={onClick}
       className={`
-        flex items-center gap-2 px-4 py-2 rounded-md text-sm font-bold transition-all
+        flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all
         ${active ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}
       `}
     >
@@ -219,10 +202,12 @@ function TabButton({ label, count, active, onClick, color }: any) {
   );
 }
 
+// 🚨 [수정] 뱃지 색상 및 라벨 업데이트
 function StatusBadge({ status }: { status: string }) {
   const config: any = {
     healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' },
-    critical: { bg: '#FFF3E0', text: '#FB8C00', label: '긴급' },
+    critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, // 30~60일 (Yellow/Orange)
+    imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' }, // 0~30일 (Dark Orange)
     disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
   };
   const current = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };

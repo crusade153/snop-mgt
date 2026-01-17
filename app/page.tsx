@@ -15,21 +15,23 @@ export default function Home() {
       
       {/* 1. Hero Section: 메인 타이틀 및 소개 */}
       <section className="bg-white rounded-2xl p-10 border border-neutral-200 shadow-sm relative overflow-hidden">
-        <div className="relative z-10 max-w-2xl">
+        <div className="relative z-10 max-w-3xl"> {/* max-w-2xl -> 3xl로 넓혀서 한 줄 여유 확보 */}
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#FFEBEE] text-[#C62828] text-xs font-bold mb-4 border border-[#FFCDD2]">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#E53935] opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-[#C62828]"></span>
             </span>
-            S&OP Management System v0.4 (Beta)
+            S&OP Management System (Beta)
           </div>
           <h1 className="text-4xl font-bold text-neutral-900 mb-4 leading-tight">
             Biz-Control Tower에<br />
             오신 것을 환영합니다.
           </h1>
-          <p className="text-neutral-600 text-lg mb-8 leading-relaxed">
-            본 시스템은 <strong>SAP 납품(SD), 재고(MM), 생산(PP)</strong> 데이터를 실시간으로 통합 분석하여 최적의 S&OP 의사결정을 지원합니다.
-            
+          
+          {/* 🚨 [수정] break-keep 클래스 추가 및 문맥 자연스럽게 조정 */}
+          <p className="text-neutral-600 text-lg mb-8 leading-relaxed break-keep">
+            본 시스템은 <strong>SAP 납품(SD), 재고(MM), 생산(PP)</strong> 데이터를 실시간으로 통합 분석하여<br className="hidden md:block"/>
+            최적의 S&OP 의사결정을 지원합니다.
           </p>
           
           <div className="flex gap-3">
@@ -57,8 +59,6 @@ export default function Home() {
 
       {/* 2. Key Features: 3대 핵심 기능 요약 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        
-        {/* 납품 카드 */}
         <FeatureCard 
           icon={Truck}
           title="납품 요청 & 이행 (Fulfillment)"
@@ -66,8 +66,6 @@ export default function Home() {
           link="/fulfillment"
           color="blue"
         />
-
-        {/* 재고 카드 */}
         <FeatureCard 
           icon={Package}
           title="재고 건전성 분석 (Inventory)"
@@ -75,8 +73,6 @@ export default function Home() {
           link="/inventory"
           color="green"
         />
-
-        {/* 생산 카드 */}
         <FeatureCard 
           icon={Factory}
           title="생산 계획 대 실적 (Production)"
@@ -113,7 +109,6 @@ export default function Home() {
   );
 }
 
-// --- UI Component ---
 function FeatureCard({ icon: Icon, title, desc, link, color }: any) {
   const colors: any = {
     blue: "text-[#1565C0] bg-[#E3F2FD] border-[#BBDEFB] group-hover:border-[#1565C0]",
@@ -131,7 +126,7 @@ function FeatureCard({ icon: Icon, title, desc, link, color }: any) {
         <h3 className="text-lg font-bold text-neutral-900 mb-2 group-hover:text-[#E53935] transition-colors">
           {title}
         </h3>
-        <p className="text-sm text-neutral-600 leading-relaxed mb-6 flex-1">
+        <p className="text-sm text-neutral-600 leading-relaxed mb-6 flex-1 break-keep">
           {desc}
         </p>
         <div className="flex items-center text-sm font-bold text-neutral-400 group-hover:text-[#E53935] transition-colors">

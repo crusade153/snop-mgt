@@ -4,12 +4,11 @@ import bigqueryClient from '@/lib/bigquery';
 import { analyzeSnopData } from '@/lib/analysis';
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { unstable_cache } from 'next/cache';
+import { gzipSync, gunzipSync } from 'zlib'; // 🗜️ 압축 라이브러리 추가
 
-// 📡 실제 데이터 로딩 함수 (필수 컬럼 완벽 복구)
+// 1. [내부 함수] 실제 BigQuery 조회
 async function fetchRawData(sDate: string, eDate: string) {
-  console.log(`🔥 [Cache Miss] BigQuery 정밀 조회 시작: ${sDate} ~ ${eDate}`);
-  
-  // 1. 납품(주문) 데이터: 미납 계산 및 분류를 위한 필수 컬럼
+  // 1. 납품(주문) 데이터
   const orderQuery = `
     SELECT 
       VBELN, POSNR,           
@@ -24,7 +23,7 @@ async function fetchRawData(sDate: string, eDate: string) {
     WHERE VDATU BETWEEN '${sDate}' AND '${eDate}'
   `;
   
-  // 2. 생산 계획: 달성률 계산용 컬럼
+  // 2. 생산 계획
   const productionQuery = `
     SELECT 
       AUFNR,                  
@@ -36,7 +35,7 @@ async function fetchRawData(sDate: string, eDate: string) {
     WHERE GSTRP BETWEEN '${sDate}' AND '${eDate}'
   `;
 
-  // 3. 재고: 건전성 및 배치 분석을 위한 핵심 컬럼 (VFDAT, LGOBE 필수)
+  // 3. 재고 (전체 유효 재고)
   const inventoryQuery = `
     SELECT 
       MATNR, MATNR_T, MEINS,  
@@ -68,6 +67,43 @@ async function fetchRawData(sDate: string, eDate: string) {
   }
 }
 
+// 2. [캐싱 대상] 분석 결과 생성 및 "압축(Compression)" 🗜️
+// Next.js 캐시 제한(2MB)을 우회하기 위해 압축된 문자열(Base64)을 반환합니다.
+const getCompressedAnalysis = unstable_cache(
+  async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
+    
+    // 1) 데이터 가져오기
+    const { orders, production, inventory } = await fetchRawData(sDate, eDate);
+
+    // 2) 데이터가 없는 경우 처리
+    if ((!orders || orders.length === 0) && (!inventory || inventory.length === 0)) {
+        const emptyData = analyzeSnopData([], [], [], startDateStr, endDateStr);
+        // 빈 데이터도 압축해서 리턴
+        return gzipSync(JSON.stringify({ success: true, data: emptyData })).toString('base64');
+    }
+
+    // 3) 분석 엔진 실행
+    const analyzedData = analyzeSnopData(
+      orders || [], 
+      inventory || [], 
+      production || [], 
+      startDateStr, 
+      endDateStr
+    );
+
+    const resultObj = { success: true, data: analyzedData };
+
+    // 4) 🗜️ 결과 객체를 JSON 문자열로 변환 후 Gzip 압축 -> Base64 문자열로 변환
+    // 이렇게 하면 2.8MB -> 약 0.3MB로 줄어듭니다.
+    const compressed = gzipSync(JSON.stringify(resultObj)).toString('base64');
+    
+    return compressed;
+  },
+  ['dashboard-analysis-v5-compressed'], // Cache Key (버전 변경 v4 -> v5)
+  { revalidate: 3600 } 
+);
+
+// 3. [메인 액션] 외부 호출 함수 (압축 해제 담당)
 export async function getDashboardData(startDate: string, endDate: string) {
   if (!startDate || !endDate) return { success: false, message: "날짜 정보가 누락되었습니다." };
 
@@ -75,33 +111,17 @@ export async function getDashboardData(startDate: string, endDate: string) {
   const eDate = endDate.replace(/-/g, '');
 
   try {
-    // ✅ 캐시 키 버전 업 (v2 -> v3) : 기존 캐시 무효화 및 새로고침 강제
-    const getCachedData = unstable_cache(
-      async () => fetchRawData(sDate, eDate),
-      [`dashboard-data-${sDate}-${eDate}-v3`], 
-      { revalidate: 3600 } 
-    );
-
-    const { orders, production, inventory } = await getCachedData();
-
-    // 데이터가 아예 없는 경우 방어 코드
-    if ((!orders || orders.length === 0) && (!inventory || inventory.length === 0)) {
-        console.warn("⚠️ 조회된 데이터가 없습니다.");
-        // 빈 데이터라도 분석 함수를 돌려 빈 결과를 리턴해야 함 (안 그러면 클라이언트 에러)
-        const emptyResult = analyzeSnopData([], [], [], startDate, endDate);
-        return { success: true, data: emptyResult };
-    }
-
-    // 날짜 정보와 함께 분석 엔진 실행
-    const result = analyzeSnopData(
-      orders || [], 
-      inventory || [], 
-      production || [], 
-      startDate, 
-      endDate
-    );
+    // console.log(`⚡ [Action] 데이터 요청 (Compressed Cache): ${startDate} ~ ${endDate}`);
     
-    return { success: true, data: result };
+    // 1) 캐시된 "압축 데이터" 가져오기
+    const compressedData = await getCompressedAnalysis(sDate, eDate, startDate, endDate);
+    
+    // 2) 🔓 압축 해제 (Decompress)
+    // Base64 -> Buffer -> Gunzip -> JSON Parse
+    const decompressedBuffer = gunzipSync(Buffer.from(compressedData, 'base64'));
+    const result = JSON.parse(decompressedBuffer.toString('utf-8'));
+    
+    return result;
 
   } catch (error: any) {
     console.error('❌ [Server Action Error] 조회 실패:', error);

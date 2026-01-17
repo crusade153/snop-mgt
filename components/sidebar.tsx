@@ -10,7 +10,6 @@ import {
   LineChart 
 } from 'lucide-react';
 
-// 메뉴 목록에서 '일일 관리'와 '수주-생산 연계'를 제거했습니다.
 const menuItems = [
   { name: '종합 현황', href: '/dashboard', icon: LayoutDashboard },
   { name: '납품 현황', href: '/fulfillment', icon: Truck },
@@ -30,7 +29,8 @@ export default function Sidebar() {
     <aside className="fixed left-0 top-0 bottom-0 z-50 flex flex-col w-[240px] bg-[#FAFAFA] border-r border-neutral-200">
       {/* Brand Identity */}
       <div className="h-[60px] flex items-center px-6 border-b border-neutral-200 bg-white">
-        <div className="flex items-center gap-2">
+        {/* 🚨 [수정] Link 컴포넌트로 감싸서 클릭 시 홈('/')으로 이동 */}
+        <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <div className="w-8 h-8 rounded-full bg-primary-brand flex items-center justify-center text-white font-bold text-xs">
             Harim
           </div>
@@ -38,7 +38,7 @@ export default function Sidebar() {
             <div className="text-sm font-bold text-neutral-900 leading-tight">하림</div>
             <div className="text-[10px] text-neutral-500 leading-tight">하림산업</div>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* Navigation */}

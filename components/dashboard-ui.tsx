@@ -2,7 +2,7 @@
 
 import { useDashboardData } from '@/hooks/use-dashboard'; 
 import { Calendar as CalendarIcon, Filter, HelpCircle } from 'lucide-react';
-import { DashboardAnalysis } from '@/types/analysis';
+import { DashboardAnalysis, IntegratedItem } from '@/types/analysis'; // ✅ IntegratedItem 타입 추가 Import
 
 interface Props {
   initialData: DashboardAnalysis | null;
@@ -105,9 +105,11 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
             </thead>
             <tbody className="divide-y divide-neutral-200">
               {data.integratedArray
-                .sort((a, b) => b.totalUnfulfilledValue - a.totalUnfulfilledValue)
+                // ✅ [수정] sort 함수의 인자(a, b)에 IntegratedItem 타입 명시
+                .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue)
                 .slice(0, 20)
-                .map((item) => (
+                // ✅ [수정] map 함수의 인자(item)에 IntegratedItem 타입 명시
+                .map((item: IntegratedItem) => (
                 <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
                   <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
                   <td className="px-4 py-3 text-neutral-900">{item.name}</td>

@@ -33,11 +33,13 @@ export default function DeliveryPage() {
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
+  // ✅ [수정] 타입 명시: item, a, b에 IntegratedItem 타입 지정
   const unfulfilledList = data.integratedArray
-    .filter(item => item.totalUnfulfilledQty > 0)
-    .sort((a, b) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
+    .filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0)
+    .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
   
-  const totalUnfulfilledCount = unfulfilledList.reduce((acc, cur) => acc + cur.unfulfilledOrders.length, 0);
+  // ✅ [수정] 타입 명시: acc, cur에 타입 지정
+  const totalUnfulfilledCount = unfulfilledList.reduce((acc: number, cur: IntegratedItem) => acc + cur.unfulfilledOrders.length, 0);
   const totalPages = Math.ceil(unfulfilledList.length / itemsPerPage);
   const paginatedList = unfulfilledList.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -82,7 +84,7 @@ export default function DeliveryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {paginatedList.map((item, idx) => {
+              {paginatedList.map((item: IntegratedItem, idx: number) => {
                   const causes = item.unfulfilledOrders.map(o => o.cause);
                   const majorCause = causes.sort((a,b) => causes.filter(v => v===a).length - causes.filter(v => v===b).length).pop() || '기타';
                   const maxDelay = Math.max(...item.unfulfilledOrders.map(o => o.daysDelayed));
@@ -152,7 +154,6 @@ export default function DeliveryPage() {
               </div>
             </div>
 
-            {/* 🚨 [수정] 인사이트 문구 변경: 버틸 수 -> 운영할 수 */}
             <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl flex items-start gap-3">
               <Clock className="text-blue-600 shrink-0 mt-0.5" size={20} />
               <div>
@@ -161,7 +162,6 @@ export default function DeliveryPage() {
                   현재 일평균 <strong>{Math.round(selectedProduct.inventory.ads / 1000000).toLocaleString()}백만원</strong> 어치가 팔리고 있습니다.<br/>
                   {selectedProduct.inventory.totalStock === 0 
                     ? "재고가 고갈되어 즉시 생산 투입이 필요합니다. 생산팀에 긴급 오더를 확인하세요." 
-                    // 🚨 [수정] 운영할 수 있습니다.
                     : `현재 재고로 약 ${(selectedProduct.inventory.totalStock / (selectedProduct.totalReqQty / 30)).toFixed(1)}일 운영할 수 있습니다.`}
                 </p>
               </div>
@@ -210,7 +210,6 @@ export default function DeliveryPage() {
 function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
   return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div><div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div></div>);
 }
-// 🚨 [수정] 원인 뱃지 - '당일 재고 부족' 추가 및 '재고 부족'은 빨간색으로
 function CauseBadge({ cause }: { cause: string }) {
   const styles: Record<string, string> = { 
     '재고 부족': 'bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]', 

@@ -1,12 +1,11 @@
 'use client'
 
 import { useDashboardData } from '@/hooks/use-dashboard'; 
-import { Calendar as CalendarIcon, Filter } from 'lucide-react';
+import { Calendar as CalendarIcon, Filter, HelpCircle } from 'lucide-react';
 
 export default function DashboardPage() {
   const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
 
-  // 로딩 상태 UI
   if (isLoading) return (
     <div className="flex items-center justify-center h-[calc(100vh-100px)]">
       <div className="flex flex-col items-center gap-3">
@@ -16,7 +15,6 @@ export default function DashboardPage() {
     </div>
   );
   
-  // 에러 상태 UI
   if (!data) return <div className="p-10 text-center text-status-error">데이터 로드 실패</div>;
 
   return (
@@ -28,7 +26,6 @@ export default function DashboardPage() {
           <p className="text-[12px] text-neutral-700 mt-1">전사 S&OP 핵심 지표 모니터링</p>
         </div>
         
-        {/* Date Filter Component */}
         <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm">
           <CalendarIcon size={14} className="text-neutral-500" />
           <input 
@@ -54,19 +51,25 @@ export default function DashboardPage() {
 
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <KpiCard title="제품 매출" value={data.kpis.productSales} unit="원" type="blue" />
-        <KpiCard title="상품 매출" value={data.kpis.merchandiseSales} unit="원" type="neutral" />
-        <KpiCard title="미납 손실액" value={data.kpis.totalUnfulfilledValue} unit="원" type="brand" alert={true} />
+        {/* 순매출(반품차감) & 백만원 단위 적용 */}
+        <KpiCard title="제품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
+        <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
+        
+        {/* 미납 손실액 (툴팁 추가) */}
+        <KpiCard title="미납 손실액" value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)} unit="백만원" type="brand" alert={true} tooltip="미납수량 × 정상단가 합계" />
+        
         <KpiCard title="긴급 납품" value={data.kpis.criticalDeliveryCount} unit="건" type="warning" />
-        <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.critical} unit="건" type="warning" />
+        
+        {/* 재고 단위 '개 제품' */}
+        <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.critical} unit="개 제품" type="warning" />
       </div>
 
       {/* 3. Analysis Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <RankingCard title="🏆 Top 브랜드" data={data.salesAnalysis.byBrand} />
-        <RankingCard title="📂 Top 카테고리" data={data.salesAnalysis.byCategory} />
+        <RankingCard title="🏆 Top 5 베스트 제품 (매출)" data={data.salesAnalysis.topProducts} />
+        <RankingCard title="🏢 Top 5 거래처 (매출)" data={data.salesAnalysis.topCustomers} />
         
-        {/* 재고 건전성 (Custom Card) */}
+        {/* 재고 건전성 */}
         <div className="bg-white rounded p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-[16px] font-semibold text-neutral-900">📦 재고 건전성</h2>
@@ -93,10 +96,10 @@ export default function DashboardPage() {
               <tr>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">코드</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">제품명</th>
-                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">미납금액</th>
+                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">미납금액(백만원)</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">재고(BOX)</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">상태</th>
-                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">ADS</th>
+                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">일평균 매출(백만원)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
@@ -108,17 +111,16 @@ export default function DashboardPage() {
                   <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
                   <td className="px-4 py-3 text-neutral-900">{item.name}</td>
                   <td className="px-4 py-3 text-right font-bold text-primary-brand">
-                    {item.totalUnfulfilledValue.toLocaleString()}
+                    {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-right text-neutral-700">
-                    {/* ✅ 수정됨: stock -> totalStock */}
                     {item.inventory.totalStock.toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <StatusBadge status={item.inventory.status} />
                   </td>
                   <td className="px-4 py-3 text-right text-neutral-500">
-                    {item.inventory.ads.toFixed(1)}
+                    {(item.inventory.ads / 1000000).toFixed(1)}
                   </td>
                 </tr>
               ))}
@@ -132,7 +134,7 @@ export default function DashboardPage() {
 
 // --- UI Components ---
 
-function KpiCard({ title, value, unit, type, alert }: any) {
+function KpiCard({ title, value, unit, type, tooltip }: any) {
   const styles: any = {
     brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },
     blue: { bg: 'bg-[#E3F2FD]', text: 'text-[#1565C0]', label: 'text-[#4A90E2]' },
@@ -141,18 +143,26 @@ function KpiCard({ title, value, unit, type, alert }: any) {
   };
   const currentStyle = styles[type] || styles.neutral;
   return (
-    <div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${currentStyle.bg} transition hover:-translate-y-1`}>
-      <div className={`text-[12px] font-medium mb-1 ${currentStyle.label}`}>{title}</div>
+    <div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${currentStyle.bg} transition hover:-translate-y-1 relative group`}>
+      <div className={`text-[12px] font-medium mb-1 ${currentStyle.label} flex items-center gap-1`}>
+        {title}
+        {tooltip && <HelpCircle size={12} className="cursor-help" />}
+      </div>
       <div className={`text-[24px] font-bold ${currentStyle.text}`}>
         {value.toLocaleString()} 
         <span className="text-[12px] font-normal ml-1 opacity-70">{unit}</span>
       </div>
+      {tooltip && (
+        <div className="absolute hidden group-hover:block bottom-full left-1/2 -translate-x-1/2 mb-2 p-2 bg-gray-800 text-white text-xs rounded shadow-lg whitespace-nowrap z-10">
+          {tooltip}
+        </div>
+      )}
     </div>
   );
 }
 
 function RankingCard({ title, data }: any) {
-  const topList = data.slice(0, 5);
+  const topList = (data || []).slice(0, 5);
   return (
     <div className="bg-white rounded p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
       <div className="flex justify-between items-center mb-4 pb-2 border-b border-neutral-100">
@@ -160,16 +170,26 @@ function RankingCard({ title, data }: any) {
       </div>
       <ul className="space-y-3">
         {topList.map((item: any, idx: number) => (
-          <li key={idx} className="flex justify-between items-center text-sm">
-            <span className="flex items-center gap-3">
-              <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold ${idx < 3 ? 'bg-primary-blue text-white' : 'bg-neutral-100 text-neutral-500'}`}>
-                {idx + 1}
-              </span>
-              <span className="text-neutral-700 truncate max-w-[140px]">{item.name}</span>
+          // 🚨 [수정 완료] Flex 레이아웃으로 변경하여 이름이 남는 공간을 모두 차지하도록 수정
+          <li key={idx} className="flex items-center text-sm gap-3">
+            
+            {/* 순위 (고정 너비) */}
+            <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold shrink-0 ${idx < 3 ? 'bg-primary-blue text-white' : 'bg-neutral-100 text-neutral-500'}`}>
+              {idx + 1}
             </span>
-            <span className="font-bold text-neutral-900">{item.value.toLocaleString()}</span>
+            
+            {/* 이름 (유동적 너비, 남는 공간 채움, 말줄임 적용) */}
+            <span className="text-neutral-700 truncate flex-1 min-w-0" title={item.name}>
+              {item.name}
+            </span>
+            
+            {/* 금액 (고정 너비, 줄바꿈 방지) */}
+            <span className="font-bold text-neutral-900 shrink-0 whitespace-nowrap">
+                {Math.round(item.value / 1000000).toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">백만</span>
+            </span>
           </li>
         ))}
+        {topList.length === 0 && <li className="text-center text-neutral-400 text-xs py-4">데이터 없음</li>}
       </ul>
     </div>
   );
@@ -181,7 +201,7 @@ function StockBar({ label, value, total, color }: any) {
     <div>
       <div className="flex justify-between text-xs mb-1.5">
         <span className="font-medium text-neutral-700">{label}</span>
-        <span className="font-bold text-neutral-900">{value}건</span>
+        <span className="font-bold text-neutral-900">{value}개 제품</span>
       </div>
       <div className="w-full bg-neutral-100 rounded-sm h-2 overflow-hidden">
         <div className={`h-full rounded-sm ${color} transition-all duration-1000 ease-out`} style={{ width: `${percent}%` }}></div>

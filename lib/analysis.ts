@@ -1,16 +1,16 @@
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
-import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat } from '@/types/analysis';
+import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder } from '@/types/analysis';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 
 const THRESHOLDS = {
-  CRITICAL_DAYS: 30, // 30일 이하 긴급
-  SAFETY_BUFFER_DAYS: 14, // 적정 재고 기준 (2주치)
+  CRITICAL_DAYS: 30, 
+  SAFETY_BUFFER_DAYS: 14, 
 };
 
-// 판매 속도(ADS) 계산
+// 1. 판매 속도(ADS) 계산
 function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, number> {
   const map = new Map<string, number>();
-  const safeDays = Math.max(1, days); // 0으로 나누기 방지
+  const safeDays = Math.max(1, days); 
 
   orders.forEach(row => {
     if (!row.MATNR) return;
@@ -24,11 +24,21 @@ function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, n
   return map;
 }
 
-// 재고 상태 판별
+// 2. 재고 상태 판별
 function getStockStatus(days: number): 'disposed' | 'critical' | 'healthy' {
   if (days <= 0) return 'disposed';
   if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical';
   return 'healthy';
+}
+
+// 3. 제품명 기반 브랜드/카테고리 추론
+function inferBrandInfo(name: string) {
+  if (name.includes('The미식') || name.includes('미식')) return { brand: 'The미식', category: '상온' };
+  if (name.includes('하림')) return { brand: '하림', category: '냉동' };
+  if (name.includes('멜트')) return { brand: '멜트', category: '건강식' };
+  if (name.includes('용가리')) return { brand: '용가리', category: '냉동' };
+  if (name.includes('챔')) return { brand: '챔', category: '통조림' };
+  return { brand: '기타', category: '기타' };
 }
 
 export function analyzeSnopData(
@@ -39,7 +49,6 @@ export function analyzeSnopData(
   endDateStr: string
 ): DashboardAnalysis {
   
-  // 조회 기간 자동 계산 (기본값 방어)
   let daysDiff = 60;
   try {
     if (startDateStr && endDateStr) {
@@ -51,35 +60,33 @@ export function analyzeSnopData(
 
   const velocityMap = calculateSalesVelocity(orders, daysDiff);
   
-  // 🔄 [재고 집계] 품목별로 배치를 모으는 로직
+  // 재고 집계
   const invAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>();
-  
   inventoryList.forEach(inv => {
     if (!invAggMap.has(inv.MATNR)) {
       invAggMap.set(inv.MATNR, { totalStock: 0, batches: [], info: inv });
     }
     const target = invAggMap.get(inv.MATNR)!;
-    
-    // 수량 합산
     target.totalStock += Number(inv.CLABS || 0);
-    
-    // 배치 정보 추가 (유통기한별 + 잔여율 포함)
     target.batches.push({
       quantity: Number(inv.CLABS || 0),
       expirationDate: inv.VFDAT || '',
       remainDays: Number(inv.remain_day || 0),
-      remainRate: Number(inv.remain_rate || 0), // 🆕 DB 값 연결
+      remainRate: Number(inv.remain_rate || 0),
       location: inv.LGOBE || ''
     });
   });
 
   const integratedMap = new Map<string, IntegratedItem>();
-  const customerMap = new Map<string, CustomerStat>();
+  
+  type CustomerTemp = CustomerStat & { boughtMap: Map<string, {name:string, qty:number, value:number}> };
+  const customerMap = new Map<string, CustomerTemp>();
+
   let productSales = 0;
   let merchandiseSales = 0;
   const today = new Date();
 
-  // 1. 주문 데이터 처리
+  // --- 1. 주문 데이터 처리 ---
   orders.forEach(order => {
     const code = order.MATNR;
     if (!code) return;
@@ -101,16 +108,25 @@ export function analyzeSnopData(
     if (code.startsWith('5')) productSales += supplyPrice;
     else merchandiseSales += supplyPrice;
 
+    // 상세 미납 정보 생성
+    let unfulfilledInfo: UnfulfilledOrder | null = null;
+
     if (unfulfilled > 0) {
         item.totalUnfulfilledQty += unfulfilled;
-        const unitPrice = reqQty > 0 ? (supplyPrice / reqQty) : 0;
+        
+        let unitPrice = 0;
+        if (reqQty > 0) unitPrice = Math.abs(supplyPrice) / reqQty;
         item.totalUnfulfilledValue += unfulfilled * unitPrice;
 
-        // 미납 원인 추정
-        let cause = '기타';
-        // (단순 비교: 총 재고가 미납량보다 많으면 물류 이슈, 아니면 재고 부족)
-        if (item.inventory.totalStock >= unfulfilled) cause = '물류/출하 지연';
-        else cause = '재고 부족';
+        // 🚨 [수정 완료] 미납 원인 로직 변경 (물류 지연 제거)
+        let cause = '재고 부족';
+        if (item.inventory.totalStock > 0) {
+            // 현재 재고는 있으나, 주문 당시 없었으므로 '당일 재고 부족'
+            cause = '당일 재고 부족'; 
+        } else {
+            // 현재도 재고가 없음
+            cause = '재고 부족';
+        }
 
         let daysDelayed = 0;
         if (order.VDATU && order.VDATU.length === 8) {
@@ -120,37 +136,53 @@ export function analyzeSnopData(
             } catch(e) {}
         }
 
-        item.unfulfilledOrders.push({
+        unfulfilledInfo = {
             place: order.NAME1 || '알수없음',
+            productName: item.name,
             qty: unfulfilled,
             value: unfulfilled * unitPrice,
             unitPrice,
             reqDate: order.VDATU,
             daysDelayed,
             cause
-        });
+        };
+
+        item.unfulfilledOrders.push(unfulfilledInfo);
     }
 
-    // 거래처 통계
+    // --- 거래처 집계 ---
     const custId = order.KUNNR || 'UNKNOWN';
     if (!customerMap.has(custId)) {
         customerMap.set(custId, {
             id: custId, name: order.NAME1 || '알수없음',
-            orderCount: 0, fulfilledCount: 0, totalRevenue: 0, missedRevenue: 0, fulfillmentRate: 0
+            orderCount: 0, fulfilledCount: 0, totalRevenue: 0, missedRevenue: 0, fulfillmentRate: 0,
+            topBoughtProducts: [], 
+            unfulfilledDetails: [],
+            boughtMap: new Map()
         });
     }
     const cust = customerMap.get(custId)!;
     cust.orderCount++;
     cust.totalRevenue += supplyPrice;
 
-    if (unfulfilled <= 0) cust.fulfilledCount++;
-    else {
-        const unitPrice = reqQty > 0 ? (supplyPrice / reqQty) : 0;
+    if (!cust.boughtMap.has(code)) {
+        cust.boughtMap.set(code, { name: item.name, qty: 0, value: 0 });
+    }
+    const prodStat = cust.boughtMap.get(code)!;
+    prodStat.qty += reqQty;
+    prodStat.value += supplyPrice;
+
+    if (unfulfilled <= 0) {
+        cust.fulfilledCount++;
+    } else {
+        if (unfulfilledInfo) cust.unfulfilledDetails.push(unfulfilledInfo);
+        let unitPrice = 0;
+        if (reqQty > 0) unitPrice = Math.abs(supplyPrice) / reqQty;
         cust.missedRevenue += unfulfilled * unitPrice;
     }
   });
 
-  // 2. 생산 데이터 처리
+  // --- 2. 생산 데이터 처리 ---
   productionList.forEach(prod => {
     const code = prod.MATNR;
     if (!integratedMap.has(code)) initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS);
@@ -159,21 +191,18 @@ export function analyzeSnopData(
     item.production.receivedQty += Number(prod.LMNGA || 0);
   });
 
-  // 3. 재고 데이터 Backfill (주문/생산 없는 품목)
+  // --- 3. 재고 데이터 Backfill ---
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
       initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, velocityMap, val.info.MEINS);
     }
   });
 
-  // 4. 최종 KPI 계산
+  // --- 4. 최종 KPI 계산 ---
   const integratedArray = Array.from(integratedMap.values());
   let totalUnfulfilledValue = 0;
   let criticalDeliveryCount = 0;
   const stockHealth = { disposed: 0, critical: 0, healthy: 0 };
-  const salesByBrand: Record<string, number> = {};
-  const salesByCategory: Record<string, number> = {};
-  const salesByFamily: Record<string, number> = {};
 
   integratedArray.forEach(item => {
     if (item.production.planQty > 0) {
@@ -182,25 +211,28 @@ export function analyzeSnopData(
     totalUnfulfilledValue += item.totalUnfulfilledValue;
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
-    // 재고 상태 카운트 (대표 상태 기준)
+    if (item.inventory.totalStock === 0) {
+        if (item.totalUnfulfilledQty > 0) item.inventory.status = 'critical'; 
+    }
+
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
         else if (item.inventory.status === 'critical') stockHealth.critical++;
         else stockHealth.healthy++;
     }
 
-    if (item.totalSalesAmount > 0) {
-        const brand = item.brand || '기타';
-        salesByBrand[brand] = (salesByBrand[brand] || 0) + item.totalSalesAmount;
-        const cat = item.category || '미지정';
-        salesByCategory[cat] = (salesByCategory[cat] || 0) + item.totalSalesAmount;
-    }
+    item.inventory.ads = daysDiff > 0 ? (item.totalSalesAmount / daysDiff) : 0;
   });
 
   const customerStats = Array.from(customerMap.values()).map(c => {
       c.fulfillmentRate = c.orderCount > 0 ? (c.fulfilledCount / c.orderCount) * 100 : 0;
+      
+      c.topBoughtProducts = Array.from(c.boughtMap.values())
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10);
+      
       return c;
-  }).sort((a, b) => b.missedRevenue - a.missedRevenue);
+  }).sort((a, b) => b.totalRevenue - a.totalRevenue);
 
   const fulfillmentSummary = {
       totalOrders: orders.length,
@@ -210,8 +242,15 @@ export function analyzeSnopData(
       averageRate: 0
   };
 
-  const toSortedArray = (obj: Record<string, number>) => 
-    Object.entries(obj).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  const topProducts = integratedArray
+    .sort((a, b) => b.totalSalesAmount - a.totalSalesAmount)
+    .slice(0, 5)
+    .map(item => ({ name: item.name, value: item.totalSalesAmount }));
+
+  const topCustomers = customerStats
+    .sort((a, b) => b.totalRevenue - a.totalRevenue)
+    .slice(0, 5)
+    .map(c => ({ name: c.name, value: c.totalRevenue }));
 
   return {
     kpis: {
@@ -223,16 +262,15 @@ export function analyzeSnopData(
     },
     stockHealth,
     salesAnalysis: {
-      byBrand: toSortedArray(salesByBrand),
-      byCategory: toSortedArray(salesByCategory),
-      byFamily: toSortedArray(salesByFamily)
+      topProducts,
+      topCustomers
     },
     integratedArray,
     fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats }
   };
 }
 
-// 🔧 초기화 함수: 재고 Map 구조 변경(invAggMap)에 맞춰 수정됨
+// 초기화 함수
 function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
@@ -242,10 +280,9 @@ function initializeItem(
   unit: string
 ) {
   const invData = invMap.get(code);
-  const ads = velocityMap.get(code) || 0;
-  const recStock = Math.ceil(ads * THRESHOLDS.SAFETY_BUFFER_DAYS);
+  const adsQty = velocityMap.get(code) || 0;
+  const recStock = Math.ceil(adsQty * THRESHOLDS.SAFETY_BUFFER_DAYS);
   
-  // 대표 상태 판별 (가장 유통기한 짧은 배치 기준)
   let minRemaining = 9999;
   if (invData && invData.batches.length > 0) {
     minRemaining = Math.min(...invData.batches.map(b => b.remainDays));
@@ -256,10 +293,19 @@ function initializeItem(
   const status = invData ? getStockStatus(minRemaining) : 'healthy';
   const riskScore = status === 'critical' ? 100 : (status === 'disposed' ? 50 : 0);
 
-  // 분류 로직 (임시)
-  const brand = '하림'; 
-  const category = '상온'; 
-  const family = '즉석밥';
+  let brand = '기타';
+  let category = '미지정';
+
+  if (invData?.info.PRDHA_1_T) {
+      brand = invData.info.PRDHA_1_T;
+      category = invData.info.PRDHA_2_T || '미지정';
+  } else {
+      const inferred = inferBrandInfo(nameHint);
+      brand = inferred.brand;
+      category = inferred.category;
+  }
+  
+  const family = invData?.info.PRDHA_3_T || '기타';
 
   map.set(code, {
     code,
@@ -269,12 +315,12 @@ function initializeItem(
     totalReqQty: 0, totalActualQty: 0, totalUnfulfilledQty: 0, totalUnfulfilledValue: 0, totalSalesAmount: 0,
     inventory: {
       totalStock: invData?.totalStock || 0,
-      usableStock: invData?.totalStock || 0, // 기본적으로 전체를 가용 재고로 시작
-      batches: invData?.batches || [],       // 👈 배치 리스트 주입
+      usableStock: invData?.totalStock || 0,
+      batches: invData?.batches || [],
       status,
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore,
-      ads,
+      ads: 0,
       recommendedStock: recStock
     },
     production: {

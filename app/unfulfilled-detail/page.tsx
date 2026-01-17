@@ -1,14 +1,18 @@
 'use client'
 
 import { useState, useMemo } from 'react';
-import { useDashboardData } from '@/hooks/use-dashboard'; // ✅ 최적화된 훅 사용
-import { Calendar as CalendarIcon, X, ChevronRight } from 'lucide-react';
+import { useDashboardData } from '@/hooks/use-dashboard';
+import { Calendar as CalendarIcon, X, ChevronRight, ChevronLeft, HelpCircle } from 'lucide-react';
 
 type FilterType = 'brand' | 'category' | 'family' | null;
 
 export default function UnfulfilledDetailPage() {
   const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
+  
+  // 1. 필터 및 페이지네이션 상태
   const [filter, setFilter] = useState<{ type: FilterType; value: string | null }>({ type: null, value: null });
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 15;
 
   // 🔄 데이터 실시간 가공 (Memoization)
   const { filteredList, summary } = useMemo(() => {
@@ -28,6 +32,7 @@ export default function UnfulfilledDetailPage() {
         entry.value += item.totalUnfulfilledValue;
         entry.count += 1;
       });
+      // 금액 높은 순 정렬
       return Array.from(map.values()).sort((a, b) => b.value - a.value);
     };
 
@@ -37,7 +42,7 @@ export default function UnfulfilledDetailPage() {
       resultList = baseList.filter(item => item[filter.type!] === filter.value);
     }
 
-    // 금액 높은 순 정렬
+    // 4. 금액 높은 순 정렬 (전체 리스트)
     resultList.sort((a, b) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
 
     return {
@@ -50,16 +55,31 @@ export default function UnfulfilledDetailPage() {
     };
   }, [data, filter]);
 
-  if (isLoading) return <LoadingSpinner />;
-  if (!data) return <ErrorDisplay />;
+  // 페이지네이션 계산
+  const totalPages = Math.ceil(filteredList.length / itemsPerPage);
+  const paginatedList = filteredList.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
+  // 페이지 변경 핸들러
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' }); // 맨 위로 스크롤
+  };
+
+  // 필터 핸들러 (필터 변경 시 1페이지로 리셋)
   const handleFilter = (type: FilterType, value: string) => {
     if (filter.type === type && filter.value === value) {
-      setFilter({ type: null, value: null }); // 같은거 누르면 해제
+      setFilter({ type: null, value: null });
     } else {
       setFilter({ type, value });
     }
+    setCurrentPage(1); 
   };
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!data) return <ErrorDisplay />;
 
   return (
     <div className="space-y-6">
@@ -78,7 +98,7 @@ export default function UnfulfilledDetailPage() {
           <span className="font-bold text-sm">🔍 Filter:</span>
           <span className="font-bold">{filter.value}</span>
           <span className="text-[11px] bg-white px-2 py-0.5 rounded-full border border-[#BBDEFB]">{filteredList.length}건</span>
-          <button onClick={() => setFilter({ type: null, value: null })} className="ml-2 hover:bg-[#BBDEFB] rounded-full p-0.5">
+          <button onClick={() => handleFilter(null, '')} className="ml-2 hover:bg-[#BBDEFB] rounded-full p-0.5">
             <X size={14} />
           </button>
         </div>
@@ -93,14 +113,23 @@ export default function UnfulfilledDetailPage() {
 
       {/* 상세 테이블 */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
-        <div className="p-4 bg-[#FAFAFA] border-b border-neutral-200 font-bold text-neutral-700 flex justify-between items-center">
-          <span>{filter.type ? `${filter.value} 미납 내역` : '전체 미납 SKU 리스트'}</span>
-          <span className="text-[11px] font-normal text-neutral-500">(총 {filteredList.length}개 품목)</span>
+        <div className="p-4 bg-[#FAFAFA] border-b border-neutral-200 flex justify-between items-center">
+          <div className="font-bold text-neutral-700">
+            <span>{filter.type ? `${filter.value} 미납 내역` : '전체 미납 SKU 리스트'}</span>
+            <span className="text-[11px] font-normal text-neutral-500 ml-2">(총 {filteredList.length}개 품목)</span>
+          </div>
+          {/* 🚨 [수정] 금액 단위 툴팁 */}
+          <div className="flex items-center gap-1 text-xs text-neutral-500 bg-neutral-100 px-2 py-1 rounded">
+            <HelpCircle size={12} />
+            <span>금액 단위: 백만원 (VAT 별도)</span>
+          </div>
         </div>
-        <div className="max-h-[600px] overflow-y-auto">
+        
+        <div className="overflow-x-auto min-h-[500px]">
           <table className="w-full text-sm text-left border-collapse">
             <thead className="bg-[#FAFAFA] sticky top-0 z-10 shadow-sm">
               <tr>
+                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 w-12 text-center">No</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">브랜드</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">카테고리</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">제품군</th>
@@ -112,14 +141,16 @@ export default function UnfulfilledDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {filteredList.map((item) => {
+              {paginatedList.map((item, idx) => {
                 const maxDelay = item.unfulfilledOrders.length > 0 ? Math.max(...item.unfulfilledOrders.map(o => o.daysDelayed)) : 0;
                 const causeMap: Record<string, number> = {};
                 item.unfulfilledOrders.forEach(o => causeMap[o.cause] = (causeMap[o.cause] || 0) + 1);
                 const majorCause = Object.keys(causeMap).sort((a,b) => causeMap[b] - causeMap[a])[0] || '기타';
+                const rowNo = (currentPage - 1) * itemsPerPage + idx + 1;
 
                 return (
                   <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px] group">
+                    <td className="px-4 py-3 text-center text-neutral-400 text-xs">{rowNo}</td>
                     <td className="px-4 py-3 text-neutral-500">{item.brand}</td>
                     <td className="px-4 py-3 text-neutral-500">{item.category}</td>
                     <td className="px-4 py-3 text-neutral-500">{item.family}</td>
@@ -134,7 +165,8 @@ export default function UnfulfilledDetailPage() {
                       {item.totalUnfulfilledQty.toLocaleString()} <span className="text-neutral-400 text-[10px] font-normal">{item.unit}</span>
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-neutral-800">
-                      {item.totalUnfulfilledValue.toLocaleString()}
+                      {/* 🚨 [수정] 백만원 단위 표기 */}
+                      {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()} <span className="text-neutral-400 text-[10px] font-normal">백만</span>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span className="px-2 py-1 bg-neutral-100 text-neutral-600 rounded text-[11px] border border-neutral-200">
@@ -144,12 +176,57 @@ export default function UnfulfilledDetailPage() {
                   </tr>
                 );
               })}
-              {filteredList.length === 0 && (
-                <tr><td colSpan={8} className="p-10 text-center text-neutral-400">해당 조건의 데이터가 없습니다.</td></tr>
+              {paginatedList.length === 0 && (
+                <tr><td colSpan={9} className="p-10 text-center text-neutral-400">해당 조건의 데이터가 없습니다.</td></tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {/* 🚨 [추가] 페이지네이션 컨트롤 */}
+        {totalPages > 1 && (
+          <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
+            <button 
+              onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed text-neutral-600"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            
+            <div className="flex gap-1">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pNum = i + 1;
+                if (totalPages > 5) {
+                  if (currentPage <= 3) pNum = i + 1;
+                  else if (currentPage >= totalPages - 2) pNum = totalPages - 4 + i;
+                  else pNum = currentPage - 2 + i;
+                }
+                
+                return (
+                  <button
+                    key={pNum}
+                    onClick={() => handlePageChange(pNum)}
+                    className={`w-8 h-8 rounded text-sm font-bold transition-colors
+                      ${currentPage === pNum 
+                        ? 'bg-primary-blue text-white shadow-sm' 
+                        : 'bg-white text-neutral-600 border border-neutral-300 hover:bg-neutral-100'}`}
+                  >
+                    {pNum}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button 
+              onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage === totalPages}
+              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed text-neutral-600"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -190,7 +267,8 @@ function SummaryCard({ title, data, type, currentFilter, onFilter }: any) {
                     <div className="text-[11px] text-neutral-400">{d.count}건 발생</div>
                   </td>
                   <td className="px-4 py-2.5 text-right">
-                    <div className="font-bold text-neutral-900">₩{Math.round(d.value / 10000).toLocaleString()}만</div>
+                    {/* 🚨 [수정] 백만원 단위 표기 */}
+                    <div className="font-bold text-neutral-900">₩{Math.round(d.value / 1000000).toLocaleString()}백만</div>
                     <div className="text-[11px] text-[#E53935] font-medium">{d.qty.toLocaleString()} 미납</div>
                   </td>
                   <td className="px-2 py-2.5 text-neutral-400">
@@ -203,5 +281,17 @@ function SummaryCard({ title, data, type, currentFilter, onFilter }: any) {
         </table>
       </div>
     </div>
+  );
+}
+// app/unfulfilled-detail/page.tsx 파일 하단 CauseBadge 함수 교체
+function CauseBadge({ cause }: { cause: string }) {
+  const styles: Record<string, string> = {
+    '재고 부족': 'bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]', 
+    '당일 재고 부족': 'bg-[#FFF3E0] text-[#EF6C00] border border-[#FFE0B2]', 
+  };
+  return (
+    <span className={`px-2 py-1 rounded text-[11px] font-bold border ${styles[cause] || 'bg-[#F5F5F5] text-[#616161] border-[#E0E0E0]'}`}>
+      {cause}
+    </span>
   );
 }

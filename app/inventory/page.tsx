@@ -8,7 +8,20 @@ import {
   ShieldAlert 
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
-import { IntegratedItem } from '@/types/analysis'; // ✅ 타입 Import 추가
+import { IntegratedItem } from '@/types/analysis';
+
+// ✅ [추가] 시뮬레이션 결과 아이템의 타입 정의 (명시적 타입 선언을 위해)
+interface SimulatedItem extends IntegratedItem {
+  sim: {
+    currentADS: number;
+    targetStock: number;
+    stockDays: number;
+    simStatus: 'shortage' | 'excess' | 'good';
+    isRisk: boolean;
+    usableStock: number;
+    wasteStock: number;
+  }
+}
 
 type AdsPeriod = 30 | 60 | 90;
 
@@ -39,7 +52,7 @@ export default function InventoryPage() {
   const simulation = useMemo(() => {
     if (!data) return { all: [], totalCount: 0, filteredCount: 0 };
 
-    // ✅ [수정] filter 내부 item에 타입(IntegratedItem) 명시
+    // ✅ [수정] filter 인자 타입 명시
     let items = data.integratedArray.filter((item: IntegratedItem) => {
       const hasStock = item.inventory.totalStock > 0;
       const matchesSearch = searchTerm === '' || 
@@ -48,8 +61,8 @@ export default function InventoryPage() {
       return hasStock && matchesSearch;
     });
 
-    // ✅ [수정] map 내부 item에 타입(IntegratedItem) 명시
-    const simulatedItems = items.map((item: IntegratedItem) => {
+    // ✅ [수정] map 결과가 SimulatedItem[] 임을 명시
+    const simulatedItems: SimulatedItem[] = items.map((item: IntegratedItem) => {
       const currentADS = item.inventory.ads || 0;
       
       // 유효 재고 계산
@@ -88,8 +101,8 @@ export default function InventoryPage() {
       };
     });
 
-    // 정렬
-    simulatedItems.sort((a, b) => b.sim.usableStock - a.sim.usableStock);
+    // ✅ [수정] sort 인자 타입 명시 (에러 원인 해결)
+    simulatedItems.sort((a: SimulatedItem, b: SimulatedItem) => b.sim.usableStock - a.sim.usableStock);
 
     return {
       all: simulatedItems,
@@ -109,13 +122,14 @@ export default function InventoryPage() {
 
   // KPI
   const kpi = useMemo(() => {
-    const list = simulation.all || [];
-    const totalWaste = list.reduce((acc, item) => acc + item.sim.wasteStock, 0);
+    // ✅ [수정] KPI 계산 시 reduce, filter 인자 타입 명시
+    const list = simulation.all as SimulatedItem[] || [];
+    const totalWaste = list.reduce((acc: number, item: SimulatedItem) => acc + item.sim.wasteStock, 0);
     return {
-      shortage: list.filter(i => i.sim.simStatus === 'shortage').length,
-      excess: list.filter(i => i.sim.simStatus === 'excess').length,
-      risk: list.filter(i => i.sim.isRisk).length,
-      good: list.filter(i => i.sim.simStatus === 'good').length,
+      shortage: list.filter((i: SimulatedItem) => i.sim.simStatus === 'shortage').length,
+      excess: list.filter((i: SimulatedItem) => i.sim.simStatus === 'excess').length,
+      risk: list.filter((i: SimulatedItem) => i.sim.isRisk).length,
+      good: list.filter((i: SimulatedItem) => i.sim.simStatus === 'good').length,
       totalWaste 
     };
   }, [simulation.all]);
@@ -225,7 +239,8 @@ export default function InventoryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {paginatedItems.map((item) => (
+              {/* ✅ [수정] map 인자 타입 명시 */}
+              {paginatedItems.map((item: SimulatedItem) => (
                 <tr key={item.code} className={`hover:bg-[#F9F9F9] transition-colors h-[48px] ${item.sim.isRisk ? 'bg-[#FFF8F8]' : ''}`}>
                   <td className="px-4 py-3">
                     <div className="font-medium text-neutral-900">{item.name}</div>

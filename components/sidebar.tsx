@@ -5,7 +5,9 @@ import { usePathname } from 'next/navigation';
 import { 
   LayoutDashboard, Truck, ClipboardList, FileText, 
   Package, Factory, CalendarDays, GitCommit, ChevronRight,
-  Boxes // 🆕 재고 현황 아이콘 추가
+  Boxes, 
+  BrainCircuit, // ✅ 추가됨: 수요 예측 아이콘
+  LineChart     // ✅ 추가됨: 시뮬레이션 아이콘
 } from 'lucide-react';
 
 const menuItems = [
@@ -13,9 +15,11 @@ const menuItems = [
   { name: '납품 현황', href: '/fulfillment', icon: Truck },
   { name: '미납 리스트', href: '/delivery', icon: ClipboardList },
   { name: '미납 상세', href: '/unfulfilled-detail', icon: FileText },
-  { name: '재고 현황', href: '/stock', icon: Boxes }, // 🆕 추가됨
+  { name: '재고 현황', href: '/stock', icon: Boxes },
   { name: '재고 분석', href: '/inventory', icon: Package },
   { name: '생산 분석', href: '/production', icon: Factory },
+  { name: '수요 예측', href: '/forecast', icon: BrainCircuit }, // ✅ 정상 작동
+  { name: '시뮬레이션', href: '/simulation', icon: LineChart }, // ✅ 정상 작동
   { name: '일일 관리', href: '/daily', icon: CalendarDays },
   { name: '수주-생산 연계', href: '/linkage', icon: GitCommit },
 ];

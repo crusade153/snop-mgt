@@ -1,32 +1,28 @@
 'use client'
 
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Calendar as CalendarIcon } from 'lucide-react';
-import { IntegratedItem } from '@/types/analysis'; // ✅ 타입 Import 추가
+import { IntegratedItem } from '@/types/analysis';
 
 export default function ProductionPage() {
-  const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
+  const { data, isLoading } = useDashboardData();
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
-  // ✅ [수정] filter 인자 타입 명시
   const productionList = data.integratedArray.filter(
     (item: IntegratedItem) => item.production.planQty > 0 || item.production.receivedQty > 0
   );
 
-  // ✅ [수정] reduce 인자 타입 명시 (acc: number, cur: IntegratedItem)
   const totalPlan = productionList.reduce((acc: number, cur: IntegratedItem) => acc + cur.production.planQty, 0);
   const totalActual = productionList.reduce((acc: number, cur: IntegratedItem) => acc + cur.production.receivedQty, 0);
   
   const overallRate = totalPlan > 0 ? (totalActual / totalPlan) * 100 : 0;
   
-  // ✅ [수정] filter 인자 타입 명시
   const poorItems = productionList.filter((item: IntegratedItem) => item.production.achievementRate < 90).length;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="🏭 생산 분석" desc="계획 대 실적 비교 및 달성률 분석" dateRange={dateRange} setDateRange={setDateRange} onRefresh={refetch} />
+      <PageHeader title="🏭 생산 분석" desc="계획 대 실적 비교 및 달성률 분석" />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KpiBox label="전체 달성률" value={`${overallRate.toFixed(1)}%`} type="success" />
@@ -48,7 +44,6 @@ export default function ProductionPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-200">
-            {/* ✅ [수정] sort 및 map 인자 타입 명시 */}
             {productionList
               .sort((a: IntegratedItem, b: IntegratedItem) => a.production.achievementRate - b.production.achievementRate)
               .map((item: IntegratedItem) => {
@@ -83,11 +78,10 @@ export default function ProductionPage() {
 }
 
 // ... 공통 컴포넌트 ...
-function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
+function PageHeader({ title, desc }: any) {
   return (
     <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
       <div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div>
-      <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div>
     </div>
   );
 }

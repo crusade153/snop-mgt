@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Calendar as CalendarIcon, HelpCircle, ChevronLeft, ChevronRight, ShoppingBag, AlertCircle, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ShoppingBag, AlertCircle, Clock } from 'lucide-react';
 import { CustomerStat } from '@/types/analysis';
 
 // WideRightSheet (800px)
@@ -25,7 +25,7 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 }
 
 export default function FulfillmentPage() {
-  const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
+  const { data, isLoading } = useDashboardData();
   
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
@@ -36,7 +36,6 @@ export default function FulfillmentPage() {
 
   const { summary, byCustomer } = data.fulfillment;
   
-  // ✅ [수정] sort 인자 타입 명시 (CustomerStat)
   const sortedCustomers = [...byCustomer].sort((a: CustomerStat, b: CustomerStat) => b.totalRevenue - a.totalRevenue);
   
   const totalPages = Math.ceil(sortedCustomers.length / itemsPerPage);
@@ -49,7 +48,8 @@ export default function FulfillmentPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="✅ 납품 현황 (Fulfillment)" desc="거래처별 납품 준수율 및 매출 효율성 분석" dateRange={dateRange} setDateRange={setDateRange} onRefresh={refetch} />
+      {/* 날짜 필터 제거된 헤더 */}
+      <PageHeader title="✅ 납품 현황 (Fulfillment)" desc="거래처별 납품 준수율 및 매출 효율성 분석" />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KpiBox label="총 주문 건수" value={summary.totalOrders.toLocaleString()} unit="건" type="blue" />
@@ -76,7 +76,6 @@ export default function FulfillmentPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {/* ✅ [수정] map 인자 타입 명시 (CustomerStat) */}
               {paginatedCustomers.map((cust: CustomerStat, idx: number) => {
                 const rowNo = (currentPage - 1) * itemsPerPage + idx + 1;
                 return (
@@ -175,7 +174,7 @@ export default function FulfillmentPage() {
                       <div className="flex justify-between items-end border-t border-neutral-100 pt-3">
                         <div className="text-neutral-600 text-xs space-y-1">
                           <div className="flex items-center gap-2">
-                            <CalendarIcon size={12}/> 요청일: {order.reqDate}
+                            <Clock size={12}/> 요청일: {order.reqDate}
                           </div>
                           <div className="flex items-center gap-2 text-red-600 font-bold">
                             <Clock size={12}/> +{order.daysDelayed}일 지연중
@@ -203,8 +202,8 @@ export default function FulfillmentPage() {
   );
 }
 
-function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
-  return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div><div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div></div>);
+function PageHeader({ title, desc }: any) {
+  return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div></div>);
 }
 function KpiBox({ label, value, unit, type }: any) {
   const styles: any = { brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' }, blue: { bg: 'bg-[#E3F2FD]', text: 'text-[#1565C0]', label: 'text-[#4A90E2]' }, success: { bg: 'bg-[#E8F5E9]', text: 'text-[#2E7D32]', label: 'text-[#42A5F5]' }, warning: { bg: 'bg-[#FFF3E0]', text: 'text-[#EF6C00]', label: 'text-[#FFA726]' }, neutral: { bg: 'bg-[#FAFAFA]', text: 'text-[#424242]', label: 'text-[#757575]' }, };

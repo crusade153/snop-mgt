@@ -1,16 +1,16 @@
 'use client'
 
 import { useDashboardData } from '@/hooks/use-dashboard'; 
-import { Calendar as CalendarIcon, Filter, HelpCircle } from 'lucide-react';
-import { DashboardAnalysis, IntegratedItem } from '@/types/analysis'; // ✅ IntegratedItem 타입 추가 Import
+import { Filter, HelpCircle } from 'lucide-react';
+import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
 
 interface Props {
   initialData: DashboardAnalysis | null;
 }
 
 export default function DashboardClientUserInterface({ initialData }: Props) {
-  // 서버에서 받은 initialData를 훅에 전달
-  const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData(initialData || undefined);
+  // useDashboardData 내부에서 전역 스토어를 사용하므로 인자 불필요
+  const { data, isLoading } = useDashboardData(initialData || undefined);
 
   if (isLoading) return (
     <div className="flex items-center justify-center h-[calc(100vh-100px)]">
@@ -25,34 +25,13 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
 
   return (
     <div className="space-y-6">
-      {/* 1. Page Header & Filter */}
+      {/* 1. Page Header (날짜 필터 제거됨) */}
       <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
         <div>
           <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
           <p className="text-[12px] text-neutral-700 mt-1">전사 S&OP 핵심 지표 모니터링</p>
         </div>
-        
-        <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm">
-          <CalendarIcon size={14} className="text-neutral-500" />
-          <input 
-            type="date" value={dateRange.startDate} 
-            onChange={e => setDateRange(prev => ({ ...prev, startDate: e.target.value }))}
-            className="text-xs text-neutral-700 outline-none font-medium" 
-          />
-          <span className="text-neutral-400 text-xs">~</span>
-          <input 
-            type="date" value={dateRange.endDate} 
-            onChange={e => setDateRange(prev => ({ ...prev, endDate: e.target.value }))}
-            className="text-xs text-neutral-700 outline-none font-medium" 
-          />
-          <div className="w-[1px] h-4 bg-neutral-200 mx-1"></div>
-          <button 
-            onClick={() => refetch()} 
-            className="text-xs font-bold text-primary-blue hover:text-blue-700 transition-colors"
-          >
-            조회
-          </button>
-        </div>
+        {/* 기존의 날짜 필터 코드는 Header로 이동하여 삭제함 */}
       </div>
 
       {/* 2. KPI Cards */}
@@ -105,10 +84,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
             </thead>
             <tbody className="divide-y divide-neutral-200">
               {data.integratedArray
-                // ✅ [수정] sort 함수의 인자(a, b)에 IntegratedItem 타입 명시
                 .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue)
                 .slice(0, 20)
-                // ✅ [수정] map 함수의 인자(item)에 IntegratedItem 타입 명시
                 .map((item: IntegratedItem) => (
                 <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
                   <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
@@ -135,7 +112,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   );
 }
 
-// --- UI Sub Components (Same as before) ---
+// --- UI Sub Components ---
 
 function KpiCard({ title, value, unit, type, tooltip }: any) {
   const styles: any = {

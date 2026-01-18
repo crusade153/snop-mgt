@@ -2,30 +2,25 @@
 
 import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Calendar as CalendarIcon, X, ChevronRight, ChevronLeft, HelpCircle } from 'lucide-react';
-import { IntegratedItem } from '@/types/analysis'; // ✅ 타입 Import
+import { X, ChevronRight, ChevronLeft, HelpCircle } from 'lucide-react';
+import { IntegratedItem } from '@/types/analysis';
 
 type FilterType = 'brand' | 'category' | 'family' | null;
 
 export default function UnfulfilledDetailPage() {
-  const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
+  const { data, isLoading } = useDashboardData();
   
-  // 1. 필터 및 페이지네이션 상태
   const [filter, setFilter] = useState<{ type: FilterType; value: string | null }>({ type: null, value: null });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
-  // 🔄 데이터 실시간 가공 (Memoization)
   const { filteredList, summary } = useMemo(() => {
     if (!data) return { filteredList: [], summary: { brand: [], category: [], family: [] } };
 
-    // 1. 미납이 있는 품목만 추출 (✅ filter 타입 명시)
     const baseList = data.integratedArray.filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0);
 
-    // 2. 요약 통계 생성
     const aggregate = (key: 'brand' | 'category' | 'family') => {
       const map = new Map<string, { name: string, qty: number, value: number, count: number }>();
-      // ✅ forEach 타입 명시
       baseList.forEach((item: IntegratedItem) => {
         const group = item[key] || '미지정';
         if (!map.has(group)) map.set(group, { name: group, qty: 0, value: 0, count: 0 });
@@ -37,14 +32,11 @@ export default function UnfulfilledDetailPage() {
       return Array.from(map.values()).sort((a, b) => b.value - a.value);
     };
 
-    // 3. 현재 필터 적용
     let resultList = baseList;
     if (filter.type && filter.value) {
-      // ✅ filter 타입 명시
       resultList = baseList.filter((item: IntegratedItem) => item[filter.type!] === filter.value);
     }
 
-    // 4. 금액 높은 순 정렬 (✅ sort 타입 명시)
     resultList.sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
 
     return {
@@ -57,20 +49,17 @@ export default function UnfulfilledDetailPage() {
     };
   }, [data, filter]);
 
-  // 페이지네이션 계산
   const totalPages = Math.ceil(filteredList.length / itemsPerPage);
   const paginatedList = filteredList.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
 
-  // 페이지 변경 핸들러
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' }); 
   };
 
-  // 필터 핸들러
   const handleFilter = (type: FilterType, value: string) => {
     if (filter.type === type && filter.value === value) {
       setFilter({ type: null, value: null });
@@ -85,16 +74,11 @@ export default function UnfulfilledDetailPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header & Date Picker */}
       <PageHeader 
         title="📑 미납 상세 분석" 
         desc="다차원 필터링을 통한 원인 심층 분석"
-        dateRange={dateRange}
-        setDateRange={setDateRange}
-        onRefresh={refetch}
       />
 
-      {/* 활성 필터 표시 */}
       {filter.type && (
         <div className="flex items-center gap-2 bg-[#E3F2FD] border border-[#BBDEFB] text-[#1565C0] px-4 py-2 rounded-full w-fit animate-in fade-in slide-in-from-top-1 shadow-sm">
           <span className="font-bold text-sm">🔍 Filter:</span>
@@ -106,14 +90,12 @@ export default function UnfulfilledDetailPage() {
         </div>
       )}
 
-      {/* 요약 카드 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <SummaryCard title="🏷️ 브랜드별 미납" data={summary.brand} type="brand" currentFilter={filter} onFilter={handleFilter} />
         <SummaryCard title="📂 카테고리별 미납" data={summary.category} type="category" currentFilter={filter} onFilter={handleFilter} />
         <SummaryCard title="📦 제품군별 미납" data={summary.family} type="family" currentFilter={filter} onFilter={handleFilter} />
       </div>
 
-      {/* 상세 테이블 */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
         <div className="p-4 bg-[#FAFAFA] border-b border-neutral-200 flex justify-between items-center">
           <div className="font-bold text-neutral-700">
@@ -142,7 +124,6 @@ export default function UnfulfilledDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {/* ✅ [수정] map 인자 타입 명시 */}
               {paginatedList.map((item: IntegratedItem, idx: number) => {
                 const maxDelay = item.unfulfilledOrders.length > 0 ? Math.max(...item.unfulfilledOrders.map(o => o.daysDelayed)) : 0;
                 const causeMap: Record<string, number> = {};
@@ -184,7 +165,6 @@ export default function UnfulfilledDetailPage() {
           </table>
         </div>
 
-        {/* 🚨 [추가] 페이지네이션 컨트롤 */}
         {totalPages > 1 && (
           <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
             <button 
@@ -235,11 +215,10 @@ export default function UnfulfilledDetailPage() {
 
 // --- Sub Components ---
 
-function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
+function PageHeader({ title, desc }: any) {
   return (
     <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
       <div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div>
-      <div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div>
     </div>
   );
 }

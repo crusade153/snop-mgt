@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, HelpCircle, Users, AlertCircle, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, HelpCircle, Users, Clock } from 'lucide-react';
 import { IntegratedItem } from '@/types/analysis';
 
 // WideRightSheet (800px) - DeliveryPage용
@@ -25,7 +25,7 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 }
 
 export default function DeliveryPage() {
-  const { data, isLoading, dateRange, setDateRange, refetch } = useDashboardData();
+  const { data, isLoading } = useDashboardData();
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
   const [selectedProduct, setSelectedProduct] = useState<IntegratedItem | null>(null);
@@ -33,12 +33,10 @@ export default function DeliveryPage() {
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
-  // ✅ [수정] 타입 명시: item, a, b에 IntegratedItem 타입 지정
   const unfulfilledList = data.integratedArray
     .filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0)
     .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
   
-  // ✅ [수정] 타입 명시: acc, cur에 타입 지정
   const totalUnfulfilledCount = unfulfilledList.reduce((acc: number, cur: IntegratedItem) => acc + cur.unfulfilledOrders.length, 0);
   const totalPages = Math.ceil(unfulfilledList.length / itemsPerPage);
   const paginatedList = unfulfilledList.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -50,7 +48,7 @@ export default function DeliveryPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="🚨 미납 리스트 (Delivery Issue)" desc="고객 약속 미이행 건 및 원인 집중 관리" dateRange={dateRange} setDateRange={setDateRange} onRefresh={refetch} />
+      <PageHeader title="🚨 미납 리스트 (Delivery Issue)" desc="고객 약속 미이행 건 및 원인 집중 관리" />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="p-5 rounded shadow border border-[#E53935] bg-[#FFEBEE]">
@@ -207,8 +205,8 @@ export default function DeliveryPage() {
 }
 
 // --- 공통 컴포넌트 ---
-function PageHeader({ title, desc, dateRange, setDateRange, onRefresh }: any) {
-  return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div><div className="flex items-center gap-2 bg-white px-3 py-2 rounded border border-neutral-200 shadow-sm"><CalendarIcon size={14} className="text-neutral-500" /><input type="date" value={dateRange.startDate} onChange={e => setDateRange((p:any) => ({ ...p, startDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><span className="text-neutral-400 text-xs">~</span><input type="date" value={dateRange.endDate} onChange={e => setDateRange((p:any) => ({ ...p, endDate: e.target.value }))} className="text-xs text-neutral-700 outline-none font-medium" /><div className="w-[1px] h-4 bg-neutral-200 mx-1"></div><button onClick={() => onRefresh()} className="text-xs font-bold text-[#4A90E2] hover:text-blue-700 transition-colors">조회</button></div></div>);
+function PageHeader({ title, desc }: any) {
+  return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div></div>);
 }
 function CauseBadge({ cause }: { cause: string }) {
   const styles: Record<string, string> = { 

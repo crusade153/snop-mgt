@@ -6,24 +6,23 @@ import { ProductionRow } from '@/types/analysis';
 import { Search, ChevronLeft, ChevronRight, Calendar, Factory } from 'lucide-react';
 
 export default function ProductionPage() {
-  // 날짜 버그 수정: 인자 없이 호출하여 전역 날짜 사용
   const { data, isLoading } = useDashboardData();
 
   // 1. 상태 관리
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedPlant, setSelectedPlant] = useState('ALL'); // 플랜트 필터 상태
+  const [selectedPlant, setSelectedPlant] = useState('ALL');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
   // 2. 데이터 필터링 및 가공
   const { filteredList, kpi, plantOptions } = useMemo(() => {
-    // 데이터가 로드되지 않았을 경우 안전하게 빈 값 반환
-    if (!data || !data.productionList) return { filteredList: [], kpi: { EA: {}, BOX: {}, KG: {} }, plantOptions: [] };
+    // 안전한 초기값 반환 (타입 일치)
+    if (!data || !data.productionList) return { filteredList: [], kpi: { EA: {}, BOX: {}, KG: {} }, plantOptions: [] as string[] };
 
-    // 플랜트 목록 추출 (중복 제거 및 정렬)
-    const plants = Array.from(new Set(data.productionList.map((item: ProductionRow) => item.plant))).sort();
+    // ✅ 플랜트 목록 추출: 명시적으로 string[] 타입으로 캐스팅하여 타입 에러 방지
+    const plants = Array.from(new Set(data.productionList.map((item: ProductionRow) => item.plant))).sort() as string[];
 
-    // 🚨 1) 필터링: 완제품(Code 5*) + 플랜트 + 검색
+    // 1) 필터링
     let items = data.productionList.filter((item: ProductionRow) => {
       const isFinishedGood = item.code.startsWith('5');
       const matchPlant = selectedPlant === 'ALL' || item.plant === selectedPlant;
@@ -34,17 +33,15 @@ export default function ProductionPage() {
       return isFinishedGood && matchPlant && matchSearch;
     });
 
-    // 🚨 2) KPI 집계 (단위별 합산) - 현재 필터된 데이터 기준
+    // 2) KPI 집계
     const kpiMap: any = {
       EA: { plan: 0, actual: 0, poor: 0 },
       BOX: { plan: 0, actual: 0, poor: 0 },
       KG: { plan: 0, actual: 0, poor: 0 }
     };
 
-    // ✅ [수정] 타입 에러 해결: item에 ProductionRow 타입 명시
     items.forEach((item: ProductionRow) => {
       const u = item.unit.toUpperCase();
-      // 정의되지 않은 단위가 나올 경우를 대비한 방어 코드
       if (!kpiMap[u]) kpiMap[u] = { plan: 0, actual: 0, poor: 0 };
       
       kpiMap[u].plan += item.planQty;
@@ -52,8 +49,7 @@ export default function ProductionPage() {
       if (item.status === 'poor') kpiMap[u].poor += 1;
     });
 
-    // 3) 최신 날짜순 정렬
-    // ✅ [수정] 타입 에러 해결: a, b에 ProductionRow 타입 명시
+    // 3) 정렬
     items.sort((a: ProductionRow, b: ProductionRow) => b.date.localeCompare(a.date));
 
     return { filteredList: items, kpi: kpiMap, plantOptions: plants };
@@ -67,7 +63,6 @@ export default function ProductionPage() {
 
   const totalPages = Math.ceil(filteredList.length / itemsPerPage);
 
-  // 페이지 변경 핸들러
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -89,9 +84,9 @@ export default function ProductionPage() {
           </p>
         </div>
         
-        {/* 우측 컨트롤: 플랜트 선택 + 검색창 */}
+        {/* 우측 컨트롤 */}
         <div className="flex gap-2 w-full md:w-auto">
-          {/* 플랜트 선택 Dropdown */}
+          {/* 플랜트 선택 */}
           <div className="relative">
             <Factory className="absolute left-3 top-2.5 text-neutral-500" size={16} />
             <select 
@@ -100,6 +95,7 @@ export default function ProductionPage() {
               className="pl-9 pr-8 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white appearance-none h-[38px] cursor-pointer"
             >
               <option value="ALL">전체 플랜트</option>
+              {/* ✅ 타입 에러 수정됨: plantOptions는 이제 string[]이 확실함 */}
               {plantOptions.map((p: string) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
@@ -116,7 +112,7 @@ export default function ProductionPage() {
         </div>
       </div>
 
-      {/* KPI Cards (단위별) */}
+      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {['EA', 'BOX', 'KG'].map(unit => {
           const stats = kpi[unit] || { plan: 0, actual: 0, poor: 0 };

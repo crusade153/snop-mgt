@@ -11,41 +11,25 @@ async function fetchRawData(sDate: string, eDate: string) {
   // 1. 납품(주문) 데이터
   const orderQuery = `
     SELECT 
-      VBELN, POSNR,           
-      MATNR, ARKTX,           
-      KWMENG, VRKME,          
-      NETWR, WAERK,           
-      VDATU,                  
-      NAME1, KUNNR,           
-      IFNULL(LFIMG_LIPS, 0) as LFIMG_LIPS, 
-      VKGRP, BEZEI_TVGRT      
+      VBELN, POSNR, MATNR, ARKTX, KWMENG, VRKME, NETWR, WAERK, VDATU, NAME1, KUNNR, 
+      IFNULL(LFIMG_LIPS, 0) as LFIMG_LIPS, VKGRP, BEZEI_TVGRT      
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\`
     WHERE VDATU BETWEEN '${sDate}' AND '${eDate}'
   `;
   
-  // 2. 생산 계획 (🚨 수정됨: WERKS 컬럼 추가)
+  // 2. 생산 계획 (🚨 WERKS 추가됨)
   const productionQuery = `
     SELECT 
-      AUFNR,                  
-      MATNR, MAKTX, MEINS,    
-      GSTRP,
-      WERKS,   -- ✅ [추가] 플랜트 정보 (이게 빠져서 표시가 안 되었습니다)
-      PSMNG,                  
-      LMNGA                   
+      AUFNR, MATNR, MAKTX, MEINS, GSTRP,
+      WERKS, -- ✅ 플랜트 정보 추가
+      PSMNG, LMNGA                   
     FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\`
     WHERE GSTRP BETWEEN '${sDate}' AND '${eDate}'
   `;
 
   // 3. 재고 (전체 유효 재고)
   const inventoryQuery = `
-    SELECT 
-      MATNR, MATNR_T, MEINS,  
-      CLABS,                  
-      VFDAT, HSDAT,           
-      LGOBE,                  
-      remain_day, 
-      remain_rate,
-      UMREZ_BOX               
+    SELECT MATNR, MATNR_T, MEINS, CLABS, VFDAT, HSDAT, LGOBE, remain_day, remain_rate, UMREZ_BOX               
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
     WHERE CLABS > 0
   `;
@@ -70,8 +54,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 
 // 2. [캐싱 대상] 분석 결과 생성 및 압축
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 🚨 버전 v8로 변경 (새로운 쿼리 반영을 위해 캐시 키 변경)
-    const cacheKey = `dashboard-analysis-v8-${sDate}-${eDate}`;
+    // 🚨 버전 v9로 변경 (WERKS 추가 반영)
+    const cacheKey = `dashboard-analysis-v9-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

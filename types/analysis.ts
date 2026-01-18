@@ -27,11 +27,11 @@ export interface UnfulfilledOrder {
 }
 
 /**
- * 🏭 생산 상세 정보 (리스트용) - [Updated] Plant 추가
+ * 🏭 생산 상세 정보 (리스트용) - [Updated] plant 추가
  */
 export interface ProductionRow {
   date: string;       // 계획일 (GSTRP)
-  plant: string;      // 🏭 플랜트 (WERKS) - 추가됨
+  plant: string;      // 🏭 플랜트 (WERKS)
   code: string;       // 자재코드
   name: string;       // 자재명
   unit: string;       // 단위

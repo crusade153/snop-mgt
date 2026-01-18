@@ -17,9 +17,10 @@ export default function ProductionPage() {
 
   // 2. 데이터 필터링 및 가공
   const { filteredList, kpi, plantOptions } = useMemo(() => {
+    // 데이터가 로드되지 않았을 경우 안전하게 빈 값 반환
     if (!data || !data.productionList) return { filteredList: [], kpi: { EA: {}, BOX: {}, KG: {} }, plantOptions: [] };
 
-    // 플랜트 목록 추출
+    // 플랜트 목록 추출 (중복 제거 및 정렬)
     const plants = Array.from(new Set(data.productionList.map((item: ProductionRow) => item.plant))).sort();
 
     // 🚨 1) 필터링: 완제품(Code 5*) + 플랜트 + 검색
@@ -40,8 +41,10 @@ export default function ProductionPage() {
       KG: { plan: 0, actual: 0, poor: 0 }
     };
 
-    items.forEach(item => {
+    // ✅ [수정] 타입 에러 해결: item에 ProductionRow 타입 명시
+    items.forEach((item: ProductionRow) => {
       const u = item.unit.toUpperCase();
+      // 정의되지 않은 단위가 나올 경우를 대비한 방어 코드
       if (!kpiMap[u]) kpiMap[u] = { plan: 0, actual: 0, poor: 0 };
       
       kpiMap[u].plan += item.planQty;
@@ -50,7 +53,8 @@ export default function ProductionPage() {
     });
 
     // 3) 최신 날짜순 정렬
-    items.sort((a, b) => b.date.localeCompare(a.date));
+    // ✅ [수정] 타입 에러 해결: a, b에 ProductionRow 타입 명시
+    items.sort((a: ProductionRow, b: ProductionRow) => b.date.localeCompare(a.date));
 
     return { filteredList: items, kpi: kpiMap, plantOptions: plants };
   }, [data, searchTerm, selectedPlant]);
@@ -77,7 +81,6 @@ export default function ProductionPage() {
       {/* Header */}
       <div className="pb-4 border-b border-neutral-200 flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
         <div>
-          {/* 타이틀 변경 요청 반영 */}
           <h1 className="text-[20px] font-bold text-neutral-900 flex items-center gap-2">
             🏭 생산 계획 및 실적 상세 (Production Status)
           </h1>
@@ -94,10 +97,10 @@ export default function ProductionPage() {
             <select 
               value={selectedPlant} 
               onChange={(e) => { setSelectedPlant(e.target.value); setCurrentPage(1); }}
-              className="pl-9 pr-8 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white appearance-none h-[38px]"
+              className="pl-9 pr-8 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white appearance-none h-[38px] cursor-pointer"
             >
               <option value="ALL">전체 플랜트</option>
-              {plantOptions.map(p => <option key={p} value={p}>{p}</option>)}
+              {plantOptions.map((p: string) => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
 
@@ -113,7 +116,7 @@ export default function ProductionPage() {
         </div>
       </div>
 
-      {/* KPI Cards (단위별) - 소수점 제거 적용 */}
+      {/* KPI Cards (단위별) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {['EA', 'BOX', 'KG'].map(unit => {
           const stats = kpi[unit] || { plan: 0, actual: 0, poor: 0 };
@@ -130,7 +133,6 @@ export default function ProductionPage() {
                 <div>
                   <div className="text-[10px] text-neutral-400">계획 합계</div>
                   <div className="text-lg font-bold text-neutral-800">
-                    {/* Math.round 적용으로 소수점 제거 */}
                     {Math.round(stats.plan).toLocaleString()}
                   </div>
                 </div>
@@ -156,7 +158,6 @@ export default function ProductionPage() {
           <table className="w-full text-sm text-left border-collapse">
             <thead className="bg-[#FAFAFA]">
               <tr>
-                {/* 플랜트 컬럼 추가 */}
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-20 text-center">플랜트</th>
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-24 text-center">계획일자</th>
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700">제품명</th>
@@ -170,7 +171,6 @@ export default function ProductionPage() {
             <tbody className="divide-y divide-neutral-200">
               {paginatedItems.map((item: ProductionRow, idx: number) => (
                 <tr key={`${item.code}-${item.date}-${idx}`} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
-                  {/* 플랜트 정보 표시 */}
                   <td className="px-4 py-3 text-center text-neutral-600 font-bold text-xs">{item.plant}</td>
                   <td className="px-4 py-3 text-center text-neutral-600 font-mono text-xs">
                     <div className="flex items-center justify-center gap-1">
@@ -212,39 +212,15 @@ export default function ProductionPage() {
             <button 
               onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
               disabled={currentPage === 1}
-              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed text-neutral-600"
+              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <ChevronLeft size={20} />
             </button>
-            
-            <div className="flex gap-1">
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                let pNum = i + 1;
-                if (totalPages > 5) {
-                   if (currentPage <= 3) pNum = i + 1;
-                   else if (currentPage >= totalPages - 2) pNum = totalPages - 4 + i;
-                   else pNum = currentPage - 2 + i;
-                }
-                
-                return (
-                  <button
-                    key={pNum}
-                    onClick={() => handlePageChange(pNum)}
-                    className={`w-8 h-8 rounded text-sm font-bold transition-colors
-                      ${currentPage === pNum 
-                        ? 'bg-primary-blue text-white shadow-sm' 
-                        : 'bg-white text-neutral-600 border border-neutral-300 hover:bg-neutral-100'}`}
-                  >
-                    {pNum}
-                  </button>
-                );
-              })}
-            </div>
-
+            <span className="text-sm font-bold text-neutral-600">{currentPage} / {totalPages}</span>
             <button 
               onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))}
               disabled={currentPage === totalPages}
-              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed text-neutral-600"
+              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <ChevronRight size={20} />
             </button>

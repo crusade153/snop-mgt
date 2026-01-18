@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { 
   Sliders, Search, TrendingUp, AlertTriangle, 
@@ -10,7 +10,7 @@ import {
 import { format, subDays } from 'date-fns';
 import { IntegratedItem } from '@/types/analysis';
 
-// ✅ [추가] 시뮬레이션 결과 아이템의 타입 정의 (명시적 타입 선언을 위해)
+// ✅ 시뮬레이션 결과 아이템의 타입 정의
 interface SimulatedItem extends IntegratedItem {
   sim: {
     currentADS: number;
@@ -37,22 +37,25 @@ export default function InventoryPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
 
-  // 2. ADS 기간 변경 시 데이터 새로고침
-  useEffect(() => {
+  // 🚨 [수정] useEffect 제거: 페이지 진입 시 날짜 강제 변경 방지
+  // 2. ADS 기간 변경 핸들러 (버튼 클릭 시에만 날짜 변경)
+  const handlePeriodChange = (period: AdsPeriod) => {
+    setAdsPeriod(period);
     const today = new Date();
-    const startDate = subDays(today, adsPeriod);
+    const startDate = subDays(today, period);
+    
+    // 사용자가 버튼을 눌렀을 때만 전역 날짜 변경
     setDateRange({
       startDate: format(startDate, 'yyyy-MM-dd'),
       endDate: format(today, 'yyyy-MM-dd')
     });
     setCurrentPage(1);
-  }, [adsPeriod, setDateRange]);
+  };
 
   // 3. 시뮬레이션 및 데이터 가공 (Core Logic)
   const simulation = useMemo(() => {
     if (!data) return { all: [], totalCount: 0, filteredCount: 0 };
 
-    // ✅ [수정] filter 인자 타입 명시
     let items = data.integratedArray.filter((item: IntegratedItem) => {
       const hasStock = item.inventory.totalStock > 0;
       const matchesSearch = searchTerm === '' || 
@@ -61,47 +64,31 @@ export default function InventoryPage() {
       return hasStock && matchesSearch;
     });
 
-    // ✅ [수정] map 결과가 SimulatedItem[] 임을 명시
     const simulatedItems: SimulatedItem[] = items.map((item: IntegratedItem) => {
       const currentADS = item.inventory.ads || 0;
       
-      // 유효 재고 계산
       const usableStock = item.inventory.batches
         .filter(b => b.remainDays >= minShelfLife)
         .reduce((sum, b) => sum + b.quantity, 0);
 
-      // 폐기/부실 재고
       const wasteStock = item.inventory.totalStock - usableStock;
-
-      // 목표 재고량
       const targetStock = Math.ceil(currentADS * targetDays);
-      
-      // 보유일수
       const stockDays = currentADS > 0 ? usableStock / currentADS : 999;
 
-      // 상태 판정
       let simStatus: 'shortage' | 'excess' | 'good' = 'good';
       if (stockDays < targetDays * 0.5) simStatus = 'shortage';
       else if (stockDays > targetDays * 2) simStatus = 'excess';
 
-      // 리스크
       const isRisk = simStatus === 'shortage' && item.production.planQty === 0;
 
       return {
         ...item,
         sim: { 
-          currentADS, 
-          targetStock, 
-          stockDays, 
-          simStatus, 
-          isRisk,
-          usableStock, 
-          wasteStock   
+          currentADS, targetStock, stockDays, simStatus, isRisk, usableStock, wasteStock   
         }
       };
     });
 
-    // ✅ [수정] sort 인자 타입 명시 (에러 원인 해결)
     simulatedItems.sort((a: SimulatedItem, b: SimulatedItem) => b.sim.usableStock - a.sim.usableStock);
 
     return {
@@ -122,7 +109,6 @@ export default function InventoryPage() {
 
   // KPI
   const kpi = useMemo(() => {
-    // ✅ [수정] KPI 계산 시 reduce, filter 인자 타입 명시
     const list = simulation.all as SimulatedItem[] || [];
     const totalWaste = list.reduce((acc: number, item: SimulatedItem) => acc + item.sim.wasteStock, 0);
     return {
@@ -170,7 +156,7 @@ export default function InventoryPage() {
             </div>
             <div className="flex gap-2">
               {[30, 60, 90].map((d) => (
-                <button key={d} onClick={() => setAdsPeriod(d as AdsPeriod)}
+                <button key={d} onClick={() => handlePeriodChange(d as AdsPeriod)}
                   className={`flex-1 py-2 px-3 text-sm font-bold rounded border transition-all ${adsPeriod === d ? 'bg-[#E3F2FD] text-[#1565C0] border-[#1565C0]' : 'bg-white text-neutral-600 hover:bg-neutral-50'}`}>
                   최근 {d}일
                 </button>
@@ -239,7 +225,6 @@ export default function InventoryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {/* ✅ [수정] map 인자 타입 명시 */}
               {paginatedItems.map((item: SimulatedItem) => (
                 <tr key={item.code} className={`hover:bg-[#F9F9F9] transition-colors h-[48px] ${item.sim.isRisk ? 'bg-[#FFF8F8]' : ''}`}>
                   <td className="px-4 py-3">

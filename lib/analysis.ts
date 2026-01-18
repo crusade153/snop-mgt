@@ -1,15 +1,14 @@
 // lib/analysis.ts
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
-import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder } from '@/types/analysis';
+import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder, ProductionRow } from '@/types/analysis';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 
 const THRESHOLDS = {
-  IMMINENT_DAYS: 30, // 🚨 [수정] 임박 기준 (30일 이하)
-  CRITICAL_DAYS: 60, // 🚨 [수정] 긴급 기준 (60일 이하)
+  IMMINENT_DAYS: 30, 
+  CRITICAL_DAYS: 60, 
   SAFETY_BUFFER_DAYS: 14, 
 };
 
-// 1. 판매 속도(ADS) 계산
 function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, number> {
   const map = new Map<string, number>();
   const safeDays = Math.max(1, days); 
@@ -26,15 +25,13 @@ function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, n
   return map;
 }
 
-// 2. 🚨 [수정] 재고 상태 판별 로직 변경 (4단계)
 function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
-  if (days <= 0) return 'disposed';                    // 폐기 (0일 이하)
-  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; // 임박 (1~30일)
-  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; // 긴급 (31~60일)
-  return 'healthy';                                    // 양호 (61일 이상)
+  if (days <= 0) return 'disposed';                    
+  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
+  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
+  return 'healthy';                                    
 }
 
-// 3. 제품명 기반 브랜드/카테고리 추론
 function inferBrandInfo(name: string) {
   if (name.includes('The미식') || name.includes('미식')) return { brand: 'The미식', category: '상온' };
   if (name.includes('하림')) return { brand: '하림', category: '냉동' };
@@ -63,7 +60,6 @@ export function analyzeSnopData(
 
   const velocityMap = calculateSalesVelocity(orders, daysDiff);
   
-  // 재고 집계
   const invAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>();
   inventoryList.forEach(inv => {
     if (!invAggMap.has(inv.MATNR)) {
@@ -89,7 +85,7 @@ export function analyzeSnopData(
   let merchandiseSales = 0;
   const today = new Date();
 
-  // --- 1. 주문 데이터 처리 ---
+  // 1. 주문 데이터 처리
   orders.forEach(order => {
     const code = order.MATNR;
     if (!code) return;
@@ -178,27 +174,55 @@ export function analyzeSnopData(
     }
   });
 
-  // --- 2. 생산 데이터 처리 ---
+  // 2. 생산 데이터 처리 (플랜트 정보 추가)
+  const processedProductionList: ProductionRow[] = [];
+
   productionList.forEach(prod => {
     const code = prod.MATNR;
+    const plan = Number(prod.PSMNG || 0);
+    const actual = Number(prod.LMNGA || 0);
+    
     if (!integratedMap.has(code)) initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS);
     const item = integratedMap.get(code)!;
-    item.production.planQty += Number(prod.PSMNG || 0);
-    item.production.receivedQty += Number(prod.LMNGA || 0);
+    item.production.planQty += plan;
+    item.production.receivedQty += actual;
+
+    let status: 'pending' | 'progress' | 'completed' | 'poor' = 'pending';
+    const rate = plan > 0 ? (actual / plan) * 100 : 0;
+    
+    if (actual >= plan) status = 'completed';
+    else if (actual > 0 && actual < plan) status = 'progress';
+    else if (rate < 90 && plan > 0) status = 'poor';
+
+    let dateStr = prod.GSTRP;
+    if (prod.GSTRP && prod.GSTRP.length === 8) {
+      dateStr = `${prod.GSTRP.slice(0,4)}-${prod.GSTRP.slice(4,6)}-${prod.GSTRP.slice(6,8)}`;
+    }
+
+    processedProductionList.push({
+      date: dateStr,
+      plant: prod.WERKS || '-', // ✅ 플랜트 정보 매핑
+      code: prod.MATNR,
+      name: prod.MAKTX,
+      unit: prod.MEINS || 'EA',
+      planQty: plan,
+      actualQty: actual,
+      rate,
+      status
+    });
   });
 
-  // --- 3. 재고 데이터 Backfill ---
+  // 3. 재고 데이터 Backfill
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
       initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, velocityMap, val.info.MEINS);
     }
   });
 
-  // --- 4. 최종 KPI 계산 ---
+  // 4. 최종 KPI 계산
   const integratedArray = Array.from(integratedMap.values());
   let totalUnfulfilledValue = 0;
   let criticalDeliveryCount = 0;
-  // 🚨 [수정] 카운터 초기화 (imminent 추가)
   const stockHealth = { disposed: 0, imminent: 0, critical: 0, healthy: 0 };
 
   integratedArray.forEach(item => {
@@ -208,10 +232,9 @@ export function analyzeSnopData(
     totalUnfulfilledValue += item.totalUnfulfilledValue;
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
-    // 재고 상태 카운팅 (재고가 있는 경우만)
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
-        else if (item.inventory.status === 'imminent') stockHealth.imminent++; // 🚨 임박 카운트
+        else if (item.inventory.status === 'imminent') stockHealth.imminent++; 
         else if (item.inventory.status === 'critical') stockHealth.critical++;
         else stockHealth.healthy++;
     }
@@ -221,11 +244,9 @@ export function analyzeSnopData(
 
   const customerStats = Array.from(customerMap.values()).map(c => {
       c.fulfillmentRate = c.orderCount > 0 ? (c.fulfilledCount / c.orderCount) * 100 : 0;
-      
       c.topBoughtProducts = Array.from(c.boughtMap.values())
         .sort((a, b) => b.value - a.value)
         .slice(0, 10);
-      
       return c;
   }).sort((a, b) => b.totalRevenue - a.totalRevenue);
 
@@ -261,11 +282,11 @@ export function analyzeSnopData(
       topCustomers
     },
     integratedArray,
-    fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats }
+    fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats },
+    productionList: processedProductionList 
   };
 }
 
-// 초기화 함수
 function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
@@ -286,11 +307,10 @@ function initializeItem(
   }
 
   const status = invData ? getStockStatus(minRemaining) : 'healthy';
-  // 🚨 [수정] 리스크 점수 로직 (임박이 가장 높음)
   let riskScore = 0;
   if (status === 'disposed') riskScore = 50;
-  else if (status === 'imminent') riskScore = 100; // 임박이 가장 위험
-  else if (status === 'critical') riskScore = 80;  // 긴급이 그 다음
+  else if (status === 'imminent') riskScore = 100; 
+  else if (status === 'critical') riskScore = 80;  
 
   let brand = '기타';
   let category = '미지정';

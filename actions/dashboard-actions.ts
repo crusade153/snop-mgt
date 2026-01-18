@@ -4,7 +4,7 @@ import bigqueryClient from '@/lib/bigquery';
 import { analyzeSnopData } from '@/lib/analysis';
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { unstable_cache } from 'next/cache';
-import { gzipSync, gunzipSync } from 'zlib'; // 🗜️ 압축 라이브러리
+import { gzipSync, gunzipSync } from 'zlib';
 
 // 1. [내부 함수] 실제 BigQuery 조회
 async function fetchRawData(sDate: string, eDate: string) {
@@ -23,12 +23,13 @@ async function fetchRawData(sDate: string, eDate: string) {
     WHERE VDATU BETWEEN '${sDate}' AND '${eDate}'
   `;
   
-  // 2. 생산 계획
+  // 2. 생산 계획 (🚨 수정됨: WERKS 컬럼 추가)
   const productionQuery = `
     SELECT 
       AUFNR,                  
       MATNR, MAKTX, MEINS,    
-      GSTRP,                  
+      GSTRP,
+      WERKS,   -- ✅ [추가] 플랜트 정보 (이게 빠져서 표시가 안 되었습니다)
       PSMNG,                  
       LMNGA                   
     FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\`
@@ -67,26 +68,20 @@ async function fetchRawData(sDate: string, eDate: string) {
   }
 }
 
-// 2. [캐싱 대상] 분석 결과 생성 및 "압축(Compression)" 🗜️
-// Next.js 캐시 제한(2MB)을 우회하기 위해 압축된 문자열(Base64)을 반환합니다.
-// 🚨 수정: 캐시 키에 날짜를 포함시켜 날짜 변경 시 새로 조회하도록 변경
+// 2. [캐싱 대상] 분석 결과 생성 및 압축
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // unstable_cache를 내부에서 호출하되, 키를 동적으로 생성
-    const cacheKey = `dashboard-analysis-v6-${sDate}-${eDate}`;
+    // 🚨 버전 v8로 변경 (새로운 쿼리 반영을 위해 캐시 키 변경)
+    const cacheKey = `dashboard-analysis-v8-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {
-        // 1) 데이터 가져오기
         const { orders, production, inventory } = await fetchRawData(sDate, eDate);
 
-        // 2) 데이터가 없는 경우 처리
         if ((!orders || orders.length === 0) && (!inventory || inventory.length === 0)) {
             const emptyData = analyzeSnopData([], [], [], startDateStr, endDateStr);
-            // 빈 데이터도 압축해서 리턴
             return gzipSync(JSON.stringify({ success: true, data: emptyData })).toString('base64');
         }
 
-        // 3) 분석 엔진 실행
         const analyzedData = analyzeSnopData(
           orders || [], 
           inventory || [], 
@@ -95,19 +90,15 @@ const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr:
           endDateStr
         );
 
-        const resultObj = { success: true, data: analyzedData };
-
-        // 4) 🗜️ 결과 객체를 JSON 문자열로 변환 후 Gzip 압축 -> Base64 문자열로 변환
-        const compressed = gzipSync(JSON.stringify(resultObj)).toString('base64');
-        
+        const compressed = gzipSync(JSON.stringify({ success: true, data: analyzedData })).toString('base64');
         return compressed;
       },
-      [cacheKey], // 🚨 날짜가 포함된 키 사용
-      { revalidate: 60 } // 🚨 60초마다 갱신 (너무 길면 데이터 반영 안됨)
+      [cacheKey], 
+      { revalidate: 60 } 
     )();
 };
 
-// 3. [메인 액션] 외부 호출 함수 (압축 해제 담당)
+// 3. [메인 액션] 외부 호출 함수
 export async function getDashboardData(startDate: string, endDate: string) {
   if (!startDate || !endDate) return { success: false, message: "날짜 정보가 누락되었습니다." };
 
@@ -115,18 +106,12 @@ export async function getDashboardData(startDate: string, endDate: string) {
   const eDate = endDate.replace(/-/g, '');
 
   try {
-    // 1) 캐시된 "압축 데이터" 가져오기
     const compressedData = await getCompressedAnalysis(sDate, eDate, startDate, endDate);
-    
-    // 2) 🔓 압축 해제 (Decompress)
-    // Base64 -> Buffer -> Gunzip -> JSON Parse
     const decompressedBuffer = gunzipSync(Buffer.from(compressedData, 'base64'));
     const result = JSON.parse(decompressedBuffer.toString('utf-8'));
-    
     return result;
-
   } catch (error: any) {
-    console.error('❌ [Server Action Error] 조회 실패:', error);
-    return { success: false, message: error.message || "서버 통신 중 알 수 없는 오류가 발생했습니다." };
+    console.error('❌ [Server Action Error]:', error);
+    return { success: false, message: error.message };
   }
 }

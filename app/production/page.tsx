@@ -1,105 +1,274 @@
 'use client'
 
+import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { IntegratedItem } from '@/types/analysis';
+import { ProductionRow } from '@/types/analysis';
+import { Search, ChevronLeft, ChevronRight, Calendar, Factory } from 'lucide-react';
 
 export default function ProductionPage() {
+  // 날짜 버그 수정: 인자 없이 호출하여 전역 날짜 사용
   const { data, isLoading } = useDashboardData();
+
+  // 1. 상태 관리
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedPlant, setSelectedPlant] = useState('ALL'); // 플랜트 필터 상태
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 15;
+
+  // 2. 데이터 필터링 및 가공
+  const { filteredList, kpi, plantOptions } = useMemo(() => {
+    if (!data || !data.productionList) return { filteredList: [], kpi: { EA: {}, BOX: {}, KG: {} }, plantOptions: [] };
+
+    // 플랜트 목록 추출
+    const plants = Array.from(new Set(data.productionList.map((item: ProductionRow) => item.plant))).sort();
+
+    // 🚨 1) 필터링: 완제품(Code 5*) + 플랜트 + 검색
+    let items = data.productionList.filter((item: ProductionRow) => {
+      const isFinishedGood = item.code.startsWith('5');
+      const matchPlant = selectedPlant === 'ALL' || item.plant === selectedPlant;
+      const matchSearch = searchTerm === '' || 
+        item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        item.code.includes(searchTerm);
+      
+      return isFinishedGood && matchPlant && matchSearch;
+    });
+
+    // 🚨 2) KPI 집계 (단위별 합산) - 현재 필터된 데이터 기준
+    const kpiMap: any = {
+      EA: { plan: 0, actual: 0, poor: 0 },
+      BOX: { plan: 0, actual: 0, poor: 0 },
+      KG: { plan: 0, actual: 0, poor: 0 }
+    };
+
+    items.forEach(item => {
+      const u = item.unit.toUpperCase();
+      if (!kpiMap[u]) kpiMap[u] = { plan: 0, actual: 0, poor: 0 };
+      
+      kpiMap[u].plan += item.planQty;
+      kpiMap[u].actual += item.actualQty;
+      if (item.status === 'poor') kpiMap[u].poor += 1;
+    });
+
+    // 3) 최신 날짜순 정렬
+    items.sort((a, b) => b.date.localeCompare(a.date));
+
+    return { filteredList: items, kpi: kpiMap, plantOptions: plants };
+  }, [data, searchTerm, selectedPlant]);
+
+  // 3. 페이지네이션
+  const paginatedItems = useMemo(() => {
+    const startIdx = (currentPage - 1) * itemsPerPage;
+    return filteredList.slice(startIdx, startIdx + itemsPerPage);
+  }, [filteredList, currentPage]);
+
+  const totalPages = Math.ceil(filteredList.length / itemsPerPage);
+
+  // 페이지 변경 핸들러
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
-  const productionList = data.integratedArray.filter(
-    (item: IntegratedItem) => item.production.planQty > 0 || item.production.receivedQty > 0
-  );
-
-  const totalPlan = productionList.reduce((acc: number, cur: IntegratedItem) => acc + cur.production.planQty, 0);
-  const totalActual = productionList.reduce((acc: number, cur: IntegratedItem) => acc + cur.production.receivedQty, 0);
-  
-  const overallRate = totalPlan > 0 ? (totalActual / totalPlan) * 100 : 0;
-  
-  const poorItems = productionList.filter((item: IntegratedItem) => item.production.achievementRate < 90).length;
-
   return (
-    <div className="space-y-6">
-      <PageHeader title="🏭 생산 분석" desc="계획 대 실적 비교 및 달성률 분석" />
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+      {/* Header */}
+      <div className="pb-4 border-b border-neutral-200 flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
+        <div>
+          {/* 타이틀 변경 요청 반영 */}
+          <h1 className="text-[20px] font-bold text-neutral-900 flex items-center gap-2">
+            🏭 생산 계획 및 실적 상세 (Production Status)
+          </h1>
+          <p className="text-[12px] text-neutral-700 mt-1">
+            완제품 기준 모니터링
+          </p>
+        </div>
+        
+        {/* 우측 컨트롤: 플랜트 선택 + 검색창 */}
+        <div className="flex gap-2 w-full md:w-auto">
+          {/* 플랜트 선택 Dropdown */}
+          <div className="relative">
+            <Factory className="absolute left-3 top-2.5 text-neutral-500" size={16} />
+            <select 
+              value={selectedPlant} 
+              onChange={(e) => { setSelectedPlant(e.target.value); setCurrentPage(1); }}
+              className="pl-9 pr-8 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white appearance-none h-[38px]"
+            >
+              <option value="ALL">전체 플랜트</option>
+              {plantOptions.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <KpiBox label="전체 달성률" value={`${overallRate.toFixed(1)}%`} type="success" />
-        <KpiBox label="총 계획 수량" value={totalPlan.toLocaleString()} unit="EA" type="blue" />
-        <KpiBox label="총 생산 실적" value={totalActual.toLocaleString()} unit="EA" type="neutral" />
-        <KpiBox label="부진 품목 (<90%)" value={poorItems} unit="개" type="warning" />
+          {/* 검색창 */}
+          <div className="relative flex-1 md:w-64">
+            <input 
+              type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
+              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue h-[38px]"
+            />
+            <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
+          </div>
+        </div>
       </div>
 
+      {/* KPI Cards (단위별) - 소수점 제거 적용 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {['EA', 'BOX', 'KG'].map(unit => {
+          const stats = kpi[unit] || { plan: 0, actual: 0, poor: 0 };
+          const rate = stats.plan > 0 ? (stats.actual / stats.plan) * 100 : 0;
+          return (
+            <div key={unit} className="p-4 bg-white rounded shadow border border-neutral-200">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs font-bold text-neutral-500 bg-neutral-100 px-2 py-0.5 rounded">{unit}</span>
+                <span className={`text-xs font-bold ${rate >= 90 ? 'text-[#2E7D32]' : 'text-[#EF6C00]'}`}>
+                  달성률 {rate.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex justify-between items-end">
+                <div>
+                  <div className="text-[10px] text-neutral-400">계획 합계</div>
+                  <div className="text-lg font-bold text-neutral-800">
+                    {/* Math.round 적용으로 소수점 제거 */}
+                    {Math.round(stats.plan).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] text-neutral-400">실적 합계</div>
+                  <div className="text-lg font-bold text-[#1565C0]">
+                    {Math.round(stats.actual).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2 pt-2 border-t border-neutral-100 text-[11px] text-neutral-500 flex justify-between">
+                <span>부진 품목 수</span>
+                <span className="font-bold text-[#E53935]">{stats.poor} 건</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Table */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
-        <table className="w-full text-sm text-left border-collapse">
-          <thead className="bg-[#FAFAFA]">
-            <tr>
-              <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">제품명</th>
-              <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">계획수량</th>
-              <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">생산실적</th>
-              <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">차이</th>
-              <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">달성률</th>
-              <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">상태</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-200">
-            {productionList
-              .sort((a: IntegratedItem, b: IntegratedItem) => a.production.achievementRate - b.production.achievementRate)
-              .map((item: IntegratedItem) => {
-                const prod = item.production;
-                const gap = prod.planQty - prod.receivedQty;
-                const isPoor = prod.achievementRate < 90;
+        <div className="overflow-x-auto min-h-[500px]">
+          <table className="w-full text-sm text-left border-collapse">
+            <thead className="bg-[#FAFAFA]">
+              <tr>
+                {/* 플랜트 컬럼 추가 */}
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-20 text-center">플랜트</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-24 text-center">계획일자</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700">제품명</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-center">단위</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">계획수량</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">실적수량</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">달성률</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-center">상태</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-200">
+              {paginatedItems.map((item: ProductionRow, idx: number) => (
+                <tr key={`${item.code}-${item.date}-${idx}`} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
+                  {/* 플랜트 정보 표시 */}
+                  <td className="px-4 py-3 text-center text-neutral-600 font-bold text-xs">{item.plant}</td>
+                  <td className="px-4 py-3 text-center text-neutral-600 font-mono text-xs">
+                    <div className="flex items-center justify-center gap-1">
+                      <Calendar size={12} className="text-neutral-400" />
+                      {item.date}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-neutral-900">{item.name}</div>
+                    <div className="text-[10px] text-neutral-400 font-mono">{item.code}</div>
+                  </td>
+                  <td className="px-4 py-3 text-center text-neutral-500 text-xs font-bold">{item.unit}</td>
+                  <td className="px-4 py-3 text-right text-neutral-600">
+                    {Math.round(item.planQty).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-3 text-right font-bold text-neutral-800">
+                    {Math.round(item.actualQty).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className={`font-bold ${item.rate < 90 ? 'text-[#EF6C00]' : 'text-[#1565C0]'}`}>
+                      {item.rate.toFixed(0)}%
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <StatusBadge status={item.status} />
+                  </td>
+                </tr>
+              ))}
+              {paginatedItems.length === 0 && (
+                <tr><td colSpan={8} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
+            <button 
+              onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed text-neutral-600"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            
+            <div className="flex gap-1">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pNum = i + 1;
+                if (totalPages > 5) {
+                   if (currentPage <= 3) pNum = i + 1;
+                   else if (currentPage >= totalPages - 2) pNum = totalPages - 4 + i;
+                   else pNum = currentPage - 2 + i;
+                }
+                
                 return (
-                  <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-neutral-900">{item.name}</div>
-                      <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
-                    </td>
-                    <td className="px-4 py-3 text-right text-neutral-700">{prod.planQty.toLocaleString()}</td>
-                    <td className="px-4 py-3 text-right font-bold text-neutral-900">{prod.receivedQty.toLocaleString()}</td>
-                    <td className={`px-4 py-3 text-right ${gap > 0 ? 'text-[#E53935]' : 'text-neutral-400'}`}>
-                      {gap > 0 ? '-' : ''}{Math.abs(gap).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right text-neutral-700">{prod.achievementRate.toFixed(1)}%</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`px-2 py-1 rounded text-[11px] font-bold ${isPoor ? 'bg-[#FFF3E0] text-[#EF6C00]' : 'bg-[#E8F5E9] text-[#2E7D32]'}`}>
-                        {isPoor ? '부진' : '달성'}
-                      </span>
-                    </td>
-                  </tr>
+                  <button
+                    key={pNum}
+                    onClick={() => handlePageChange(pNum)}
+                    className={`w-8 h-8 rounded text-sm font-bold transition-colors
+                      ${currentPage === pNum 
+                        ? 'bg-primary-blue text-white shadow-sm' 
+                        : 'bg-white text-neutral-600 border border-neutral-300 hover:bg-neutral-100'}`}
+                  >
+                    {pNum}
+                  </button>
                 );
-            })}
-          </tbody>
-        </table>
+              })}
+            </div>
+
+            <button 
+              onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage === totalPages}
+              className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed text-neutral-600"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-// ... 공통 컴포넌트 ...
-function PageHeader({ title, desc }: any) {
-  return (
-    <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
-      <div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div>
-    </div>
-  );
-}
-function KpiBox({ label, value, unit, type }: any) {
-  const styles: any = {
-    brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },
-    blue: { bg: 'bg-[#E3F2FD]', text: 'text-[#1565C0]', label: 'text-[#4A90E2]' },
-    success: { bg: 'bg-[#E8F5E9]', text: 'text-[#2E7D32]', label: 'text-[#43A047]' },
-    warning: { bg: 'bg-[#FFF3E0]', text: 'text-[#EF6C00]', label: 'text-[#FFA726]' },
-    neutral: { bg: 'bg-[#FAFAFA]', text: 'text-[#424242]', label: 'text-[#757575]' },
+function StatusBadge({ status }: { status: string }) {
+  const config: any = {
+    completed: { bg: '#E8F5E9', text: '#2E7D32', label: '완료' },
+    progress: { bg: '#E3F2FD', text: '#1565C0', label: '진행' },
+    poor: { bg: '#FFEBEE', text: '#C62828', label: '부진' },
+    pending: { bg: '#F5F5F5', text: '#9E9E9E', label: '대기' },
   };
-  const s = styles[type] || styles.neutral;
+  const s = config[status] || config.pending;
   return (
-    <div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${s.bg}`}>
-      <div className={`text-[12px] font-medium mb-1 ${s.label}`}>{label}</div>
-      <div className={`text-[24px] font-bold ${s.text}`}>{value}<span className="text-[12px] font-normal ml-1 opacity-70">{unit}</span></div>
-    </div>
+    <span className="px-2 py-1 rounded text-[11px] font-bold" style={{ backgroundColor: s.bg, color: s.text }}>
+      {s.label}
+    </span>
   );
 }
-function LoadingSpinner() { return <div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="flex flex-col items-center gap-3"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div><span className="text-neutral-500 text-sm">데이터 분석 중...</span></div></div>; }
+
+function LoadingSpinner() { return <div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>; }
 function ErrorDisplay() { return <div className="p-10 text-center text-[#E53935]">데이터 로드 실패</div>; }

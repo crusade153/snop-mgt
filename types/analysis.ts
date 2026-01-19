@@ -26,7 +26,7 @@ export interface ProductionRow {
   code: string;       
   name: string;       
   unit: string;
-  umrezBox: number; // 🚨 추가됨 (단위 변환용)
+  umrezBox: number; 
   planQty: number;    
   actualQty: number;  
   rate: number;       
@@ -61,7 +61,8 @@ export interface IntegratedItem {
   };
 
   production: {
-    planQty: number;          
+    planQty: number;          // 조회 기간 전체 계획
+    futurePlanQty: number;    // ✅ [추가] 오늘 이후 입고 예정 수량
     receivedQty: number;      
     achievementRate: number;  
     lastReceivedDate: string | null;

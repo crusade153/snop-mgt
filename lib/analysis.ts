@@ -1,7 +1,7 @@
 // lib/analysis.ts
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder, ProductionRow } from '@/types/analysis';
-import { differenceInCalendarDays, parseISO } from 'date-fns';
+import { differenceInCalendarDays, parseISO, format } from 'date-fns';
 
 const THRESHOLDS = {
   IMMINENT_DAYS: 30, 
@@ -86,6 +86,7 @@ export function analyzeSnopData(
   let productSales = 0;
   let merchandiseSales = 0;
   const today = new Date();
+  const todayYmd = format(today, 'yyyyMMdd');
 
   // 1. 주문 데이터 처리
   orders.forEach(order => {
@@ -194,7 +195,13 @@ export function analyzeSnopData(
         initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS || 'EA', Number(prod.UMREZ_BOX || 1));
     }
     const item = integratedMap.get(code)!;
+    
     item.production.planQty += plan;
+    
+    if (prod.GSTRP && prod.GSTRP >= todayYmd) {
+      item.production.futurePlanQty += plan;
+    }
+
     item.production.receivedQty += actual;
 
     let status: 'pending' | 'progress' | 'completed' | 'poor' = 'pending';
@@ -215,7 +222,7 @@ export function analyzeSnopData(
       code: prod.MATNR,
       name: prod.MAKTX,
       unit: prod.MEINS || 'EA',
-      umrezBox: Number(prod.UMREZ_BOX || item.umrezBox || 1), // 🚨 생산 데이터의 umrezBox 활용
+      umrezBox: Number(prod.UMREZ_BOX || item.umrezBox || 1), 
       planQty: plan,
       actualQty: actual,
       rate,
@@ -248,7 +255,8 @@ export function analyzeSnopData(
         else stockHealth.healthy++;
     }
 
-    item.inventory.ads = daysDiff > 0 ? (item.totalSalesAmount / daysDiff) : 0;
+    // 🚨 [수정] ADS 계산 시 금액(totalSalesAmount)이 아닌 수량(totalActualQty)을 사용하도록 변경
+    item.inventory.ads = daysDiff > 0 ? (item.totalActualQty / daysDiff) : 0;
   });
 
   const customerStats = Array.from(customerMap.values()).map(c => {
@@ -351,7 +359,8 @@ function initializeItem(
       recommendedStock: recStock
     },
     production: {
-      planQty: 0, receivedQty: 0, achievementRate: 0, lastReceivedDate: null
+      planQty: 0, receivedQty: 0, achievementRate: 0, lastReceivedDate: null,
+      futurePlanQty: 0 
     },
     unfulfilledOrders: []
   });

@@ -59,8 +59,22 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <KpiCard title="제품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
         <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
-        <KpiCard title="미납 손실액" value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)} unit="백만원" type="brand" alert={true} tooltip="미납수량 × 정상단가 합계" />
-        <KpiCard title="긴급 납품" value={data.kpis.criticalDeliveryCount} unit="건" type="warning" />
+        <KpiCard 
+          title="미납 손실액" 
+          value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)} 
+          unit="백만원" 
+          type="brand" 
+          alert={true} 
+          tooltip="미납수량 × 정상단가 합계" 
+        />
+        {/* 🚨 [수정] 툴팁 추가: 긴급 납품 기준 명시 */}
+        <KpiCard 
+          title="긴급 납품" 
+          value={data.kpis.criticalDeliveryCount} 
+          unit="건" 
+          type="warning" 
+          tooltip="납품요청일로부터 7일 이상 지연된 품목 수"
+        />
         <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.imminent} unit="개 제품" type="warning" />
       </div>
 

@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { ChevronLeft, ChevronRight, HelpCircle, Users, Clock } from 'lucide-react';
 import { IntegratedItem } from '@/types/analysis';
+import { useUiStore } from '@/store/ui-store'; // ✅ 추가
 
-// WideRightSheet (800px) - DeliveryPage용
+// WideRightSheet (800px)
 function WideRightSheet({ isOpen, onClose, title, children }: any) {
   if (!isOpen) return null;
   return (
@@ -26,12 +27,26 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 
 export default function DeliveryPage() {
   const { data, isLoading } = useDashboardData();
+  const { unitMode } = useUiStore(); // ✅ 추가
+  
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
   const [selectedProduct, setSelectedProduct] = useState<IntegratedItem | null>(null);
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
+
+  // Helper
+  const formatQty = (val: number, conversion: number, baseUnit: string) => {
+    if (unitMode === 'BOX') {
+      const boxes = val / (conversion > 0 ? conversion : 1);
+      return { 
+        value: boxes.toLocaleString(undefined, { maximumFractionDigits: 1 }), 
+        unit: 'BOX' 
+      };
+    }
+    return { value: val.toLocaleString(), unit: baseUnit };
+  };
 
   const unfulfilledList = data.integratedArray
     .filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0)
@@ -75,7 +90,7 @@ export default function DeliveryPage() {
               <tr>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 w-12 text-center">No</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 w-[35%]">제품명</th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">미납수량</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">미납수량 ({unitMode === 'BOX' ? 'BOX' : '기준'})</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">미납금액</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center">주요 원인</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center">Max 지연</th>
@@ -87,6 +102,9 @@ export default function DeliveryPage() {
                   const majorCause = causes.sort((a,b) => causes.filter(v => v===a).length - causes.filter(v => v===b).length).pop() || '기타';
                   const maxDelay = Math.max(...item.unfulfilledOrders.map(o => o.daysDelayed));
                   const rowNo = (currentPage - 1) * itemsPerPage + idx + 1;
+                  
+                  // 🚨 [변환]
+                  const displayQty = formatQty(item.totalUnfulfilledQty, item.umrezBox, item.unit);
 
                   return (
                     <tr key={item.code} onClick={() => setSelectedProduct(item)} className="hover:bg-red-50 transition-colors cursor-pointer h-[48px]">
@@ -95,7 +113,9 @@ export default function DeliveryPage() {
                         <div className="font-medium text-neutral-900 line-clamp-2 leading-tight" title={item.name}>{item.name}</div>
                         <div className="text-[11px] text-neutral-500 font-mono mt-0.5">{item.code}</div>
                       </td>
-                      <td className="px-4 py-3 text-right font-bold text-[#E53935]">{item.totalUnfulfilledQty.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right font-bold text-[#E53935]">
+                        {displayQty.value} <span className="text-[10px] font-normal text-neutral-400">{displayQty.unit}</span>
+                      </td>
                       <td className="px-4 py-3 text-right text-neutral-700 font-medium">{Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}백만원</td>
                       <td className="px-4 py-3 text-center"><CauseBadge cause={majorCause} /></td>
                       <td className="px-4 py-3 text-center"><span className={`font-bold ${maxDelay >= 7 ? 'text-[#E53935]' : 'text-neutral-500'}`}>{maxDelay}일</span></td>
@@ -137,12 +157,17 @@ export default function DeliveryPage() {
               <div className="grid grid-cols-3 gap-3 border-t border-neutral-100 pt-4">
                 <div>
                   <div className="text-xs text-neutral-500 mb-1">총 미납 수량</div>
-                  <div className="font-bold text-neutral-800">{selectedProduct.totalUnfulfilledQty.toLocaleString()} <span className="text-xs font-normal text-neutral-400">{selectedProduct.unit}</span></div>
+                  {/* 🚨 [변환] */}
+                  <div className="font-bold text-neutral-800">
+                    {formatQty(selectedProduct.totalUnfulfilledQty, selectedProduct.umrezBox, selectedProduct.unit).value}
+                    <span className="text-xs font-normal text-neutral-400 ml-1">{formatQty(selectedProduct.totalUnfulfilledQty, selectedProduct.umrezBox, selectedProduct.unit).unit}</span>
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-neutral-500 mb-1">현재 보유 재고</div>
+                  {/* 🚨 [변환] */}
                   <div className={`font-bold ${selectedProduct.inventory.totalStock === 0 ? 'text-red-500' : 'text-neutral-800'}`}>
-                    {selectedProduct.inventory.totalStock.toLocaleString()}
+                    {formatQty(selectedProduct.inventory.totalStock, selectedProduct.umrezBox, selectedProduct.unit).value}
                   </div>
                 </div>
                 <div>
@@ -173,28 +198,31 @@ export default function DeliveryPage() {
               <div className="space-y-3">
                 {selectedProduct.unfulfilledOrders
                   .sort((a, b) => b.qty - a.qty) 
-                  .map((order, idx) => (
-                  <div key={idx} className="bg-white border border-neutral-200 rounded-lg p-4 shadow-sm hover:border-red-200 transition-colors">
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="font-bold text-neutral-800 text-sm">{order.place}</div>
-                      <span className="bg-red-50 text-red-600 text-[11px] px-2 py-1 rounded font-bold border border-red-100">
-                        {order.qty.toLocaleString()}개 미납
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs text-neutral-500 mt-2 pt-2 border-t border-neutral-100">
-                      <div className="flex gap-2">
-                        <span>요청일: <span className="font-mono text-neutral-700">{order.reqDate}</span></span>
+                  .map((order, idx) => {
+                    // 🚨 [변환]
+                    const dQty = formatQty(order.qty, selectedProduct.umrezBox, selectedProduct.unit);
+                    return (
+                      <div key={idx} className="bg-white border border-neutral-200 rounded-lg p-4 shadow-sm hover:border-red-200 transition-colors">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="font-bold text-neutral-800 text-sm">{order.place}</div>
+                          <span className="bg-red-50 text-red-600 text-[11px] px-2 py-1 rounded font-bold border border-red-100">
+                            {dQty.value} {dQty.unit} 미납
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs text-neutral-500 mt-2 pt-2 border-t border-neutral-100">
+                          <div className="flex gap-2">
+                            <span>요청일: <span className="font-mono text-neutral-700">{order.reqDate}</span></span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-red-500 flex items-center gap-1">
+                              <Clock size={12}/> +{order.daysDelayed}일 지연
+                            </span>
+                            <CauseBadge cause={order.cause} />
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-red-500 flex items-center gap-1">
-                          <Clock size={12}/> +{order.daysDelayed}일 지연
-                        </span>
-                        {/* Cause Badge (내부 컴포넌트) */}
-                        <CauseBadge cause={order.cause} />
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  })}
               </div>
             </div>
           </div>
@@ -204,7 +232,6 @@ export default function DeliveryPage() {
   );
 }
 
-// --- 공통 컴포넌트 ---
 function PageHeader({ title, desc }: any) {
   return (<div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200"><div><h1 className="text-[20px] font-bold text-neutral-900">{title}</h1><p className="text-[12px] text-neutral-700 mt-1">{desc}</p></div></div>);
 }

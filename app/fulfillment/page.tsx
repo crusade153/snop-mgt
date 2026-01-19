@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { ChevronLeft, ChevronRight, ShoppingBag, AlertCircle, Clock } from 'lucide-react';
 import { CustomerStat } from '@/types/analysis';
+import { useUiStore } from '@/store/ui-store'; // ✅ Store 추가
 
 // WideRightSheet (800px)
 function WideRightSheet({ isOpen, onClose, title, children }: any) {
@@ -26,6 +27,7 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 
 export default function FulfillmentPage() {
   const { data, isLoading } = useDashboardData();
+  const { unitMode } = useUiStore(); // ✅ 단위 상태 구독
   
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
@@ -33,6 +35,18 @@ export default function FulfillmentPage() {
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
+
+  // Helper: 단위 변환 함수
+  const formatQty = (val: number, conversion: number, baseUnit: string) => {
+    if (unitMode === 'BOX') {
+      const boxes = val / (conversion > 0 ? conversion : 1);
+      return { 
+        value: boxes.toLocaleString(undefined, { maximumFractionDigits: 1 }), 
+        unit: 'BOX' 
+      };
+    }
+    return { value: val.toLocaleString(), unit: baseUnit };
+  };
 
   const { summary, byCustomer } = data.fulfillment;
   
@@ -48,7 +62,6 @@ export default function FulfillmentPage() {
 
   return (
     <div className="space-y-6">
-      {/* 날짜 필터 제거된 헤더 */}
       <PageHeader title="✅ 납품 현황 (Fulfillment)" desc="거래처별 납품 준수율 및 매출 효율성 분석" />
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -136,28 +149,36 @@ export default function FulfillmentPage() {
               </div>
             </div>
 
-            {/* Top 10 구매 품목 */}
+            {/* Top 10 구매 품목 (단위 변환 적용) */}
             <div>
               <h3 className="font-bold text-neutral-900 mb-4 flex items-center gap-2 text-lg">
                 <ShoppingBag size={20} className="text-blue-500"/> 주요 구매 품목 (Top 10)
               </h3>
               <div className="bg-white border border-neutral-200 rounded-xl p-2 shadow-sm">
-                {selectedCustomer.topBoughtProducts.map((p, idx) => (
-                  <div key={idx} className="flex justify-between items-center text-sm border-b border-neutral-100 last:border-0 p-3 hover:bg-neutral-50 transition-colors">
-                    <div className="flex items-center gap-3 flex-1">
-                      <span className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold shrink-0">{idx+1}</span>
-                      <span className="text-neutral-800 font-medium break-words leading-snug pr-4">{p.name}</span>
+                {selectedCustomer.topBoughtProducts.map((p, idx) => {
+                  // 🚨 [변환]
+                  const displayQty = formatQty(p.qty, p.umrezBox, p.unit);
+                  
+                  return (
+                    <div key={idx} className="flex justify-between items-center text-sm border-b border-neutral-100 last:border-0 p-3 hover:bg-neutral-50 transition-colors">
+                      <div className="flex items-center gap-3 flex-1">
+                        <span className="w-6 h-6 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-xs font-bold shrink-0">{idx+1}</span>
+                        <span className="text-neutral-800 font-medium break-words leading-snug pr-4">{p.name}</span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-bold text-neutral-900 text-base">{Math.round(p.value/1000000).toLocaleString()}백만</div>
+                        {/* 변환된 수량 표시 */}
+                        <div className="text-xs text-neutral-400">
+                          {displayQty.value} {displayQty.unit}
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-bold text-neutral-900 text-base">{Math.round(p.value/1000000).toLocaleString()}백만</div>
-                      <div className="text-xs text-neutral-400">{p.qty.toLocaleString()}개</div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {/* 미납 내역 리스트 */}
+            {/* 미납 내역 리스트 (단위 변환 적용) */}
             <div>
               <h3 className="font-bold text-neutral-900 mb-4 flex items-center gap-2 text-lg">
                 <AlertCircle size={20} className="text-red-500"/> 미납 발생 내역 ({selectedCustomer.unfulfilledDetails.length}건)
@@ -165,28 +186,41 @@ export default function FulfillmentPage() {
               
               {selectedCustomer.unfulfilledDetails.length > 0 ? (
                 <div className="grid grid-cols-1 gap-3">
-                  {selectedCustomer.unfulfilledDetails.map((order, idx) => (
-                    <div key={idx} className="bg-white border border-neutral-200 rounded-xl p-4 shadow-sm hover:border-red-300 transition-all">
-                      <div className="font-bold text-neutral-900 mb-2 break-words leading-tight text-base">
-                        {order.productName}
-                      </div>
-                      
-                      <div className="flex justify-between items-end border-t border-neutral-100 pt-3">
-                        <div className="text-neutral-600 text-xs space-y-1">
-                          <div className="flex items-center gap-2">
-                            <Clock size={12}/> 요청일: {order.reqDate}
+                  {selectedCustomer.unfulfilledDetails.map((order, idx) => {
+                    // 미납 내역의 경우 제품 코드로 umrezBox를 찾아야 하지만, 
+                    // UnfulfilledOrder 구조상 단순화를 위해 1:1 매칭이 어려울 수 있음.
+                    // 정확성을 위해 Dashboard 데이터에서 제품정보를 찾아오는 로직을 추가합니다.
+                    const productInfo = data.integratedArray.find(i => i.name === order.productName);
+                    const umrezBox = productInfo?.umrezBox || 1;
+                    const unit = productInfo?.unit || 'EA';
+                    
+                    const displayQty = formatQty(order.qty, umrezBox, unit);
+
+                    return (
+                      <div key={idx} className="bg-white border border-neutral-200 rounded-xl p-4 shadow-sm hover:border-red-300 transition-all">
+                        <div className="font-bold text-neutral-900 mb-2 break-words leading-tight text-base">
+                          {order.productName}
+                        </div>
+                        
+                        <div className="flex justify-between items-end border-t border-neutral-100 pt-3">
+                          <div className="text-neutral-600 text-xs space-y-1">
+                            <div className="flex items-center gap-2">
+                              <Clock size={12}/> 요청일: {order.reqDate}
+                            </div>
+                            <div className="flex items-center gap-2 text-red-600 font-bold">
+                              <Clock size={12}/> +{order.daysDelayed}일 지연중
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2 text-red-600 font-bold">
-                            <Clock size={12}/> +{order.daysDelayed}일 지연중
+                          <div className="text-right">
+                            <div className="font-bold text-red-600 text-lg">
+                              {displayQty.value} <span className="text-sm font-normal">{displayQty.unit}</span>
+                            </div>
+                            <CauseBadge cause={order.cause} />
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="font-bold text-red-600 text-lg">{order.qty.toLocaleString()}<span className="text-sm font-normal">개</span></div>
-                          <CauseBadge cause={order.cause} />
-                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="p-6 text-center bg-green-50 text-green-700 rounded-xl border border-green-100">

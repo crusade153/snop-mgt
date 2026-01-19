@@ -4,40 +4,61 @@ import { useState } from 'react';
 import { searchProducts, executeInventorySimulation } from '@/actions/simulation-actions';
 import InventoryBalanceChart from '@/components/charts/inventory-balance-chart';
 import { 
-  Search, Play, Calendar, AlertTriangle, CheckCircle, Package, Truck, ShoppingCart, RefreshCw, XCircle, Factory 
+  Search, Play, Calendar, AlertTriangle, CheckCircle, Package, Truck, ShoppingCart, RefreshCw, XCircle, Factory, ArrowRight 
 } from 'lucide-react';
+import { useUiStore } from '@/store/ui-store'; 
 
 export default function SimulationPage() {
+  const { unitMode } = useUiStore(); // 단위 상태 (BOX / BASE)
+  
   // 1. 검색 상태
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
 
-  // 2. 시뮬레이션 입력값
-  const [params, setParams] = useState({
-    minShelfLife: 30, // 기본 30일 이상 남은것만
-    additionalQty: 1000,
-    targetDate: new Date().toISOString().slice(0, 10)
-  });
+  // 2. 시뮬레이션 입력값 (기준 단위로 저장)
+  const [baseQty, setBaseQty] = useState<number>(1000); // EA/KG 기준
+  const [minShelfLife, setMinShelfLife] = useState(30);
+  const [targetDate, setTargetDate] = useState(new Date().toISOString().slice(0, 10));
 
   // 3. 결과 상태
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // 제품 검색 핸들러
+  // Helper: 단위 변환 (보여줄 때)
+  const formatQty = (val: number) => {
+    const umrez = selectedProduct?.UMREZ_BOX || 1;
+    if (unitMode === 'BOX') {
+      return (val / umrez).toLocaleString(undefined, { maximumFractionDigits: 1 });
+    }
+    return val.toLocaleString();
+  };
+
+  // Helper: 입력값 처리 (입력 -> 기준단위 저장)
+  const handleQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = Number(e.target.value);
+    const umrez = selectedProduct?.UMREZ_BOX || 1;
+    if (unitMode === 'BOX') {
+      setBaseQty(val * umrez); // BOX 입력 -> EA 저장
+    } else {
+      setBaseQty(val);
+    }
+  };
+
   const handleSearch = async () => {
     if (!searchTerm) return;
     const res = await searchProducts(searchTerm);
     setSearchResults(res);
   };
 
-  // 시뮬레이션 실행 핸들러
   const handleRun = async () => {
     if (!selectedProduct) return alert("제품을 먼저 선택해주세요.");
     setLoading(true);
     const res = await executeInventorySimulation(selectedProduct.MATNR, {
       productName: selectedProduct.MATNR_T,
-      ...params
+      minShelfLife,
+      targetDate,
+      additionalQty: baseQty // 기준 단위로 전송
     });
     if (res.success) {
       setResult(res.data);
@@ -49,23 +70,19 @@ export default function SimulationPage() {
 
   const handleReset = () => {
     setResult(null);
-    setParams({
-      minShelfLife: 30,
-      additionalQty: 1000,
-      targetDate: new Date().toISOString().slice(0, 10)
-    });
+    setBaseQty(1000);
+    setMinShelfLife(30);
+    setTargetDate(new Date().toISOString().slice(0, 10));
   };
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
-      
-      {/* Header */}
       <div className="pb-4 border-b border-neutral-200">
         <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">
           🧪 납품 가능 여부 시뮬레이션 (ATP Check)
         </h1>
         <p className="text-sm text-neutral-600 mt-1">
-          "이 물량, 언제까지 납품 가능한가?" 현재 재고와 생산 계획을 기반으로 공급 가능성을 진단합니다.
+          현재 재고와 생산 계획을 기반으로 공급 가능성을 진단합니다.
         </p>
       </div>
 
@@ -73,8 +90,6 @@ export default function SimulationPage() {
         
         {/* 1. 설정 패널 (좌측) */}
         <div className="bg-white p-6 rounded-xl border border-neutral-200 shadow-sm space-y-6 h-fit">
-          
-          {/* (1) 제품 검색 */}
           <div>
             <label className="text-sm font-bold text-neutral-700 block mb-2">1. 대상 품목 검색</label>
             <div className="flex gap-2">
@@ -91,10 +106,8 @@ export default function SimulationPage() {
               </button>
             </div>
             
-            {/* 검색 결과 리스트 */}
             {searchResults.length > 0 && !selectedProduct && (
               <ul className="mt-2 border border-neutral-200 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
-                {/* ✅ 수정된 부분: index를 키에 포함하여 중복 에러 해결 */}
                 {searchResults.map((p, index) => (
                   <li 
                     key={`${p.MATNR}-${index}`} 
@@ -108,19 +121,20 @@ export default function SimulationPage() {
               </ul>
             )}
 
-            {/* 선택된 제품 표시 */}
             {selectedProduct && (
               <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center">
                 <div>
                   <div className="text-xs text-blue-600 font-bold">선택됨</div>
                   <div className="text-sm font-bold text-neutral-800">{selectedProduct.MATNR_T}</div>
+                  <div className="text-[10px] text-neutral-500 mt-1">
+                    기준: {selectedProduct.MEINS} | 박스입수: {selectedProduct.UMREZ_BOX}
+                  </div>
                 </div>
                 <button onClick={() => setSelectedProduct(null)} className="text-xs text-neutral-400 underline">변경</button>
               </div>
             )}
           </div>
 
-          {/* (2) 재고 필터링 조건 */}
           <div>
             <label className="text-sm font-bold text-neutral-700 block mb-2">2. 유효 재고 기준</label>
             <div className="flex items-center gap-2 p-3 bg-neutral-50 rounded-lg border border-neutral-200">
@@ -128,16 +142,14 @@ export default function SimulationPage() {
               <span className="text-sm text-neutral-600">잔여 유통기한</span>
               <input 
                 type="number" 
-                value={params.minShelfLife}
-                onChange={e => setParams({...params, minShelfLife: Number(e.target.value)})}
+                value={minShelfLife}
+                onChange={e => setMinShelfLife(Number(e.target.value))}
                 className="w-16 p-1 text-center font-bold border border-neutral-300 rounded"
               />
               <span className="text-sm text-neutral-600">일 이상</span>
             </div>
-            <p className="text-xs text-neutral-400 mt-1">* 해당 기간 미만 재고는 시뮬레이션에서 제외됩니다.</p>
           </div>
 
-          {/* (3) 추가 주문 정보 */}
           <div>
             <label className="text-sm font-bold text-neutral-700 block mb-2">3. 추가 요청 정보</label>
             <div className="space-y-3">
@@ -145,17 +157,19 @@ export default function SimulationPage() {
                 <span className="text-xs text-neutral-500 block mb-1">납품 희망일</span>
                 <input 
                   type="date" 
-                  value={params.targetDate}
-                  onChange={e => setParams({...params, targetDate: e.target.value})}
+                  value={targetDate}
+                  onChange={e => setTargetDate(e.target.value)}
                   className="w-full p-2 text-sm border border-neutral-300 rounded-lg"
                 />
               </div>
               <div>
-                <span className="text-xs text-neutral-500 block mb-1">필요 수량 (EA)</span>
+                <span className="text-xs text-neutral-500 block mb-1">
+                  필요 수량 ({unitMode === 'BOX' ? 'BOX' : 'EA/KG'})
+                </span>
                 <input 
                   type="number" 
-                  value={params.additionalQty}
-                  onChange={e => setParams({...params, additionalQty: Number(e.target.value)})}
+                  value={unitMode === 'BOX' ? baseQty / (selectedProduct?.UMREZ_BOX || 1) : baseQty}
+                  onChange={handleQtyChange}
                   className="w-full p-2 text-sm font-bold border border-neutral-300 rounded-lg text-primary-blue"
                 />
               </div>
@@ -176,7 +190,7 @@ export default function SimulationPage() {
           {result ? (
             <div className="space-y-6">
               
-              {/* 판정 배너 */}
+              {/* (1) 판정 배너 */}
               <div className={`p-6 rounded-xl border-l-8 shadow-sm flex items-start gap-4 ${
                 result.isPossible ? 'bg-green-50 border-green-500 text-green-900' : 'bg-red-50 border-red-500 text-red-900'
               }`}>
@@ -187,42 +201,86 @@ export default function SimulationPage() {
                   </h3>
                   <p className="text-sm opacity-90">
                     {result.isPossible 
-                      ? `요청하신 날짜(${params.targetDate})에 안정적으로 공급 가능합니다.` 
-                      : `죄송합니다. ${result.shortageDate}에 ${result.shortageQty.toLocaleString()}개가 부족할 것으로 예상됩니다.`}
+                      ? `요청하신 날짜(${targetDate})에 안정적으로 공급 가능합니다.` 
+                      : `죄송합니다. ${result.shortageDate}에 ${formatQty(result.shortageQty)}${unitMode === 'BOX' ? 'BOX' : 'EA'}가 부족할 것으로 예상됩니다.`}
                   </p>
                 </div>
               </div>
 
-              {/* 요약 카드 */}
+              {/* (2) 요약 카드 */}
               <div className="grid grid-cols-3 gap-4">
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Package size={14}/> 현재 유효 재고</div>
-                  <div className="text-xl font-bold">{result.currentUsableStock.toLocaleString()}</div>
-                  <div className="text-xs text-neutral-400">잔여 {params.minShelfLife}일 이상</div>
+                  <div className="text-xl font-bold">{formatQty(result.currentUsableStock)} <span className="text-sm font-normal text-neutral-400">{unitMode==='BOX'?'BOX':'EA'}</span></div>
+                  <div className="text-xs text-neutral-400">잔여 {minShelfLife}일 이상</div>
                 </div>
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Truck size={14}/> 미래 입고 예정</div>
-                  <div className="text-xl font-bold text-blue-600">+{result.totalProduction.toLocaleString()}</div>
+                  <div className="text-xl font-bold text-blue-600">+{formatQty(result.totalProduction)}</div>
                   <div className="text-xs text-neutral-400">생산 계획 합계</div>
                 </div>
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ShoppingCart size={14}/> 신규 요청</div>
-                  <div className="text-xl font-bold text-red-600">-{params.additionalQty.toLocaleString()}</div>
-                  <div className="text-xs text-neutral-400">{params.targetDate} 출고</div>
+                  <div className="text-xl font-bold text-red-600">-{formatQty(baseQty)}</div>
+                  <div className="text-xs text-neutral-400">{targetDate} 출고</div>
                 </div>
               </div>
 
-              {/* 일자별 재고 흐름 차트 */}
-              <div className="bg-white p-6 rounded-xl border border-neutral-200 shadow-sm">
-                <h3 className="font-bold text-lg mb-4 text-neutral-800 flex items-center gap-2">
-                  📅 일자별 예상 재고 추이 (Inventory Balance)
-                </h3>
-                <div className="h-[300px] w-full">
-                  <InventoryBalanceChart timeline={result.timeline} />
+              {/* (3) 상세 분석 영역: 차트 + 스케줄 리스트 */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* 왼쪽: 재고 추이 차트 */}
+                <div className="md:col-span-2 bg-white p-6 rounded-xl border border-neutral-200 shadow-sm">
+                  <h3 className="font-bold text-lg mb-4 text-neutral-800 flex items-center gap-2">
+                    📅 예상 재고 추이 (Inventory Balance)
+                  </h3>
+                  <div className="h-[300px] w-full">
+                    <InventoryBalanceChart timeline={result.timeline} />
+                  </div>
+                  <div className="text-center mt-4 text-xs text-neutral-500">
+                    <span className="text-red-500 font-bold">점선 아래(음수)</span> 영역은 결품 구간입니다.
+                  </div>
                 </div>
-                <div className="text-center mt-4 text-xs text-neutral-500">
-                  <span className="text-red-500 font-bold">점선 아래(음수)</span> 영역이 발생하면 해당 일자에 결품이 발생한다는 의미입니다.
+
+                {/* 오른쪽: 입고 예정 스케줄 리스트 */}
+                <div className="bg-white rounded-xl border border-neutral-200 shadow-sm flex flex-col overflow-hidden h-[400px]">
+                  <div className="p-4 border-b border-neutral-100 bg-neutral-50">
+                    <h3 className="font-bold text-neutral-800 text-sm flex items-center gap-2">
+                      <Truck size={16} className="text-blue-600"/> 입고 예정 일정
+                    </h3>
+                    <p className="text-[11px] text-neutral-500 mt-1">
+                      생산 계획에 따른 입고 수량 ({unitMode === 'BOX' ? 'BOX' : 'EA'})
+                    </p>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto p-2">
+                    {/* 타임라인에서 생산(PRODUCTION) 이벤트만 필터링 */}
+                    {result.timeline.filter((e: any) => e.type === 'PRODUCTION').length > 0 ? (
+                      <div className="space-y-2">
+                        {result.timeline
+                          .filter((e: any) => e.type === 'PRODUCTION')
+                          .map((e: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                              <div className="flex flex-col">
+                                <span className="text-xs font-bold text-blue-900">{e.date}</span>
+                                <span className="text-[10px] text-blue-500">생산 입고</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-bold text-blue-700">+{formatQty(e.qty)}</span>
+                              </div>
+                            </div>
+                          ))
+                        }
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-neutral-400 gap-2">
+                        <Calendar size={24} className="opacity-20"/>
+                        <span className="text-xs">예정된 입고가 없습니다.</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
+
               </div>
 
               <div className="text-right">

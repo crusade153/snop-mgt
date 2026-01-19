@@ -15,7 +15,7 @@ function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, n
 
   orders.forEach(row => {
     if (!row.MATNR) return;
-    const qty = Number(row.LFIMG_LIPS ?? row.KWMENG ?? 0);
+    const qty = Number(row.LFIMG_LIPS ?? row.KWMENG ?? 0); 
     if (qty > 0) map.set(row.MATNR, (map.get(row.MATNR) || 0) + qty);
   });
 
@@ -78,7 +78,9 @@ export function analyzeSnopData(
 
   const integratedMap = new Map<string, IntegratedItem>();
   
-  type CustomerTemp = CustomerStat & { boughtMap: Map<string, {name:string, qty:number, value:number}> };
+  type CustomerTemp = CustomerStat & { 
+    boughtMap: Map<string, {name:string, qty:number, value:number, unit:string, umrezBox:number}> 
+  };
   const customerMap = new Map<string, CustomerTemp>();
 
   let productSales = 0;
@@ -91,7 +93,7 @@ export function analyzeSnopData(
     if (!code) return;
 
     if (!integratedMap.has(code)) {
-        initializeItem(integratedMap, code, order.ARKTX, invAggMap, velocityMap, order.VRKME);
+        initializeItem(integratedMap, code, order.ARKTX, invAggMap, velocityMap, order.MEINS || 'EA', Number(order.UMREZ_BOX || 1));
     }
     const item = integratedMap.get(code)!;
 
@@ -158,7 +160,13 @@ export function analyzeSnopData(
     cust.totalRevenue += supplyPrice;
 
     if (!cust.boughtMap.has(code)) {
-        cust.boughtMap.set(code, { name: item.name, qty: 0, value: 0 });
+        cust.boughtMap.set(code, { 
+          name: item.name, 
+          qty: 0, 
+          value: 0,
+          unit: item.unit,
+          umrezBox: item.umrezBox
+        });
     }
     const prodStat = cust.boughtMap.get(code)!;
     prodStat.qty += reqQty;
@@ -174,7 +182,7 @@ export function analyzeSnopData(
     }
   });
 
-  // 2. 생산 데이터 처리 (플랜트 정보 추가)
+  // 2. 생산 데이터 처리
   const processedProductionList: ProductionRow[] = [];
 
   productionList.forEach(prod => {
@@ -182,7 +190,9 @@ export function analyzeSnopData(
     const plan = Number(prod.PSMNG || 0);
     const actual = Number(prod.LMNGA || 0);
     
-    if (!integratedMap.has(code)) initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS);
+    if (!integratedMap.has(code)) {
+        initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS || 'EA', Number(prod.UMREZ_BOX || 1));
+    }
     const item = integratedMap.get(code)!;
     item.production.planQty += plan;
     item.production.receivedQty += actual;
@@ -201,10 +211,11 @@ export function analyzeSnopData(
 
     processedProductionList.push({
       date: dateStr,
-      plant: prod.WERKS || '-', // ✅ 플랜트 정보 매핑
+      plant: prod.WERKS || '-',
       code: prod.MATNR,
       name: prod.MAKTX,
       unit: prod.MEINS || 'EA',
+      umrezBox: Number(prod.UMREZ_BOX || item.umrezBox || 1), // 🚨 생산 데이터의 umrezBox 활용
       planQty: plan,
       actualQty: actual,
       rate,
@@ -212,14 +223,12 @@ export function analyzeSnopData(
     });
   });
 
-  // 3. 재고 데이터 Backfill
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
-      initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, velocityMap, val.info.MEINS);
+      initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, velocityMap, val.info.MEINS, Number(val.info.UMREZ_BOX || 1));
     }
   });
 
-  // 4. 최종 KPI 계산
   const integratedArray = Array.from(integratedMap.values());
   let totalUnfulfilledValue = 0;
   let criticalDeliveryCount = 0;
@@ -277,10 +286,7 @@ export function analyzeSnopData(
       criticalDeliveryCount
     },
     stockHealth,
-    salesAnalysis: {
-      topProducts,
-      topCustomers
-    },
+    salesAnalysis: { topProducts, topCustomers },
     integratedArray,
     fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats },
     productionList: processedProductionList 
@@ -293,7 +299,8 @@ function initializeItem(
   nameHint: string,
   invMap: Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>,
   velocityMap: Map<string, number>,
-  unit: string
+  unit: string,
+  umrezBox: number
 ) {
   const invData = invMap.get(code);
   const adsQty = velocityMap.get(code) || 0;
@@ -331,6 +338,7 @@ function initializeItem(
     name: nameHint || invData?.info.MATNR_T || '',
     unit: unit || invData?.info.MEINS || 'EA',
     brand, category, family,
+    umrezBox: umrezBox > 0 ? umrezBox : 1, 
     totalReqQty: 0, totalActualQty: 0, totalUnfulfilledQty: 0, totalUnfulfilledValue: 0, totalSalesAmount: 0,
     inventory: {
       totalStock: invData?.totalStock || 0,

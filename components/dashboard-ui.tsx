@@ -3,14 +3,15 @@
 import { useDashboardData } from '@/hooks/use-dashboard'; 
 import { Filter, HelpCircle } from 'lucide-react';
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
+import { useUiStore } from '@/store/ui-store'; // ✅ 상태 스토어
 
 interface Props {
   initialData: DashboardAnalysis | null;
 }
 
 export default function DashboardClientUserInterface({ initialData }: Props) {
-  // useDashboardData 내부에서 전역 스토어를 사용하므로 인자 불필요
   const { data, isLoading } = useDashboardData(initialData || undefined);
+  const { unitMode } = useUiStore(); // ✅ 단위 상태 구독
 
   if (isLoading) return (
     <div className="flex items-center justify-center h-[calc(100vh-100px)]">
@@ -23,15 +24,35 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   
   if (!data) return <div className="p-10 text-center text-status-error">데이터 로드 실패</div>;
 
+  // ✅ [핵심] 단위 변환 함수 (박스 vs 기본)
+  const formatQty = (val: number, conversion: number, baseUnit: string) => {
+    if (unitMode === 'BOX') {
+      // 박스 모드: 환산 계수(umrezBox)로 나누기
+      // conversion이 0이거나 없으면 1로 나눔 (안전장치)
+      const factor = conversion > 0 ? conversion : 1;
+      const boxes = val / factor;
+      
+      return { 
+        // 소수점 1자리까지 표시 (깔끔하게)
+        value: boxes.toLocaleString(undefined, { maximumFractionDigits: 1 }), 
+        unit: 'BOX' 
+      };
+    }
+    // 기준 모드: 원래 값 그대로 (정수)
+    return { 
+      value: val.toLocaleString(), 
+      unit: baseUnit 
+    };
+  };
+
   return (
     <div className="space-y-6">
-      {/* 1. Page Header (날짜 필터 제거됨) */}
+      {/* 1. Page Header */}
       <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
         <div>
           <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
           <p className="text-[12px] text-neutral-700 mt-1">전사 S&OP 핵심 지표 모니터링</p>
         </div>
-        {/* 기존의 날짜 필터 코드는 Header로 이동하여 삭제함 */}
       </div>
 
       {/* 2. KPI Cards */}
@@ -77,7 +98,10 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">코드</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">제품명</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">미납금액(백만원)</th>
-                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">재고(BOX)</th>
+                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">
+                  {/* 헤더도 동적으로 바뀜 */}
+                  재고 ({unitMode === 'BOX' ? 'BOX' : '기준'})
+                </th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">상태</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">일평균 매출(백만원)</th>
               </tr>
@@ -86,24 +110,36 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
               {data.integratedArray
                 .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue)
                 .slice(0, 20)
-                .map((item: IntegratedItem) => (
-                <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
-                  <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
-                  <td className="px-4 py-3 text-neutral-900">{item.name}</td>
-                  <td className="px-4 py-3 text-right font-bold text-primary-brand">
-                    {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-right text-neutral-700">
-                    {item.inventory.totalStock.toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <StatusBadge status={item.inventory.status} />
-                  </td>
-                  <td className="px-4 py-3 text-right text-neutral-500">
-                    {(item.inventory.ads / 1000000).toFixed(1)}
-                  </td>
-                </tr>
-              ))}
+                .map((item: IntegratedItem) => {
+                  
+                  // ✅ [적용] 여기서 변환 함수 호출
+                  const displayStock = formatQty(
+                    item.inventory.totalStock, 
+                    item.umrezBox, 
+                    item.unit
+                  );
+
+                  return (
+                    <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
+                      <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
+                      <td className="px-4 py-3 text-neutral-900">{item.name}</td>
+                      <td className="px-4 py-3 text-right font-bold text-primary-brand">
+                        {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right text-neutral-700">
+                        {/* 변환된 값 출력 */}
+                        {displayStock.value} 
+                        <span className="text-[10px] text-neutral-400 ml-1">{displayStock.unit}</span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <StatusBadge status={item.inventory.status} />
+                      </td>
+                      <td className="px-4 py-3 text-right text-neutral-500">
+                        {(item.inventory.ads / 1000000).toFixed(1)}
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>

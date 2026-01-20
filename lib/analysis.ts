@@ -3,35 +3,15 @@ import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder, ProductionRow } from '@/types/analysis';
 import { differenceInCalendarDays, parseISO, format } from 'date-fns';
 
+// 상수 설정
 const THRESHOLDS = {
   IMMINENT_DAYS: 30, 
   CRITICAL_DAYS: 60, 
   SAFETY_BUFFER_DAYS: 14, 
+  FIXED_ADS_DAYS: 60, // ✅ ADS 계산 기준일수 (60일 고정)
 };
 
-function calculateSalesVelocity(orders: SapOrder[], days: number): Map<string, number> {
-  const map = new Map<string, number>();
-  const safeDays = Math.max(1, days); 
-
-  orders.forEach(row => {
-    if (!row.MATNR) return;
-    const qty = Number(row.LFIMG_LIPS ?? row.KWMENG ?? 0); 
-    if (qty > 0) map.set(row.MATNR, (map.get(row.MATNR) || 0) + qty);
-  });
-
-  for (const [key, total] of map.entries()) {
-    map.set(key, total / safeDays);
-  }
-  return map;
-}
-
-function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
-  if (days <= 0) return 'disposed';                    
-  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
-  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
-  return 'healthy';                                    
-}
-
+// 브랜드/카테고리 추론 헬퍼
 function inferBrandInfo(name: string) {
   if (name.includes('The미식') || name.includes('미식')) return { brand: 'The미식', category: '상온' };
   if (name.includes('하림')) return { brand: '하림', category: '냉동' };
@@ -39,6 +19,14 @@ function inferBrandInfo(name: string) {
   if (name.includes('용가리')) return { brand: '용가리', category: '냉동' };
   if (name.includes('챔')) return { brand: '챔', category: '통조림' };
   return { brand: '기타', category: '기타' };
+}
+
+// 재고 상태 판정 헬퍼
+function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
+  if (days <= 0) return 'disposed';                    
+  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
+  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
+  return 'healthy';                                    
 }
 
 export function analyzeSnopData(
@@ -49,21 +37,13 @@ export function analyzeSnopData(
   endDateStr: string
 ): DashboardAnalysis {
   
-  let daysDiff = 60;
-  try {
-    if (startDateStr && endDateStr) {
-      daysDiff = differenceInCalendarDays(parseISO(endDateStr), parseISO(startDateStr)) + 1;
-    }
-  } catch (e) {
-    console.error("Date parsing error:", e);
-  }
-
-  // ✅ 조회 기간 필터용 문자열 (YYYYMMDD)
+  // 조회 기간 필터용 문자열 (YYYYMMDD)
   const filterStart = startDateStr.replace(/-/g, '');
   const filterEnd = endDateStr.replace(/-/g, '');
+  const today = new Date();
+  const todayYmd = format(today, 'yyyyMMdd');
 
-  const velocityMap = calculateSalesVelocity(orders, daysDiff);
-  
+  // 1. 재고 데이터 집계 (배치별 합산)
   const invAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>();
   inventoryList.forEach(inv => {
     if (!invAggMap.has(inv.MATNR)) {
@@ -82,6 +62,7 @@ export function analyzeSnopData(
 
   const integratedMap = new Map<string, IntegratedItem>();
   
+  // 거래처 통계용 Map
   type CustomerTemp = CustomerStat & { 
     boughtMap: Map<string, {name:string, qty:number, value:number, unit:string, umrezBox:number}> 
   };
@@ -89,33 +70,33 @@ export function analyzeSnopData(
 
   let productSales = 0;
   let merchandiseSales = 0;
-  const today = new Date();
-  const todayYmd = format(today, 'yyyyMMdd'); // ✅ 오늘 날짜
 
-  // 1. 주문 데이터 처리
+  // 2. 주문(Sales) 데이터 처리
   orders.forEach(order => {
     const code = order.MATNR;
     if (!code) return;
 
     if (!integratedMap.has(code)) {
-        initializeItem(integratedMap, code, order.ARKTX, invAggMap, velocityMap, order.MEINS || 'EA', Number(order.UMREZ_BOX || 1));
+        initializeItem(integratedMap, code, order.ARKTX, invAggMap, order.MEINS || 'EA', Number(order.UMREZ_BOX || 1));
     }
     const item = integratedMap.get(code)!;
 
     const supplyPrice = Number(order.NETWR || 0);
     const reqQty = Number(order.KWMENG || 0);
     const actualQty = Number(order.LFIMG_LIPS || 0);
+    
+    // 미납 수량 계산 (요청 - 실적)
     const unfulfilled = Math.max(0, reqQty - actualQty);
 
     item.totalReqQty += reqQty;
     item.totalActualQty += actualQty;
-    item.totalSalesAmount += supplyPrice;
+    item.totalSalesAmount += supplyPrice; 
 
     if (code.startsWith('5')) productSales += supplyPrice;
     else merchandiseSales += supplyPrice;
 
+    // 미납 내역 처리
     let unfulfilledInfo: UnfulfilledOrder | null = null;
-
     if (unfulfilled > 0) {
         item.totalUnfulfilledQty += unfulfilled;
         
@@ -125,7 +106,7 @@ export function analyzeSnopData(
 
         let cause = '재고 부족';
         if (item.inventory.totalStock > 0) {
-            cause = '당일 재고 부족'; 
+            cause = '당일 재고 부족'; // 재고는 있는데 출고가 안된 경우
         }
 
         let daysDelayed = 0;
@@ -146,18 +127,16 @@ export function analyzeSnopData(
             daysDelayed,
             cause
         };
-
         item.unfulfilledOrders.push(unfulfilledInfo);
     }
 
+    // 거래처 집계
     const custId = order.KUNNR || 'UNKNOWN';
     if (!customerMap.has(custId)) {
         customerMap.set(custId, {
             id: custId, name: order.NAME1 || '알수없음',
             orderCount: 0, fulfilledCount: 0, totalRevenue: 0, missedRevenue: 0, fulfillmentRate: 0,
-            topBoughtProducts: [], 
-            unfulfilledDetails: [],
-            boughtMap: new Map()
+            topBoughtProducts: [], unfulfilledDetails: [], boughtMap: new Map()
         });
     }
     const cust = customerMap.get(custId)!;
@@ -166,11 +145,7 @@ export function analyzeSnopData(
 
     if (!cust.boughtMap.has(code)) {
         cust.boughtMap.set(code, { 
-          name: item.name, 
-          qty: 0, 
-          value: 0,
-          unit: item.unit,
-          umrezBox: item.umrezBox
+          name: item.name, qty: 0, value: 0, unit: item.unit, umrezBox: item.umrezBox
         });
     }
     const prodStat = cust.boughtMap.get(code)!;
@@ -187,63 +162,54 @@ export function analyzeSnopData(
     }
   });
 
-  // 2. 생산 데이터 처리
+  // 3. 생산(Production) 데이터 처리
   const processedProductionList: ProductionRow[] = [];
-
   productionList.forEach(prod => {
     const code = prod.MATNR;
     const plan = Number(prod.PSMNG || 0);
     const actual = Number(prod.LMNGA || 0);
     
     if (!integratedMap.has(code)) {
-        initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS || 'EA', Number(prod.UMREZ_BOX || 1));
+        initializeItem(integratedMap, code, prod.MAKTX, invAggMap, prod.MEINS || 'EA', Number(prod.UMREZ_BOX || 1));
     }
     const item = integratedMap.get(code)!;
-    const dateStr = prod.GSTRP; // YYYYMMDD string
+    const dateStr = prod.GSTRP; 
 
-    // (1) 조회 기간 내 데이터 -> KPI 통계용 (계획 vs 실적)
+    // 기간 내 데이터 통계
     if (dateStr && dateStr >= filterStart && dateStr <= filterEnd) {
       item.production.planQty += plan;
       item.production.receivedQty += actual;
     }
-    
-    // (2) ✅ [핵심] 오늘 포함 미래 데이터 -> 재고 시뮬레이션용 (입고 예정)
+    // 미래 입고 예정 (시뮬레이션용)
     if (dateStr && dateStr >= todayYmd) {
       item.production.futurePlanQty += plan;
     }
 
     let status: 'pending' | 'progress' | 'completed' | 'poor' = 'pending';
     const rate = plan > 0 ? (actual / plan) * 100 : 0;
-    
     if (actual >= plan) status = 'completed';
     else if (actual > 0 && actual < plan) status = 'progress';
     else if (rate < 90 && plan > 0) status = 'poor';
 
-    let fmtDate = dateStr;
-    if (dateStr && dateStr.length === 8) {
-      fmtDate = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
-    }
-
     processedProductionList.push({
-      date: fmtDate,
+      date: dateStr ? `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}` : '',
       plant: prod.WERKS || '-',
       code: prod.MATNR,
       name: prod.MAKTX,
       unit: prod.MEINS || 'EA',
       umrezBox: Number(prod.UMREZ_BOX || item.umrezBox || 1), 
-      planQty: plan,
-      actualQty: actual,
-      rate,
-      status
+      planQty: plan, actualQty: actual, rate, status
     });
   });
 
+  // 주문/생산이 없어도 재고가 있는 품목 추가
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
-      initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, velocityMap, val.info.MEINS, Number(val.info.UMREZ_BOX || 1));
+      initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, val.info.MEINS, Number(val.info.UMREZ_BOX || 1));
     }
   });
 
+  // 4. 최종 통합 배열 생성 및 KPI 계산
   const integratedArray = Array.from(integratedMap.values());
   let totalUnfulfilledValue = 0;
   let criticalDeliveryCount = 0;
@@ -256,17 +222,25 @@ export function analyzeSnopData(
     totalUnfulfilledValue += item.totalUnfulfilledValue;
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
+    // ✅ [수정] ADS 계산: (총 실적 수량 / 60일) 고정
+    // 수량(Quantity) 기준의 일평균 판매 지표입니다.
+    item.inventory.ads = item.totalActualQty / THRESHOLDS.FIXED_ADS_DAYS;
+
+    // ✅ [수정] 상태 판정 로직 강화: 미납이 있으면 재고가 많아도 'Critical'로 간주하여 정보 일관성 확보
+    if (item.totalUnfulfilledQty > 0) {
+        item.inventory.status = 'critical'; 
+    }
+
+    // 재고 건전성 카운팅
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
         else if (item.inventory.status === 'imminent') stockHealth.imminent++; 
         else if (item.inventory.status === 'critical') stockHealth.critical++;
         else stockHealth.healthy++;
     }
-
-    // ✅ [ADS 수정 적용됨] 매출액(Amount) 대신 수량(Qty) 기준 계산
-    item.inventory.ads = daysDiff > 0 ? (item.totalActualQty / daysDiff) : 0;
   });
 
+  // 거래처 분석 결과 정리
   const customerStats = Array.from(customerMap.values()).map(c => {
       c.fulfillmentRate = c.orderCount > 0 ? (c.fulfilledCount / c.orderCount) * 100 : 0;
       c.topBoughtProducts = Array.from(c.boughtMap.values())
@@ -283,16 +257,6 @@ export function analyzeSnopData(
       averageRate: 0
   };
 
-  const topProducts = integratedArray
-    .sort((a, b) => b.totalSalesAmount - a.totalSalesAmount)
-    .slice(0, 5)
-    .map(item => ({ name: item.name, value: item.totalSalesAmount }));
-
-  const topCustomers = customerStats
-    .sort((a, b) => b.totalRevenue - a.totalRevenue)
-    .slice(0, 5)
-    .map(c => ({ name: c.name, value: c.totalRevenue }));
-
   return {
     kpis: {
       productSales,
@@ -302,25 +266,26 @@ export function analyzeSnopData(
       criticalDeliveryCount
     },
     stockHealth,
-    salesAnalysis: { topProducts, topCustomers },
+    salesAnalysis: {
+      topProducts: integratedArray.sort((a, b) => b.totalSalesAmount - a.totalSalesAmount).slice(0, 5).map(i => ({ name: i.name, value: i.totalSalesAmount })),
+      topCustomers: customerStats.slice(0, 5).map(c => ({ name: c.name, value: c.totalRevenue }))
+    },
     integratedArray,
     fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats },
     productionList: processedProductionList 
   };
 }
 
+// 아이템 초기화 헬퍼
 function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
   nameHint: string,
   invMap: Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>,
-  velocityMap: Map<string, number>,
   unit: string,
   umrezBox: number
 ) {
   const invData = invMap.get(code);
-  const adsQty = velocityMap.get(code) || 0;
-  const recStock = Math.ceil(adsQty * THRESHOLDS.SAFETY_BUFFER_DAYS);
   
   let minRemaining = 9999;
   if (invData && invData.batches.length > 0) {
@@ -335,9 +300,7 @@ function initializeItem(
   else if (status === 'imminent') riskScore = 100; 
   else if (status === 'critical') riskScore = 80;  
 
-  let brand = '기타';
-  let category = '미지정';
-
+  let brand = '기타', category = '미지정';
   if (invData?.info.PRDHA_1_T) {
       brand = invData.info.PRDHA_1_T;
       category = invData.info.PRDHA_2_T || '미지정';
@@ -346,7 +309,6 @@ function initializeItem(
       brand = inferred.brand;
       category = inferred.category;
   }
-  
   const family = invData?.info.PRDHA_3_T || '기타';
 
   map.set(code, {
@@ -360,16 +322,13 @@ function initializeItem(
       totalStock: invData?.totalStock || 0,
       usableStock: invData?.totalStock || 0,
       batches: invData?.batches || [],
-      status,
+      status, // 초기 상태 (나중에 미납 여부에 따라 업데이트됨)
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore,
       ads: 0,
-      recommendedStock: recStock
+      recommendedStock: 0
     },
-    production: {
-      planQty: 0, receivedQty: 0, achievementRate: 0, lastReceivedDate: null,
-      futurePlanQty: 0 // ✅ [추가] 초기화
-    },
+    production: { planQty: 0, receivedQty: 0, achievementRate: 0, lastReceivedDate: null, futurePlanQty: 0 },
     unfulfilledOrders: []
   });
 }

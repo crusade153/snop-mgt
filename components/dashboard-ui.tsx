@@ -3,7 +3,7 @@
 import { useDashboardData } from '@/hooks/use-dashboard'; 
 import { Filter, HelpCircle } from 'lucide-react';
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
-import { useUiStore } from '@/store/ui-store'; // ✅ 상태 스토어
+import { useUiStore } from '@/store/ui-store'; 
 
 interface Props {
   initialData: DashboardAnalysis | null;
@@ -11,7 +11,7 @@ interface Props {
 
 export default function DashboardClientUserInterface({ initialData }: Props) {
   const { data, isLoading } = useDashboardData(initialData || undefined);
-  const { unitMode } = useUiStore(); // ✅ 단위 상태 구독
+  const { unitMode } = useUiStore(); 
 
   if (isLoading) return (
     <div className="flex items-center justify-center h-[calc(100vh-100px)]">
@@ -24,25 +24,15 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   
   if (!data) return <div className="p-10 text-center text-status-error">데이터 로드 실패</div>;
 
-  // ✅ [핵심] 단위 변환 함수 (박스 vs 기본)
   const formatQty = (val: number, conversion: number, baseUnit: string) => {
     if (unitMode === 'BOX') {
-      // 박스 모드: 환산 계수(umrezBox)로 나누기
-      // conversion이 0이거나 없으면 1로 나눔 (안전장치)
       const factor = conversion > 0 ? conversion : 1;
-      const boxes = val / factor;
-      
       return { 
-        // 소수점 1자리까지 표시 (깔끔하게)
-        value: boxes.toLocaleString(undefined, { maximumFractionDigits: 1 }), 
+        value: (val / factor).toLocaleString(undefined, { maximumFractionDigits: 1 }), 
         unit: 'BOX' 
       };
     }
-    // 기준 모드: 원래 값 그대로 (정수)
-    return { 
-      value: val.toLocaleString(), 
-      unit: baseUnit 
-    };
+    return { value: val.toLocaleString(), unit: baseUnit };
   };
 
   return (
@@ -67,7 +57,6 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
           alert={true} 
           tooltip="미납수량 × 정상단가 합계" 
         />
-        {/* 🚨 [수정] 툴팁 추가: 긴급 납품 기준 명시 */}
         <KpiCard 
           title="긴급 납품" 
           value={data.kpis.criticalDeliveryCount} 
@@ -100,7 +89,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       {/* 4. Table Section */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden mt-2">
         <div className="p-5 border-b border-neutral-200 flex justify-between items-center bg-white">
-          <h2 className="text-[16px] font-semibold text-neutral-900">📋 통합 S&OP 상세 현황 (Top 20 위험 항목)</h2>
+          {/* ✅ [수정] 명칭 변경: 위험 항목 -> 주요 관리 항목 */}
+          <h2 className="text-[16px] font-semibold text-neutral-900">📋 통합 S&OP 상세 현황 (Top 20 주요 관리 항목)</h2>
           <button className="text-xs text-neutral-500 flex items-center gap-1 hover:text-primary-blue">
             <Filter size={12} /> 필터
           </button>
@@ -113,11 +103,20 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700">제품명</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">미납금액(백만원)</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">
-                  {/* 헤더도 동적으로 바뀜 */}
                   재고 ({unitMode === 'BOX' ? 'BOX' : '기준'})
                 </th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">상태</th>
-                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">일평균 매출(백만원)</th>
+                {/* ✅ [수정] 툴팁 추가 및 수량 기준 명시 */}
+                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right group cursor-help">
+                  <div className="flex items-center justify-end gap-1">
+                    일평균 판매량
+                    <HelpCircle size={12} className="text-neutral-400" />
+                    {/* Tooltip */}
+                    <div className="absolute hidden group-hover:block right-4 mt-8 p-2 bg-gray-800 text-white text-xs rounded shadow-lg z-50 whitespace-nowrap font-normal">
+                      최근 60일 실적수량 ÷ 60
+                    </div>
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
@@ -126,12 +125,9 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 .slice(0, 20)
                 .map((item: IntegratedItem) => {
                   
-                  // ✅ [적용] 여기서 변환 함수 호출
-                  const displayStock = formatQty(
-                    item.inventory.totalStock, 
-                    item.umrezBox, 
-                    item.unit
-                  );
+                  const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
+                  // ✅ [수정] ADS 값 표시 (단위변환 적용)
+                  const displayAds = formatQty(item.inventory.ads, item.umrezBox, item.unit);
 
                   return (
                     <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
@@ -141,15 +137,22 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                         {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}
                       </td>
                       <td className="px-4 py-3 text-right text-neutral-700">
-                        {/* 변환된 값 출력 */}
                         {displayStock.value} 
                         <span className="text-[10px] text-neutral-400 ml-1">{displayStock.unit}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <StatusBadge status={item.inventory.status} />
+                        {/* ✅ [수정] 미납이 있으면 무조건 '미납 관리' 배지 표시 */}
+                        {item.totalUnfulfilledQty > 0 ? (
+                          <span className="px-2 py-1 rounded text-[11px] font-bold bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]">
+                            미납 관리
+                          </span>
+                        ) : (
+                          <StatusBadge status={item.inventory.status} />
+                        )}
                       </td>
-                      <td className="px-4 py-3 text-right text-neutral-500">
-                        {(item.inventory.ads / 1000000).toFixed(1)}
+                      {/* ✅ [수정] 계산된 수량 ADS 값 출력 */}
+                      <td className="px-4 py-3 text-right font-medium text-neutral-800">
+                        {displayAds.value} <span className="text-[10px] text-neutral-400 font-normal">{displayAds.unit}</span>
                       </td>
                     </tr>
                   );
@@ -162,8 +165,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   );
 }
 
-// --- UI Sub Components ---
-
+// Sub Components
 function KpiCard({ title, value, unit, type, tooltip }: any) {
   const styles: any = {
     brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },

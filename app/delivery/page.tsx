@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { ChevronLeft, ChevronRight, HelpCircle, Users, Clock } from 'lucide-react';
 import { IntegratedItem } from '@/types/analysis';
-import { useUiStore } from '@/store/ui-store'; // ✅ 추가
+import { useUiStore } from '@/store/ui-store';
 
 // WideRightSheet (800px)
 function WideRightSheet({ isOpen, onClose, title, children }: any) {
@@ -27,7 +27,7 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 
 export default function DeliveryPage() {
   const { data, isLoading } = useDashboardData();
-  const { unitMode } = useUiStore(); // ✅ 추가
+  const { unitMode } = useUiStore(); 
   
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
@@ -102,8 +102,6 @@ export default function DeliveryPage() {
                   const majorCause = causes.sort((a,b) => causes.filter(v => v===a).length - causes.filter(v => v===b).length).pop() || '기타';
                   const maxDelay = Math.max(...item.unfulfilledOrders.map(o => o.daysDelayed));
                   const rowNo = (currentPage - 1) * itemsPerPage + idx + 1;
-                  
-                  // 🚨 [변환]
                   const displayQty = formatQty(item.totalUnfulfilledQty, item.umrezBox, item.unit);
 
                   return (
@@ -157,7 +155,6 @@ export default function DeliveryPage() {
               <div className="grid grid-cols-3 gap-3 border-t border-neutral-100 pt-4">
                 <div>
                   <div className="text-xs text-neutral-500 mb-1">총 미납 수량</div>
-                  {/* 🚨 [변환] */}
                   <div className="font-bold text-neutral-800">
                     {formatQty(selectedProduct.totalUnfulfilledQty, selectedProduct.umrezBox, selectedProduct.unit).value}
                     <span className="text-xs font-normal text-neutral-400 ml-1">{formatQty(selectedProduct.totalUnfulfilledQty, selectedProduct.umrezBox, selectedProduct.unit).unit}</span>
@@ -165,14 +162,19 @@ export default function DeliveryPage() {
                 </div>
                 <div>
                   <div className="text-xs text-neutral-500 mb-1">현재 보유 재고</div>
-                  {/* 🚨 [변환] */}
                   <div className={`font-bold ${selectedProduct.inventory.totalStock === 0 ? 'text-red-500' : 'text-neutral-800'}`}>
                     {formatQty(selectedProduct.inventory.totalStock, selectedProduct.umrezBox, selectedProduct.unit).value}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-neutral-500 mb-1">판매 속도 (ADS)</div>
-                  <div className="font-bold text-blue-600">{Math.round(selectedProduct.inventory.ads / 1000000).toLocaleString()}백만원/일</div>
+                  {/* ✅ [수정] 수량 ADS 값 연동 및 단위 변환 적용 */}
+                  <div className="font-bold text-blue-600">
+                    {formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).value}
+                    <span className="text-xs font-normal text-neutral-400 ml-1">
+                      {formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).unit}/일
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -182,10 +184,10 @@ export default function DeliveryPage() {
               <div>
                 <h4 className="font-bold text-blue-900 text-sm mb-1">S&OP 인사이트</h4>
                 <p className="text-xs text-blue-700 leading-relaxed">
-                  현재 일평균 <strong>{Math.round(selectedProduct.inventory.ads / 1000000).toLocaleString()}백만원</strong> 어치가 팔리고 있습니다.<br/>
+                  현재 일평균 <strong>{formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).value}{formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).unit}</strong>가 팔리고 있습니다.<br/>
                   {selectedProduct.inventory.totalStock === 0 
                     ? "재고가 고갈되어 즉시 생산 투입이 필요합니다. 생산팀에 긴급 오더를 확인하세요." 
-                    : `현재 재고로 약 ${(selectedProduct.inventory.totalStock / (selectedProduct.totalReqQty / 30)).toFixed(1)}일 운영할 수 있습니다.`}
+                    : `현재 재고로 약 ${(selectedProduct.inventory.totalStock / (selectedProduct.inventory.ads || 1)).toFixed(1)}일 운영할 수 있습니다.`}
                 </p>
               </div>
             </div>
@@ -199,7 +201,6 @@ export default function DeliveryPage() {
                 {selectedProduct.unfulfilledOrders
                   .sort((a, b) => b.qty - a.qty) 
                   .map((order, idx) => {
-                    // 🚨 [변환]
                     const dQty = formatQty(order.qty, selectedProduct.umrezBox, selectedProduct.unit);
                     return (
                       <div key={idx} className="bg-white border border-neutral-200 rounded-lg p-4 shadow-sm hover:border-red-200 transition-colors">

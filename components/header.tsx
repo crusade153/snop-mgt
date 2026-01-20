@@ -7,10 +7,9 @@ import { useQueryClient } from '@tanstack/react-query';
 
 export default function Header() {
   const { startDate, endDate, setRange } = useDateStore();
-  const { unitMode, toggleUnitMode } = useUiStore();
+  const { unitMode, setUnitMode } = useUiStore(); // ✅ setUnitMode 사용
   const queryClient = useQueryClient();
 
-  // 조회 버튼 클릭 시 강제 데이터 갱신
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
   };
@@ -46,22 +45,35 @@ export default function Header() {
       </div>
 
       <div className="flex items-center gap-4">
-        <button 
-          onClick={toggleUnitMode}
-          className={`
-            flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors border
-            ${unitMode === 'BASE' 
-              ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' 
-              : 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100'
-            }
-          `}
-        >
-          {unitMode === 'BASE' ? (
-            <><Layers size={14}/> 기준 (EA/KG)</>
-          ) : (
-            <><Box size={14}/> 박스 (BOX)</>
-          )}
-        </button>
+        {/* ✅ [수정] 슬라이딩 세그먼트 컨트롤 (Radio Style Toggle) */}
+        <div className="relative bg-neutral-100 p-1 rounded-lg flex w-[220px]">
+          {/* 애니메이션되는 하얀 배경 (Slider) */}
+          <div 
+            className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-white rounded shadow-sm transition-all duration-300 ease-out border border-neutral-200/50 ${
+              unitMode === 'BOX' ? 'left-[calc(50%+2px)]' : 'left-1'
+            }`}
+          />
+
+          {/* 기준 단위 버튼 */}
+          <button 
+            onClick={() => setUnitMode('BASE')}
+            className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold transition-colors ${
+              unitMode === 'BASE' ? 'text-blue-700' : 'text-neutral-500 hover:text-neutral-700'
+            }`}
+          >
+            <Layers size={14} /> 기준 (EA/KG)
+          </button>
+
+          {/* 박스 단위 버튼 */}
+          <button 
+            onClick={() => setUnitMode('BOX')}
+            className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold transition-colors ${
+              unitMode === 'BOX' ? 'text-orange-700' : 'text-neutral-500 hover:text-neutral-700'
+            }`}
+          >
+            <Box size={14} /> 박스 (BOX)
+          </button>
+        </div>
 
         <div className="h-4 w-[1px] bg-neutral-200"></div>
 

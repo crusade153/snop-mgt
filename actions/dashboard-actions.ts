@@ -5,52 +5,49 @@ import { analyzeSnopData } from '@/lib/analysis';
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { unstable_cache } from 'next/cache';
 import { gzipSync, gunzipSync } from 'zlib';
+import { addMonths, format } from 'date-fns'; // ✅ 날짜 라이브러리 추가
 
 // 1. [내부 함수] 실제 BigQuery 조회
 async function fetchRawData(sDate: string, eDate: string) {
-  // 1. 납품(주문) 데이터 - SD_MARA 조인하여 단위 환산
-  // 🚨 수정사항: MD_MARA -> SD_MARA 로 테이블명 변경
+  
+  // ✅ [핵심] 생산 계획은 '미래' 데이터가 필요하므로 종료일을 6개월 뒤로 확장
+  const futureEnd = format(addMonths(new Date(), 6), 'yyyyMMdd');
+
+  // 1. 납품(주문) 데이터
   const orderQuery = `
     SELECT 
       A.VBELN, A.POSNR, A.MATNR, A.ARKTX, 
       A.NETWR, A.WAERK, A.VDATU, A.NAME1, A.KUNNR,
       
-      -- [핵심] 주문수량(KWMENG) 환산: 단위가 BOX면 곱하기, 아니면 그대로
       CASE 
         WHEN A.VRKME = 'BOX' AND M.MEINS <> 'BOX' THEN A.KWMENG * IFNULL(M.UMREZ_BOX, 1)
         ELSE A.KWMENG 
       END as KWMENG,
 
-      -- [핵심] 실납품수량(LFIMG) 환산
       CASE 
         WHEN A.VRKME = 'BOX' AND M.MEINS <> 'BOX' THEN IFNULL(A.LFIMG_LIPS, 0) * IFNULL(M.UMREZ_BOX, 1)
         ELSE IFNULL(A.LFIMG_LIPS, 0)
       END as LFIMG_LIPS,
 
-      -- [핵심] 기준 단위와 환산 계수 가져오기
       M.MEINS, 
       IFNULL(M.UMREZ_BOX, 1) as UMREZ_BOX
 
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
-    -- 🚨 테이블명 수정됨 (MD_MARA -> SD_MARA)
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M 
       ON A.MATNR = M.MATNR
-    WHERE A.VDATU BETWEEN '${sDate}' AND '${eDate}'
+    WHERE A.VDATU BETWEEN '${sDate}' AND '${eDate}' -- 주문은 선택 기간만 조회
   `;
   
-  // 2. 생산 계획 - SD_MARA 조인하여 단위 환산
-  // 🚨 수정사항: MD_MARA -> SD_MARA 로 테이블명 변경
+  // 2. 생산 계획
   const productionQuery = `
     SELECT 
       P.AUFNR, P.MATNR, P.MAKTX, P.GSTRP, P.WERKS,
       
-      -- [핵심] 생산계획(PSMNG) 환산
       CASE 
         WHEN P.MEINS = 'BOX' AND M.MEINS <> 'BOX' THEN P.PSMNG * IFNULL(M.UMREZ_BOX, 1)
         ELSE P.PSMNG
       END as PSMNG,
 
-      -- [핵심] 생산실적(LMNGA) 환산
       CASE 
         WHEN P.MEINS = 'BOX' AND M.MEINS <> 'BOX' THEN P.LMNGA * IFNULL(M.UMREZ_BOX, 1)
         ELSE P.LMNGA
@@ -60,18 +57,17 @@ async function fetchRawData(sDate: string, eDate: string) {
       IFNULL(M.UMREZ_BOX, 1) as UMREZ_BOX
 
     FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\` AS P
-    -- 🚨 테이블명 수정됨 (MD_MARA -> SD_MARA)
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M
       ON P.MATNR = M.MATNR
-    WHERE P.GSTRP BETWEEN '${sDate}' AND '${eDate}'
+    WHERE P.GSTRP BETWEEN '${sDate}' AND '${futureEnd}' -- ✅ [수정] 미래 계획까지 조회
   `;
 
-  // 3. 재고 (이미 V_MM_MCHB 뷰 안에 UMREZ_BOX가 있으므로 조인 불필요)
+  // 3. 재고
   const inventoryQuery = `
     SELECT 
       MATNR, MATNR_T, MEINS, LGOBE, VFDAT, 
-      CLABS, -- 재고는 이미 기본 단위로 관리됨
-      IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, -- 환산 계수
+      CLABS, 
+      IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
       remain_day, remain_rate, 
       PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
@@ -98,8 +94,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 
 // 2. [캐싱 대상] 분석 결과 생성 및 압축
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 캐시 키 버전 업데이트 (v11 - 테이블명 수정 반영)
-    const cacheKey = `dashboard-analysis-v11-${sDate}-${eDate}`;
+    // 캐시 키 업데이트 (v12 - 미래계획 반영)
+    const cacheKey = `dashboard-analysis-v12-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

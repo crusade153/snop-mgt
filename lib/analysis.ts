@@ -58,6 +58,10 @@ export function analyzeSnopData(
     console.error("Date parsing error:", e);
   }
 
+  // ✅ 조회 기간 필터용 문자열 (YYYYMMDD)
+  const filterStart = startDateStr.replace(/-/g, '');
+  const filterEnd = endDateStr.replace(/-/g, '');
+
   const velocityMap = calculateSalesVelocity(orders, daysDiff);
   
   const invAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>();
@@ -86,7 +90,7 @@ export function analyzeSnopData(
   let productSales = 0;
   let merchandiseSales = 0;
   const today = new Date();
-  const todayYmd = format(today, 'yyyyMMdd');
+  const todayYmd = format(today, 'yyyyMMdd'); // ✅ 오늘 날짜
 
   // 1. 주문 데이터 처리
   orders.forEach(order => {
@@ -195,14 +199,18 @@ export function analyzeSnopData(
         initializeItem(integratedMap, code, prod.MAKTX, invAggMap, velocityMap, prod.MEINS || 'EA', Number(prod.UMREZ_BOX || 1));
     }
     const item = integratedMap.get(code)!;
+    const dateStr = prod.GSTRP; // YYYYMMDD string
+
+    // (1) 조회 기간 내 데이터 -> KPI 통계용 (계획 vs 실적)
+    if (dateStr && dateStr >= filterStart && dateStr <= filterEnd) {
+      item.production.planQty += plan;
+      item.production.receivedQty += actual;
+    }
     
-    item.production.planQty += plan;
-    
-    if (prod.GSTRP && prod.GSTRP >= todayYmd) {
+    // (2) ✅ [핵심] 오늘 포함 미래 데이터 -> 재고 시뮬레이션용 (입고 예정)
+    if (dateStr && dateStr >= todayYmd) {
       item.production.futurePlanQty += plan;
     }
-
-    item.production.receivedQty += actual;
 
     let status: 'pending' | 'progress' | 'completed' | 'poor' = 'pending';
     const rate = plan > 0 ? (actual / plan) * 100 : 0;
@@ -211,13 +219,13 @@ export function analyzeSnopData(
     else if (actual > 0 && actual < plan) status = 'progress';
     else if (rate < 90 && plan > 0) status = 'poor';
 
-    let dateStr = prod.GSTRP;
-    if (prod.GSTRP && prod.GSTRP.length === 8) {
-      dateStr = `${prod.GSTRP.slice(0,4)}-${prod.GSTRP.slice(4,6)}-${prod.GSTRP.slice(6,8)}`;
+    let fmtDate = dateStr;
+    if (dateStr && dateStr.length === 8) {
+      fmtDate = `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
     }
 
     processedProductionList.push({
-      date: dateStr,
+      date: fmtDate,
       plant: prod.WERKS || '-',
       code: prod.MATNR,
       name: prod.MAKTX,
@@ -255,7 +263,7 @@ export function analyzeSnopData(
         else stockHealth.healthy++;
     }
 
-    // 🚨 [수정] ADS 계산 시 금액(totalSalesAmount)이 아닌 수량(totalActualQty)을 사용하도록 변경
+    // ✅ [ADS 수정 적용됨] 매출액(Amount) 대신 수량(Qty) 기준 계산
     item.inventory.ads = daysDiff > 0 ? (item.totalActualQty / daysDiff) : 0;
   });
 
@@ -360,7 +368,7 @@ function initializeItem(
     },
     production: {
       planQty: 0, receivedQty: 0, achievementRate: 0, lastReceivedDate: null,
-      futurePlanQty: 0 
+      futurePlanQty: 0 // ✅ [추가] 초기화
     },
     unfulfilledOrders: []
   });

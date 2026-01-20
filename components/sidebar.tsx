@@ -61,7 +61,7 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="p-4 border-t border-neutral-200 bg-neutral-50">
-        <div className="text-[10px] text-neutral-500 text-center">© 2026 Harim Holdings.<br/>All rights reserved.</div>
+        <div className="text-[10px] text-neutral-500 text-center">© 2026 Powered by Kdyu.<br/>All rights reserved.</div>
       </div>
     </aside>
   );

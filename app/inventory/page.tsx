@@ -12,7 +12,6 @@ import { format, subDays } from 'date-fns';
 import { IntegratedItem, DashboardAnalysis } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
 
-// 필터 타입 정의
 type FilterStatus = 'ALL' | 'GOOD' | 'SHORTAGE' | 'EXCESS' | 'WASTE';
 
 interface SimulatedItem extends IntegratedItem {
@@ -35,11 +34,9 @@ export default function InventoryPage() {
   // 1. ADS 기간 설정 (기본 60일)
   const [adsPeriod, setAdsPeriod] = useState<AdsPeriod>(60);
   
-  // ✅ [수정 1] 날짜 기간 필터 수정 (Method B: 오늘은 제외)
+  // 날짜 기간 필터 (Method B: 오늘은 제외)
   const today = new Date();
-  // 종료일: 어제 (오늘 - 1일)
   const endDate = format(subDays(today, 1), 'yyyy-MM-dd');
-  // 시작일: 어제로부터 N일 전 (오늘 - N일) -> 이렇게 하면 정확히 N일 간격이 됨 (예: 30일 선택 시 1일~30일 데이터)
   const startDate = format(subDays(today, adsPeriod), 'yyyy-MM-dd');
 
   // 2. 로컬 쿼리 실행
@@ -61,7 +58,6 @@ export default function InventoryPage() {
   const [minShelfLife, setMinShelfLife] = useState<number>(30); 
   const [searchTerm, setSearchTerm] = useState<string>('');
   
-  // ✅ [수정 2] KPI 필터링 상태 추가
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('ALL');
 
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -92,7 +88,8 @@ export default function InventoryPage() {
 
   // 4. 시뮬레이션 계산 로직
   const simulation = useMemo(() => {
-    if (!data) return { all: [], kpi: { good: 0, shortage: 0, excess: 0, risk: 0, totalWaste: 0 } };
+    // 🚨 [수정] 초기값에 wasteCount: 0 추가 (타입 에러 해결)
+    if (!data) return { all: [], kpi: { good: 0, shortage: 0, excess: 0, risk: 0, totalWaste: 0, wasteCount: 0 } };
 
     // 1차 필터: 검색어 & 재고 보유 여부
     let items = data.integratedArray.filter((item: IntegratedItem) => {
@@ -127,7 +124,7 @@ export default function InventoryPage() {
       };
     });
 
-    // KPI 계산 (전체 데이터 기준)
+    // KPI 계산
     const kpi = {
       shortage: simulatedItems.filter(i => i.sim.simStatus === 'shortage').length,
       excess: simulatedItems.filter(i => i.sim.simStatus === 'excess').length,
@@ -146,7 +143,6 @@ export default function InventoryPage() {
   const filteredAndPaginated = useMemo(() => {
     let list = simulation.all || [];
 
-    // ✅ [수정 2] 선택된 탭(KPI)에 따라 리스트 필터링
     if (filterStatus === 'GOOD') {
       list = list.filter(i => i.sim.simStatus === 'good');
     } else if (filterStatus === 'SHORTAGE') {
@@ -258,7 +254,6 @@ export default function InventoryPage() {
           active={filterStatus === 'EXCESS'}
           onClick={() => handleFilterClick('EXCESS')}
         />
-        {/* 가용불가 카드: 클릭 시 폐기재고가 있는 품목만 필터링 */}
         <SimulationKpi 
           title="가용불가(폐기위험)" 
           value={simulation.kpi.totalWaste.toLocaleString()} 
@@ -305,6 +300,7 @@ export default function InventoryPage() {
                 const dWaste = formatQty(item.sim.wasteStock, item.umrezBox, item.unit);
                 const dAds = formatQty(item.sim.currentADS, item.umrezBox, item.unit, 0); 
                 
+                // futurePlanQty 사용
                 const futurePlan = item.production.futurePlanQty ?? 0;
                 const dPlan = formatQty(futurePlan, item.umrezBox, item.unit);
 

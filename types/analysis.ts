@@ -61,8 +61,8 @@ export interface IntegratedItem {
   };
 
   production: {
-    planQty: number;          // 조회 기간 전체 계획
-    futurePlanQty: number;    // ✅ [추가] 오늘 이후 입고 예정 수량
+    planQty: number;          // 조회 기간(과거) 계획 합계
+    futurePlanQty: number;    // ✅ [추가] 오늘 이후 입고 예정 합계
     receivedQty: number;      
     achievementRate: number;  
     lastReceivedDate: string | null;

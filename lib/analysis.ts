@@ -8,7 +8,7 @@ const THRESHOLDS = {
   IMMINENT_DAYS: 30, 
   CRITICAL_DAYS: 60, 
   SAFETY_BUFFER_DAYS: 14, 
-  FIXED_ADS_DAYS: 60, // ✅ ADS 계산 기준일수 (60일 고정)
+  FIXED_ADS_DAYS: 60, // ADS 계산 기준일수 (60일 고정)
 };
 
 // 브랜드/카테고리 추론 헬퍼
@@ -21,7 +21,7 @@ function inferBrandInfo(name: string) {
   return { brand: '기타', category: '기타' };
 }
 
-// 재고 상태 판정 헬퍼
+// 재고 상태 판정 헬퍼 (날짜 기준)
 function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
   if (days <= 0) return 'disposed';                    
   if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
@@ -45,17 +45,27 @@ export function analyzeSnopData(
 
   // 1. 재고 데이터 집계 (배치별 합산)
   const invAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>();
+  
   inventoryList.forEach(inv => {
     if (!invAggMap.has(inv.MATNR)) {
       invAggMap.set(inv.MATNR, { totalStock: 0, batches: [], info: inv });
     }
     const target = invAggMap.get(inv.MATNR)!;
     target.totalStock += Number(inv.CLABS || 0);
+    
+    // 🛠️ [수정 1] 잔여율(remain_rate) 단위 변환 로직 강화
+    // DB값이 0.2, 0.002 등 비율(Ratio)로 들어오면 100을 곱해 퍼센트로 만듦
+    // 값이 20, 50 처럼 이미 퍼센트면 그대로 둠 (기준값을 10으로 잡음)
+    let rawRate = Number(inv.remain_rate || 0);
+    if (Math.abs(rawRate) <= 10) { 
+        rawRate = rawRate * 100; 
+    }
+
     target.batches.push({
       quantity: Number(inv.CLABS || 0),
       expirationDate: inv.VFDAT || '',
       remainDays: Number(inv.remain_day || 0),
-      remainRate: Number(inv.remain_rate || 0),
+      remainRate: rawRate, // 변환된 값 저장
       location: inv.LGOBE || ''
     });
   });
@@ -85,7 +95,6 @@ export function analyzeSnopData(
     const reqQty = Number(order.KWMENG || 0);
     const actualQty = Number(order.LFIMG_LIPS || 0);
     
-    // 미납 수량 계산 (요청 - 실적)
     const unfulfilled = Math.max(0, reqQty - actualQty);
 
     item.totalReqQty += reqQty;
@@ -106,7 +115,7 @@ export function analyzeSnopData(
 
         let cause = '재고 부족';
         if (item.inventory.totalStock > 0) {
-            cause = '당일 재고 부족'; // 재고는 있는데 출고가 안된 경우
+            cause = '당일 재고 부족'; 
         }
 
         let daysDelayed = 0;
@@ -130,7 +139,7 @@ export function analyzeSnopData(
         item.unfulfilledOrders.push(unfulfilledInfo);
     }
 
-    // 거래처 집계
+    // 거래처 집계 로직
     const custId = order.KUNNR || 'UNKNOWN';
     if (!customerMap.has(custId)) {
         customerMap.set(custId, {
@@ -175,12 +184,10 @@ export function analyzeSnopData(
     const item = integratedMap.get(code)!;
     const dateStr = prod.GSTRP; 
 
-    // 기간 내 데이터 통계
     if (dateStr && dateStr >= filterStart && dateStr <= filterEnd) {
       item.production.planQty += plan;
       item.production.receivedQty += actual;
     }
-    // 미래 입고 예정 (시뮬레이션용)
     if (dateStr && dateStr >= todayYmd) {
       item.production.futurePlanQty += plan;
     }
@@ -202,7 +209,7 @@ export function analyzeSnopData(
     });
   });
 
-  // 주문/생산이 없어도 재고가 있는 품목 추가
+  // 재고만 있는 품목 추가
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
       initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, val.info.MEINS, Number(val.info.UMREZ_BOX || 1));
@@ -222,13 +229,16 @@ export function analyzeSnopData(
     totalUnfulfilledValue += item.totalUnfulfilledValue;
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
-    // ✅ [수정] ADS 계산: (총 실적 수량 / 60일) 고정
-    // 수량(Quantity) 기준의 일평균 판매 지표입니다.
     item.inventory.ads = item.totalActualQty / THRESHOLDS.FIXED_ADS_DAYS;
 
-    // ✅ [수정] 상태 판정 로직 강화: 미납이 있으면 재고가 많아도 'Critical'로 간주하여 정보 일관성 확보
+    // 🛠️ [수정 2] 상태 판정 로직 버그 수정
+    // 1. 기본적으로 날짜 기반 상태(item.inventory.status)는 initializeItem에서 이미 설정됨 (getStocksStatus 함수 사용)
+    // 2. 미납이 발생하면 'Critical'로 격상하지만, 이미 'Disposed(폐기)' 상태라면 덮어쓰지 않음
     if (item.totalUnfulfilledQty > 0) {
-        item.inventory.status = 'critical'; 
+        // 현재 상태가 '폐기(disposed)'가 아닐 때만 'Critical'로 변경
+        if (item.inventory.status !== 'disposed') {
+            item.inventory.status = 'critical';
+        }
     }
 
     // 재고 건전성 카운팅
@@ -240,7 +250,6 @@ export function analyzeSnopData(
     }
   });
 
-  // 거래처 분석 결과 정리
   const customerStats = Array.from(customerMap.values()).map(c => {
       c.fulfillmentRate = c.orderCount > 0 ? (c.fulfilledCount / c.orderCount) * 100 : 0;
       c.topBoughtProducts = Array.from(c.boughtMap.values())
@@ -289,12 +298,15 @@ function initializeItem(
   
   let minRemaining = 9999;
   if (invData && invData.batches.length > 0) {
+    // 잔여일수가 가장 적은 배치를 기준으로 상태 판정
     minRemaining = Math.min(...invData.batches.map(b => b.remainDays));
   } else if (invData && invData.info.remain_day !== undefined) {
     minRemaining = Number(invData.info.remain_day);
   }
 
+  // 1차 상태 판정 (날짜 기준)
   const status = invData ? getStockStatus(minRemaining) : 'healthy';
+  
   let riskScore = 0;
   if (status === 'disposed') riskScore = 50;
   else if (status === 'imminent') riskScore = 100; 
@@ -322,7 +334,7 @@ function initializeItem(
       totalStock: invData?.totalStock || 0,
       usableStock: invData?.totalStock || 0,
       batches: invData?.batches || [],
-      status, // 초기 상태 (나중에 미납 여부에 따라 업데이트됨)
+      status, // 초기 상태 (날짜 기준)
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore,
       ads: 0,

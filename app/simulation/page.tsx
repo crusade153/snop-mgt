@@ -4,7 +4,9 @@ import { useState } from 'react';
 import { searchProducts, executeInventorySimulation } from '@/actions/simulation-actions';
 import InventoryBalanceChart from '@/components/charts/inventory-balance-chart';
 import { 
-  Search, Play, Calendar, AlertTriangle, CheckCircle, Package, Truck, ShoppingCart, RefreshCw, XCircle, Factory, ArrowRight 
+  Search, Play, Calendar, AlertTriangle, CheckCircle, 
+  Package, Truck, ShoppingCart, RefreshCw, XCircle, 
+  Factory, ArrowRight, ClipboardList 
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store'; 
 
@@ -82,7 +84,7 @@ export default function SimulationPage() {
           🧪 납품 가능 여부 시뮬레이션 (ATP Check)
         </h1>
         <p className="text-sm text-neutral-600 mt-1">
-          현재 재고와 생산 계획을 기반으로 공급 가능성을 진단합니다.
+          기수요(기존 주문)를 우선 차감한 후 공급 가능성을 진단합니다.
         </p>
       </div>
 
@@ -201,32 +203,38 @@ export default function SimulationPage() {
                   </h3>
                   <p className="text-sm opacity-90">
                     {result.isPossible 
-                      ? `요청하신 날짜(${targetDate})에 안정적으로 공급 가능합니다.` 
-                      : `죄송합니다. ${result.shortageDate}에 ${formatQty(result.shortageQty)}${unitMode === 'BOX' ? 'BOX' : 'EA'}가 부족할 것으로 예상됩니다.`}
+                      ? `요청하신 날짜(${targetDate})에 기수요를 제외하고도 공급 가능합니다.` 
+                      : `기수요 차감 후, ${result.shortageDate}에 ${formatQty(result.shortageQty)}${unitMode === 'BOX' ? 'BOX' : 'EA'}가 부족합니다.`}
                   </p>
                 </div>
               </div>
 
-              {/* (2) 요약 카드 */}
-              <div className="grid grid-cols-3 gap-4">
+              {/* (2) 요약 카드 (기수요 추가됨) */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Package size={14}/> 현재 유효 재고</div>
-                  <div className="text-xl font-bold">{formatQty(result.currentUsableStock)} <span className="text-sm font-normal text-neutral-400">{unitMode==='BOX'?'BOX':'EA'}</span></div>
-                  <div className="text-xs text-neutral-400">잔여 {minShelfLife}일 이상</div>
+                  <div className="text-xl font-bold">{formatQty(result.currentUsableStock)}</div>
+                  <div className="text-xs text-neutral-400 font-normal">{unitMode==='BOX'?'BOX':'EA'} (잔여 {minShelfLife}일↑)</div>
                 </div>
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Truck size={14}/> 미래 입고 예정</div>
                   <div className="text-xl font-bold text-blue-600">+{formatQty(result.totalProduction)}</div>
                   <div className="text-xs text-neutral-400">생산 계획 합계</div>
                 </div>
+                {/* 🚨 기수요 카드 추가 */}
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl">
+                  <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ClipboardList size={14}/> 기수요 (Existing)</div>
+                  <div className="text-xl font-bold text-orange-600">-{formatQty(result.committedDemand || 0)}</div>
+                  <div className="text-xs text-neutral-400">이미 잡힌 주문</div>
+                </div>
+                <div className="p-4 bg-white border border-neutral-200 rounded-xl bg-blue-50/50 border-blue-100">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ShoppingCart size={14}/> 신규 요청</div>
-                  <div className="text-xl font-bold text-red-600">-{formatQty(baseQty)}</div>
+                  <div className="text-xl font-bold text-neutral-900">-{formatQty(baseQty)}</div>
                   <div className="text-xs text-neutral-400">{targetDate} 출고</div>
                 </div>
               </div>
 
-              {/* (3) 상세 분석 영역: 차트 + 스케줄 리스트 */}
+              {/* (3) 상세 분석 영역: 차트 + 수불 리스트 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
                 {/* 왼쪽: 재고 추이 차트 */}
@@ -238,44 +246,74 @@ export default function SimulationPage() {
                     <InventoryBalanceChart timeline={result.timeline} />
                   </div>
                   <div className="text-center mt-4 text-xs text-neutral-500">
-                    <span className="text-red-500 font-bold">점선 아래(음수)</span> 영역은 결품 구간입니다.
+                    그래프가 <span className="text-red-500 font-bold">점선 아래(음수)</span>로 내려가면 결품입니다.
                   </div>
                 </div>
 
-                {/* 오른쪽: 입고 예정 스케줄 리스트 */}
+                {/* 오른쪽: 상세 수불 내역 (Transaction Log) */}
                 <div className="bg-white rounded-xl border border-neutral-200 shadow-sm flex flex-col overflow-hidden h-[400px]">
                   <div className="p-4 border-b border-neutral-100 bg-neutral-50">
                     <h3 className="font-bold text-neutral-800 text-sm flex items-center gap-2">
-                      <Truck size={16} className="text-blue-600"/> 입고 예정 일정
+                      <Truck size={16} className="text-blue-600"/> 상세 수불 내역
                     </h3>
                     <p className="text-[11px] text-neutral-500 mt-1">
-                      생산 계획에 따른 입고 수량 ({unitMode === 'BOX' ? 'BOX' : 'EA'})
+                      생산(+) 및 기수요/신규요청(-) 반영 내역
                     </p>
                   </div>
                   
                   <div className="flex-1 overflow-y-auto p-2">
-                    {/* 타임라인에서 생산(PRODUCTION) 이벤트만 필터링 */}
-                    {result.timeline.filter((e: any) => e.type === 'PRODUCTION').length > 0 ? (
+                    {/* timeline에서 STOCK(기초재고) 제외하고 생산/주문/신규요청만 필터링 */}
+                    {result.timeline.filter((e: any) => e.type !== 'STOCK').length > 0 ? (
                       <div className="space-y-2">
                         {result.timeline
-                          .filter((e: any) => e.type === 'PRODUCTION')
-                          .map((e: any, idx: number) => (
-                            <div key={idx} className="flex justify-between items-center p-3 bg-blue-50 border border-blue-100 rounded-lg">
-                              <div className="flex flex-col">
-                                <span className="text-xs font-bold text-blue-900">{e.date}</span>
-                                <span className="text-[10px] text-blue-500">생산 입고</span>
+                          .filter((e: any) => e.type !== 'STOCK')
+                          .map((e: any, idx: number) => {
+                            // 스타일 분기
+                            let boxClass = "";
+                            let label = "";
+                            let valueClass = "";
+                            let sign = "";
+
+                            if (e.type === 'PRODUCTION') {
+                                boxClass = "bg-blue-50 border-blue-100";
+                                label = "생산 입고";
+                                valueClass = "text-blue-700";
+                                sign = "+";
+                            } else if (e.type === 'EXISTING_ORDER') {
+                                boxClass = "bg-orange-50 border-orange-100";
+                                label = "기존 주문";
+                                valueClass = "text-orange-700";
+                                sign = ""; // 음수값으로 들어옴
+                            } else if (e.type === 'NEW_REQUEST') {
+                                boxClass = "bg-green-50 border-green-100 border-l-4 border-l-green-500";
+                                label = "신규 요청 (This)";
+                                valueClass = "text-green-700 font-bold";
+                                sign = ""; // 음수값
+                            }
+
+                            return (
+                              <div key={idx} className={`flex justify-between items-center p-3 border rounded-lg ${boxClass}`}>
+                                <div className="flex flex-col">
+                                  <span className="text-xs font-bold text-neutral-800">{e.date}</span>
+                                  <span className="text-[10px] text-neutral-500">{label}</span>
+                                </div>
+                                <div className="text-right">
+                                  <span className={`text-sm font-bold ${valueClass}`}>
+                                    {sign}{formatQty(e.qty)}
+                                  </span>
+                                  <div className="text-[10px] text-neutral-400">
+                                    잔고: {formatQty(e.balance)}
+                                  </div>
+                                </div>
                               </div>
-                              <div className="text-right">
-                                <span className="text-sm font-bold text-blue-700">+{formatQty(e.qty)}</span>
-                              </div>
-                            </div>
-                          ))
+                            );
+                          })
                         }
                       </div>
                     ) : (
                       <div className="h-full flex flex-col items-center justify-center text-neutral-400 gap-2">
                         <Calendar size={24} className="opacity-20"/>
-                        <span className="text-xs">예정된 입고가 없습니다.</span>
+                        <span className="text-xs">변동 내역이 없습니다.</span>
                       </div>
                     )}
                   </div>

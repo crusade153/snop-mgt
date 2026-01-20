@@ -21,12 +21,12 @@ function inferBrandInfo(name: string) {
   return { brand: '기타', category: '기타' };
 }
 
-// 재고 상태 판정 헬퍼 (날짜 기준)
+// 재고 상태 판정 헬퍼 (순수하게 날짜 기준으로만 판정)
 function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
   if (days <= 0) return 'disposed';                    
-  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
-  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
-  return 'healthy';                                    
+  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; // 30일 이하
+  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; // 60일 이하
+  return 'healthy';                                    // 그 외 양호
 }
 
 export function analyzeSnopData(
@@ -53,9 +53,7 @@ export function analyzeSnopData(
     const target = invAggMap.get(inv.MATNR)!;
     target.totalStock += Number(inv.CLABS || 0);
     
-    // 🛠️ [수정 1] 잔여율(remain_rate) 단위 변환 로직 강화
-    // DB값이 0.2, 0.002 등 비율(Ratio)로 들어오면 100을 곱해 퍼센트로 만듦
-    // 값이 20, 50 처럼 이미 퍼센트면 그대로 둠 (기준값을 10으로 잡음)
+    // 잔여율(remain_rate) 단위 보정
     let rawRate = Number(inv.remain_rate || 0);
     if (Math.abs(rawRate) <= 10) { 
         rawRate = rawRate * 100; 
@@ -65,7 +63,7 @@ export function analyzeSnopData(
       quantity: Number(inv.CLABS || 0),
       expirationDate: inv.VFDAT || '',
       remainDays: Number(inv.remain_day || 0),
-      remainRate: rawRate, // 변환된 값 저장
+      remainRate: rawRate, 
       location: inv.LGOBE || ''
     });
   });
@@ -139,7 +137,7 @@ export function analyzeSnopData(
         item.unfulfilledOrders.push(unfulfilledInfo);
     }
 
-    // 거래처 집계 로직
+    // 거래처 집계
     const custId = order.KUNNR || 'UNKNOWN';
     if (!customerMap.has(custId)) {
         customerMap.set(custId, {
@@ -223,25 +221,26 @@ export function analyzeSnopData(
   const stockHealth = { disposed: 0, imminent: 0, critical: 0, healthy: 0 };
 
   integratedArray.forEach(item => {
+    // 생산 달성률
     if (item.production.planQty > 0) {
         item.production.achievementRate = (item.production.receivedQty / item.production.planQty) * 100;
     }
+    
+    // 미납 금액 집계
     totalUnfulfilledValue += item.totalUnfulfilledValue;
+    
+    // 긴급 납품 카운트 (7일 이상 지연)
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
+    // ADS 계산
     item.inventory.ads = item.totalActualQty / THRESHOLDS.FIXED_ADS_DAYS;
 
-    // 🛠️ [수정 2] 상태 판정 로직 버그 수정
-    // 1. 기본적으로 날짜 기반 상태(item.inventory.status)는 initializeItem에서 이미 설정됨 (getStocksStatus 함수 사용)
-    // 2. 미납이 발생하면 'Critical'로 격상하지만, 이미 'Disposed(폐기)' 상태라면 덮어쓰지 않음
-    if (item.totalUnfulfilledQty > 0) {
-        // 현재 상태가 '폐기(disposed)'가 아닐 때만 'Critical'로 변경
-        if (item.inventory.status !== 'disposed') {
-            item.inventory.status = 'critical';
-        }
-    }
+    // 🚨 [수정] 핵심 로직 변경
+    // 기존에 존재하던 "미납 발생 시 재고 상태를 강제로 Critical로 변경" 하는 로직을 완전히 제거했습니다.
+    // 이제 item.inventory.status는 오직 initializeItem 함수에서 계산된 '유통기한 잔여일'에 의해서만 결정됩니다.
+    // 결과적으로 재고 현황 탭에는 잔여일수가 60일 이하인 품목만 정확히 분류됩니다.
 
-    // 재고 건전성 카운팅
+    // 재고 건전성 카운팅 (순수 유통기한 기준)
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
         else if (item.inventory.status === 'imminent') stockHealth.imminent++; 
@@ -296,15 +295,15 @@ function initializeItem(
 ) {
   const invData = invMap.get(code);
   
+  // 가장 짧은 소비기한 찾기
   let minRemaining = 9999;
   if (invData && invData.batches.length > 0) {
-    // 잔여일수가 가장 적은 배치를 기준으로 상태 판정
     minRemaining = Math.min(...invData.batches.map(b => b.remainDays));
   } else if (invData && invData.info.remain_day !== undefined) {
     minRemaining = Number(invData.info.remain_day);
   }
 
-  // 1차 상태 판정 (날짜 기준)
+  // 여기서 결정된 status가 최종 status가 됩니다 (중간에 변조되지 않음)
   const status = invData ? getStockStatus(minRemaining) : 'healthy';
   
   let riskScore = 0;
@@ -334,7 +333,7 @@ function initializeItem(
       totalStock: invData?.totalStock || 0,
       usableStock: invData?.totalStock || 0,
       batches: invData?.batches || [],
-      status, // 초기 상태 (날짜 기준)
+      status, // 초기 상태 (날짜 기준) - 변조되지 않음
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore,
       ads: 0,

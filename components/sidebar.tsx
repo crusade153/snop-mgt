@@ -9,7 +9,8 @@ import {
   Boxes, 
   BrainCircuit, 
   LineChart,
-  LogOut // 로그아웃 아이콘 추가
+  LogOut,
+  CalendarClock // ✅ 새 아이콘 추가
 } from 'lucide-react';
 
 const menuItems = [
@@ -21,30 +22,28 @@ const menuItems = [
   { name: '재고 분석', href: '/inventory', icon: Package },
   { name: '생산 분석', href: '/production', icon: Factory },
   { name: '수요 예측', href: '/forecast', icon: BrainCircuit },
-  { name: '시뮬레이션', href: '/simulation', icon: LineChart },
+  { name: '시뮬레이션 (ATP)', href: '/simulation', icon: LineChart },
+  // 🚨 [추가] S&OP 플래너 메뉴
+  { name: 'S&OP 플래너', href: '/snop', icon: CalendarClock },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
 
-  // Supabase 클라이언트
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
   const handleLogout = async () => {
-    // 1. 로그아웃 요청
     await supabase.auth.signOut();
-    // 2. 로그인 페이지로 강제 이동 (미들웨어가 다시 막을 것임)
     router.push('/login');
-    router.refresh(); // 상태 갱신
+    router.refresh();
   };
 
   return (
     <aside className="fixed left-0 top-0 bottom-0 z-50 flex flex-col w-[240px] bg-[#FAFAFA] border-r border-neutral-200">
-      {/* Brand Identity */}
       <div className="h-[60px] flex items-center px-6 border-b border-neutral-200 bg-white">
         <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <div className="w-8 h-8 rounded-full bg-[#E53935] flex items-center justify-center text-white font-bold text-xs">
@@ -57,7 +56,6 @@ export default function Sidebar() {
         </Link>
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
         <div className="px-3 py-2 text-xs font-bold text-neutral-500 uppercase tracking-wider">Menu</div>
         {menuItems.map((item) => {
@@ -75,7 +73,6 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Footer (Logout) */}
       <div className="p-4 border-t border-neutral-200 bg-neutral-50">
         <button 
           onClick={handleLogout}

@@ -6,7 +6,7 @@ import InventoryBalanceChart from '@/components/charts/inventory-balance-chart';
 import { 
   Search, Play, Calendar, AlertTriangle, CheckCircle, 
   Package, Truck, ShoppingCart, RefreshCw, XCircle, 
-  Factory, ArrowRight, ClipboardList 
+  Factory, ArrowRight, ClipboardList, Info 
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store'; 
 
@@ -17,6 +17,9 @@ export default function SimulationPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  
+  // ✅ [추가] 검색을 한 번이라도 시도했는지 체크
+  const [hasSearched, setHasSearched] = useState(false);
 
   // 2. 시뮬레이션 입력값 (기준 단위로 저장)
   const [baseQty, setBaseQty] = useState<number>(1000); // EA/KG 기준
@@ -49,6 +52,11 @@ export default function SimulationPage() {
 
   const handleSearch = async () => {
     if (!searchTerm) return;
+    
+    // ✅ [수정] 검색 시작 시 상태 업데이트
+    setHasSearched(true);
+    setSearchResults([]); // 기존 결과 초기화
+    
     const res = await searchProducts(searchTerm);
     setSearchResults(res);
   };
@@ -99,7 +107,10 @@ export default function SimulationPage() {
                 type="text" 
                 placeholder="제품명 입력 (예: 미식)" 
                 value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
+                onChange={e => {
+                  setSearchTerm(e.target.value);
+                  setHasSearched(false); // 검색어 변경 시 상태 초기화
+                }}
                 onKeyDown={e => e.key === 'Enter' && handleSearch()}
                 className="flex-1 p-2 text-sm border border-neutral-300 rounded-lg focus:outline-none focus:border-primary-blue"
               />
@@ -108,31 +119,46 @@ export default function SimulationPage() {
               </button>
             </div>
             
+            {/* ✅ [수정] 검색 결과 목록 */}
             {searchResults.length > 0 && !selectedProduct && (
-              <ul className="mt-2 border border-neutral-200 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+              <ul className="mt-2 border border-neutral-200 rounded-lg overflow-hidden max-h-40 overflow-y-auto bg-white shadow-sm z-10">
                 {searchResults.map((p, index) => (
                   <li 
                     key={`${p.MATNR}-${index}`} 
                     onClick={() => { setSelectedProduct(p); setSearchResults([]); }}
-                    className="p-2 text-sm hover:bg-blue-50 cursor-pointer border-b last:border-0"
+                    className="p-3 text-sm hover:bg-blue-50 cursor-pointer border-b last:border-0 flex justify-between items-center transition-colors"
                   >
-                    <div className="font-bold text-neutral-800">{p.MATNR_T}</div>
-                    <div className="text-xs text-neutral-400">{p.MATNR}</div>
+                    <div>
+                      <div className="font-bold text-neutral-800">{p.MATNR_T}</div>
+                      <div className="text-xs text-neutral-400 font-mono">{p.MATNR}</div>
+                    </div>
+                    <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">선택</div>
                   </li>
                 ))}
               </ul>
             )}
 
+            {/* ✅ [추가] 검색 결과가 없을 때 안내 메시지 */}
+            {hasSearched && searchResults.length === 0 && !selectedProduct && (
+              <div className="mt-2 p-4 text-center bg-neutral-50 border border-neutral-200 rounded-lg">
+                <div className="flex flex-col items-center gap-1 text-neutral-500">
+                  <AlertTriangle size={20} className="text-neutral-400 mb-1"/>
+                  <span className="text-sm font-bold">검색 결과가 없습니다.</span>
+                  <span className="text-xs">제품명이나 코드를 확인해주세요.</span>
+                </div>
+              </div>
+            )}
+
             {selectedProduct && (
-              <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center">
+              <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center animate-in fade-in zoom-in-95 duration-200">
                 <div>
-                  <div className="text-xs text-blue-600 font-bold">선택됨</div>
+                  <div className="text-xs text-blue-600 font-bold mb-0.5">선택됨</div>
                   <div className="text-sm font-bold text-neutral-800">{selectedProduct.MATNR_T}</div>
                   <div className="text-[10px] text-neutral-500 mt-1">
                     기준: {selectedProduct.MEINS} | 박스입수: {selectedProduct.UMREZ_BOX}
                   </div>
                 </div>
-                <button onClick={() => setSelectedProduct(null)} className="text-xs text-neutral-400 underline">변경</button>
+                <button onClick={() => setSelectedProduct(null)} className="text-xs text-neutral-400 hover:text-neutral-600 underline">변경</button>
               </div>
             )}
           </div>
@@ -146,7 +172,7 @@ export default function SimulationPage() {
                 type="number" 
                 value={minShelfLife}
                 onChange={e => setMinShelfLife(Number(e.target.value))}
-                className="w-16 p-1 text-center font-bold border border-neutral-300 rounded"
+                className="w-16 p-1 text-center font-bold border border-neutral-300 rounded focus:outline-none focus:border-primary-blue"
               />
               <span className="text-sm text-neutral-600">일 이상</span>
             </div>
@@ -161,7 +187,7 @@ export default function SimulationPage() {
                   type="date" 
                   value={targetDate}
                   onChange={e => setTargetDate(e.target.value)}
-                  className="w-full p-2 text-sm border border-neutral-300 rounded-lg"
+                  className="w-full p-2 text-sm border border-neutral-300 rounded-lg focus:outline-none focus:border-primary-blue cursor-pointer"
                 />
               </div>
               <div>
@@ -172,7 +198,7 @@ export default function SimulationPage() {
                   type="number" 
                   value={unitMode === 'BOX' ? baseQty / (selectedProduct?.UMREZ_BOX || 1) : baseQty}
                   onChange={handleQtyChange}
-                  className="w-full p-2 text-sm font-bold border border-neutral-300 rounded-lg text-primary-blue"
+                  className="w-full p-2 text-sm font-bold border border-neutral-300 rounded-lg text-primary-blue focus:outline-none focus:border-primary-blue"
                 />
               </div>
             </div>
@@ -181,7 +207,7 @@ export default function SimulationPage() {
           <button 
             onClick={handleRun}
             disabled={!selectedProduct || loading}
-            className="w-full bg-neutral-900 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-neutral-800 transition-all disabled:opacity-50"
+            className="w-full bg-neutral-900 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-neutral-800 transition-all disabled:opacity-50 shadow-md"
           >
             {loading ? '계산 중...' : <><Play size={16} /> 가능 여부 확인</>}
           </button>
@@ -190,7 +216,7 @@ export default function SimulationPage() {
         {/* 2. 결과 리포트 패널 (우측) */}
         <div className="lg:col-span-2">
           {result ? (
-            <div className="space-y-6">
+            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
               
               {/* (1) 판정 배너 */}
               <div className={`p-6 rounded-xl border-l-8 shadow-sm flex items-start gap-4 ${
@@ -211,23 +237,23 @@ export default function SimulationPage() {
 
               {/* (2) 요약 카드 (기수요 추가됨) */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-white border border-neutral-200 rounded-xl">
+                <div className="p-4 bg-white border border-neutral-200 rounded-xl shadow-sm">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Package size={14}/> 현재 유효 재고</div>
                   <div className="text-xl font-bold">{formatQty(result.currentUsableStock)}</div>
                   <div className="text-xs text-neutral-400 font-normal">{unitMode==='BOX'?'BOX':'EA'} (잔여 {minShelfLife}일↑)</div>
                 </div>
-                <div className="p-4 bg-white border border-neutral-200 rounded-xl">
+                <div className="p-4 bg-white border border-neutral-200 rounded-xl shadow-sm">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Truck size={14}/> 미래 입고 예정</div>
                   <div className="text-xl font-bold text-blue-600">+{formatQty(result.totalProduction)}</div>
                   <div className="text-xs text-neutral-400">생산 계획 합계</div>
                 </div>
                 {/* 🚨 기수요 카드 추가 */}
-                <div className="p-4 bg-white border border-neutral-200 rounded-xl">
+                <div className="p-4 bg-white border border-neutral-200 rounded-xl shadow-sm">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ClipboardList size={14}/> 기수요 (Existing)</div>
                   <div className="text-xl font-bold text-orange-600">-{formatQty(result.committedDemand || 0)}</div>
                   <div className="text-xs text-neutral-400">이미 잡힌 주문</div>
                 </div>
-                <div className="p-4 bg-white border border-neutral-200 rounded-xl bg-blue-50/50 border-blue-100">
+                <div className="p-4 bg-white border border-neutral-200 rounded-xl bg-blue-50/50 border-blue-100 shadow-sm">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ShoppingCart size={14}/> 신규 요청</div>
                   <div className="text-xl font-bold text-neutral-900">-{formatQty(baseQty)}</div>
                   <div className="text-xs text-neutral-400">{targetDate} 출고</div>
@@ -330,9 +356,9 @@ export default function SimulationPage() {
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center bg-neutral-50 rounded-xl border border-dashed border-neutral-300 text-neutral-400 min-h-[400px]">
-              <Package size={48} className="text-neutral-200 mb-4" />
-              <p>좌측에서 제품과 조건을 입력하고</p>
-              <p><strong>가능 여부 확인</strong> 버튼을 눌러주세요.</p>
+              <Package size={48} className="text-neutral-200 mb-4 opacity-50" />
+              <p className="text-neutral-600 font-medium">시뮬레이션을 시작해볼까요?</p>
+              <p className="text-sm mt-1">좌측 패널에서 <strong>제품과 조건</strong>을 입력하고 실행해주세요.</p>
             </div>
           )}
         </div>

@@ -5,8 +5,7 @@ import { searchProducts, executeInventorySimulation } from '@/actions/simulation
 import InventoryBalanceChart from '@/components/charts/inventory-balance-chart';
 import { 
   Search, Play, Calendar, AlertTriangle, CheckCircle, 
-  Package, Truck, ShoppingCart, RefreshCw, XCircle, 
-  Factory, ArrowRight, ClipboardList, Info 
+  Package, Truck, ShoppingCart, RefreshCw, AlertCircle // ✅ AlertCircle 추가
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store'; 
 
@@ -17,8 +16,6 @@ export default function SimulationPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  
-  // ✅ [추가] 검색을 한 번이라도 시도했는지 체크
   const [hasSearched, setHasSearched] = useState(false);
 
   // 2. 시뮬레이션 입력값 (기준 단위로 저장)
@@ -52,11 +49,8 @@ export default function SimulationPage() {
 
   const handleSearch = async () => {
     if (!searchTerm) return;
-    
-    // ✅ [수정] 검색 시작 시 상태 업데이트
     setHasSearched(true);
-    setSearchResults([]); // 기존 결과 초기화
-    
+    setSearchResults([]); 
     const res = await searchProducts(searchTerm);
     setSearchResults(res);
   };
@@ -109,7 +103,7 @@ export default function SimulationPage() {
                 value={searchTerm}
                 onChange={e => {
                   setSearchTerm(e.target.value);
-                  setHasSearched(false); // 검색어 변경 시 상태 초기화
+                  setHasSearched(false); 
                 }}
                 onKeyDown={e => e.key === 'Enter' && handleSearch()}
                 className="flex-1 p-2 text-sm border border-neutral-300 rounded-lg focus:outline-none focus:border-primary-blue"
@@ -119,7 +113,6 @@ export default function SimulationPage() {
               </button>
             </div>
             
-            {/* ✅ [수정] 검색 결과 목록 */}
             {searchResults.length > 0 && !selectedProduct && (
               <ul className="mt-2 border border-neutral-200 rounded-lg overflow-hidden max-h-40 overflow-y-auto bg-white shadow-sm z-10">
                 {searchResults.map((p, index) => (
@@ -138,7 +131,6 @@ export default function SimulationPage() {
               </ul>
             )}
 
-            {/* ✅ [추가] 검색 결과가 없을 때 안내 메시지 */}
             {hasSearched && searchResults.length === 0 && !selectedProduct && (
               <div className="mt-2 p-4 text-center bg-neutral-50 border border-neutral-200 rounded-lg">
                 <div className="flex flex-col items-center gap-1 text-neutral-500">
@@ -218,6 +210,50 @@ export default function SimulationPage() {
           {result ? (
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
               
+              {/* 🚨 [신규 기능] 생산 실적 미마감 알림 배너 */}
+              {result.missedProduction && result.missedProduction.length > 0 && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-start gap-3 shadow-sm">
+                  <div className="bg-orange-100 p-2 rounded-full shrink-0">
+                    <AlertCircle size={20} className="text-orange-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-orange-800 font-bold text-sm flex items-center gap-2 mb-1">
+                      생산 실적 미마감 건이 발견되었습니다. (재고 미반영)
+                    </h4>
+                    <p className="text-xs text-orange-600 mb-3 leading-relaxed">
+                      이번 달 생산 계획이 있으나 실적 처리가 되지 않아 ATP 계산에서 제외되었습니다.<br/>
+                      <strong>실제 생산 여부를 생산팀에 확인해주세요.</strong>
+                    </p>
+                    
+                    {/* 미마감 리스트 테이블 */}
+                    <div className="bg-white border border-orange-100 rounded-lg overflow-hidden">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-orange-50 text-orange-700 font-medium">
+                          <tr>
+                            <th className="px-3 py-2">계획일자</th>
+                            <th className="px-3 py-2 text-right">미마감 수량</th>
+                            <th className="px-3 py-2 text-center">상태</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-orange-50">
+                          {result.missedProduction.map((item: any, idx: number) => (
+                            <tr key={idx}>
+                              <td className="px-3 py-2 text-neutral-600 font-mono">{item.date}</td>
+                              <td className="px-3 py-2 text-right font-bold text-orange-600">
+                                {formatQty(item.qty)} {unitMode === 'BOX' ? 'BOX' : 'EA'}
+                              </td>
+                              <td className="px-3 py-2 text-center text-neutral-400">
+                                확인 필요
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* (1) 판정 배너 */}
               <div className={`p-6 rounded-xl border-l-8 shadow-sm flex items-start gap-4 ${
                 result.isPossible ? 'bg-green-50 border-green-500 text-green-900' : 'bg-red-50 border-red-500 text-red-900'
@@ -235,7 +271,7 @@ export default function SimulationPage() {
                 </div>
               </div>
 
-              {/* (2) 요약 카드 (기수요 추가됨) */}
+              {/* (2) 요약 카드 */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl shadow-sm">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Package size={14}/> 현재 유효 재고</div>
@@ -247,9 +283,8 @@ export default function SimulationPage() {
                   <div className="text-xl font-bold text-blue-600">+{formatQty(result.totalProduction)}</div>
                   <div className="text-xs text-neutral-400">생산 계획 합계</div>
                 </div>
-                {/* 🚨 기수요 카드 추가 */}
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl shadow-sm">
-                  <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ClipboardList size={14}/> 기수요 (Existing)</div>
+                  <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><ShoppingCart size={14}/> 기수요 (Existing)</div>
                   <div className="text-xl font-bold text-orange-600">-{formatQty(result.committedDemand || 0)}</div>
                   <div className="text-xs text-neutral-400">이미 잡힌 주문</div>
                 </div>
@@ -260,7 +295,7 @@ export default function SimulationPage() {
                 </div>
               </div>
 
-              {/* (3) 상세 분석 영역: 차트 + 수불 리스트 */}
+              {/* (3) 상세 분석 영역 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
                 {/* 왼쪽: 재고 추이 차트 */}
@@ -276,7 +311,7 @@ export default function SimulationPage() {
                   </div>
                 </div>
 
-                {/* 오른쪽: 상세 수불 내역 (Transaction Log) */}
+                {/* 오른쪽: 상세 수불 내역 */}
                 <div className="bg-white rounded-xl border border-neutral-200 shadow-sm flex flex-col overflow-hidden h-[400px]">
                   <div className="p-4 border-b border-neutral-100 bg-neutral-50">
                     <h3 className="font-bold text-neutral-800 text-sm flex items-center gap-2">
@@ -288,13 +323,11 @@ export default function SimulationPage() {
                   </div>
                   
                   <div className="flex-1 overflow-y-auto p-2">
-                    {/* timeline에서 STOCK(기초재고) 제외하고 생산/주문/신규요청만 필터링 */}
                     {result.timeline.filter((e: any) => e.type !== 'STOCK').length > 0 ? (
                       <div className="space-y-2">
                         {result.timeline
                           .filter((e: any) => e.type !== 'STOCK')
                           .map((e: any, idx: number) => {
-                            // 스타일 분기
                             let boxClass = "";
                             let label = "";
                             let valueClass = "";
@@ -309,12 +342,12 @@ export default function SimulationPage() {
                                 boxClass = "bg-orange-50 border-orange-100";
                                 label = "기존 주문";
                                 valueClass = "text-orange-700";
-                                sign = ""; // 음수값으로 들어옴
+                                sign = ""; 
                             } else if (e.type === 'NEW_REQUEST') {
                                 boxClass = "bg-green-50 border-green-100 border-l-4 border-l-green-500";
                                 label = "신규 요청 (This)";
                                 valueClass = "text-green-700 font-bold";
-                                sign = ""; // 음수값
+                                sign = ""; 
                             }
 
                             return (

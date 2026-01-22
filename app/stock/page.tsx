@@ -2,19 +2,20 @@
 
 import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Search, Calendar, ChevronLeft, ChevronRight, Layers, Percent } from 'lucide-react';
+import { Search, Calendar, ChevronLeft, ChevronRight, Percent, Eye, EyeOff } from 'lucide-react';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
 
 type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed';
-type ViewMode = 'DAYS' | 'RATE'; // 뷰 모드 타입 정의
+type ViewMode = 'DAYS' | 'RATE'; 
 
 export default function StockStatusPage() {
   const { data, isLoading } = useDashboardData();
   const { unitMode } = useUiStore(); 
 
   const [activeTab, setActiveTab] = useState<TabType>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('DAYS'); // 기본은 일수 기준(기존)
+  const [viewMode, setViewMode] = useState<ViewMode>('DAYS'); 
+  const [showHiddenStock, setShowHiddenStock] = useState(false); // ✅ [추가] 숨은 재고 보기 토글
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
@@ -22,7 +23,11 @@ export default function StockStatusPage() {
   // 필터링 로직
   const filteredData = useMemo(() => {
     if (!data) return [];
-    let items = data.integratedArray.filter((item: IntegratedItem) => item.inventory.totalStock > 0);
+    
+    // 가용재고 또는 품질재고가 있는 항목 필터링
+    let items = data.integratedArray.filter((item: IntegratedItem) => 
+      item.inventory.totalStock > 0 || (showHiddenStock && item.inventory.qualityStock > 0)
+    );
     
     // 상태 탭 필터
     if (activeTab !== 'all') {
@@ -38,12 +43,10 @@ export default function StockStatusPage() {
       );
     }
 
-    // 정렬: 잔여율 뷰일 때는 잔여율이 낮은 순(risk), 일수 뷰일 때는 일수 적은 순
     if (viewMode === 'RATE') {
-        // 가장 낮은 잔여율을 가진 배치가 있는 순서대로 정렬
         items.sort((a, b) => {
-            const minRateA = Math.min(...a.inventory.batches.map(bt => bt.remainRate));
-            const minRateB = Math.min(...b.inventory.batches.map(bt => bt.remainRate));
+            const minRateA = a.inventory.batches.length > 0 ? Math.min(...a.inventory.batches.map(bt => bt.remainRate)) : 999;
+            const minRateB = b.inventory.batches.length > 0 ? Math.min(...b.inventory.batches.map(bt => bt.remainRate)) : 999;
             return minRateA - minRateB;
         });
     } else {
@@ -51,7 +54,7 @@ export default function StockStatusPage() {
     }
     
     return items;
-  }, [data, activeTab, searchTerm, viewMode]);
+  }, [data, activeTab, searchTerm, viewMode, showHiddenStock]);
 
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
@@ -63,7 +66,6 @@ export default function StockStatusPage() {
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
-  // Helper: 단위 변환
   const formatQty = (val: number, conversion: number, baseUnit: string) => {
     if (unitMode === 'BOX') {
       const boxes = val / (conversion > 0 ? conversion : 1);
@@ -75,16 +77,8 @@ export default function StockStatusPage() {
     return { value: val.toLocaleString(), unit: baseUnit };
   };
 
-  // Helper: 잔여율 구간별 수량 집계 함수
   const calculateRateBuckets = (batches: InventoryBatch[]) => {
-    const buckets = {
-        under50: 0,   // ~50%
-        r50_70: 0,    // 50~70%
-        r70_75: 0,    // 70~75%
-        r75_85: 0,    // 75~85%
-        over85: 0     // 85%~
-    };
-
+    const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
     batches.forEach(b => {
         const r = b.remainRate;
         if (r < 50) buckets.under50 += b.quantity;
@@ -93,7 +87,6 @@ export default function StockStatusPage() {
         else if (r < 85) buckets.r75_85 += b.quantity;
         else buckets.over85 += b.quantity;
     });
-
     return buckets;
   };
 
@@ -109,26 +102,40 @@ export default function StockStatusPage() {
             </p>
         </div>
         
-        {/* 뷰 모드 전환 토글 */}
-        <div className="flex bg-neutral-100 p-1 rounded-lg border border-neutral-200">
+        <div className="flex gap-2">
+            {/* ✅ [추가] 숨은 재고 토글 버튼 */}
             <button 
-                onClick={() => setViewMode('DAYS')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'DAYS' ? 'bg-white shadow text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}
+                onClick={() => setShowHiddenStock(!showHiddenStock)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all border ${
+                showHiddenStock 
+                    ? 'bg-purple-50 text-purple-700 border-purple-200' 
+                    : 'bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50'
+                }`}
             >
-                <Calendar size={14}/> 유통기한 기준
+                {showHiddenStock ? <EyeOff size={14}/> : <Eye size={14}/>}
+                {showHiddenStock ? '품질재고 숨기기' : '숨은 재고(품질) 보기'}
             </button>
-            <button 
-                onClick={() => setViewMode('RATE')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'RATE' ? 'bg-white shadow text-blue-700' : 'text-neutral-500 hover:text-neutral-700'}`}
-            >
-                <Percent size={14}/> 잔여율 구간 기준
-            </button>
+
+            <div className="flex bg-neutral-100 p-1 rounded-lg border border-neutral-200">
+                <button 
+                    onClick={() => setViewMode('DAYS')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'DAYS' ? 'bg-white shadow text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}
+                >
+                    <Calendar size={14}/> 유통기한 기준
+                </button>
+                <button 
+                    onClick={() => setViewMode('RATE')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'RATE' ? 'bg-white shadow text-blue-700' : 'text-neutral-500 hover:text-neutral-700'}`}
+                >
+                    <Percent size={14}/> 잔여율 구간 기준
+                </button>
+            </div>
         </div>
       </div>
 
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
-          <TabButton label="전체" count={data.integratedArray.filter((i: IntegratedItem)=>i.inventory.totalStock>0).length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
+          <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
           <TabButton label="양호" count={data.stockHealth.healthy} active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
           <TabButton label="긴급 (60일↓)" count={data.stockHealth.critical} active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
           <TabButton label="임박 (30일↓)" count={data.stockHealth.imminent} active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
@@ -155,12 +162,18 @@ export default function StockStatusPage() {
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-12 text-center">No</th>
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-24 text-center">상태</th>
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-[25%]">제품명</th>
-                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right w-24">
-                  총 재고
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right w-32">
+                  총 재고 (가용)
                 </th>
                 
+                {/* ✅ [추가] 숨은 재고 헤더 (토글 시 등장) */}
+                {showHiddenStock && (
+                    <th className="px-4 py-3 border-b border-neutral-200 font-bold text-purple-700 text-right w-28 bg-purple-50">
+                        품질대기
+                    </th>
+                )}
+                
                 {viewMode === 'DAYS' ? (
-                    // 기존 유통기한 뷰 컬럼
                     <>
                         <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-center">단위</th>
                         <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-center">소비기한 (최단)</th>
@@ -168,7 +181,6 @@ export default function StockStatusPage() {
                         <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">잔여율(최단)</th>
                     </>
                 ) : (
-                    // 신규 잔여율 구간 뷰 컬럼
                     <>
                         <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#C62828] text-right bg-red-50/50">50% 미만</th>
                         <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#E65100] text-right bg-orange-50/50">50~70%</th>
@@ -182,14 +194,15 @@ export default function StockStatusPage() {
             <tbody className="divide-y divide-neutral-200">
               {paginatedItems.map((item: IntegratedItem, idx: number) => {
                 const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
+                
+                // ✅ [추가] 품질 재고 데이터 포맷팅
+                const qualityStockVal = item.inventory.qualityStock || 0;
+                const displayQuality = formatQty(qualityStockVal, item.umrezBox, item.unit);
+
                 const worstBatch = item.inventory.batches.sort((a, b) => a.remainDays - b.remainDays)[0];
                 const expiryDate = worstBatch ? worstBatch.expirationDate : '-';
                 const remainRate = worstBatch ? worstBatch.remainRate : 0;
-                
-                // 잔여율 구간 계산
                 const buckets = calculateRateBuckets(item.inventory.batches);
-
-                // 단위 표시용 (구간별 숫자에 단위 붙이기 위함)
                 const unitLabel = displayStock.unit;
 
                 return (
@@ -200,9 +213,23 @@ export default function StockStatusPage() {
                         <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
                         <div className="text-[11px] text-neutral-400 font-mono">{item.code}</div>
                     </td>
+                    
                     <td className="px-4 py-3 text-right font-bold text-neutral-800 border-r border-neutral-100">
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-400">{unitLabel}</span>
+                      {/* 숨김 상태일 때 품질재고 존재 여부 힌트 */}
+                      {!showHiddenStock && qualityStockVal > 0 && (
+                        <div className="text-[9px] text-purple-500 mt-0.5 flex justify-end items-center gap-0.5 font-normal">
+                          +품질 {displayQuality.value}
+                        </div>
+                      )}
                     </td>
+
+                    {/* ✅ [추가] 숨은 재고 셀 (토글 시 등장) */}
+                    {showHiddenStock && (
+                        <td className="px-4 py-3 text-right font-bold text-purple-700 bg-purple-50/30 border-r border-purple-100">
+                            {qualityStockVal > 0 ? displayQuality.value : '-'}
+                        </td>
+                    )}
 
                     {viewMode === 'DAYS' ? (
                         <>
@@ -217,23 +244,18 @@ export default function StockStatusPage() {
                         </>
                     ) : (
                         <>
-                            {/* 50% 미만 (위험) */}
                             <td className="px-2 py-3 text-right text-[#C62828] font-bold bg-red-50/30">
                                 {buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}
                             </td>
-                            {/* 50~70% (주의) */}
                             <td className="px-2 py-3 text-right text-[#E65100] font-medium bg-orange-50/30">
                                 {buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}
                             </td>
-                            {/* 70~75% (경계) */}
                             <td className="px-2 py-3 text-right text-[#F57F17] font-medium bg-yellow-50/30">
                                 {buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}
                             </td>
-                            {/* 75~85% (안정) */}
                             <td className="px-2 py-3 text-right text-[#1565C0] font-medium bg-blue-50/30">
                                 {buckets.r75_85 > 0 ? formatQty(buckets.r75_85, item.umrezBox, item.unit).value : '-'}
                             </td>
-                            {/* 85% 이상 (최상) */}
                             <td className="px-2 py-3 text-right text-[#2E7D32] font-medium bg-green-50/30">
                                 {buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).value : '-'}
                             </td>
@@ -242,7 +264,7 @@ export default function StockStatusPage() {
                   </tr>
                 );
               })}
-              {paginatedItems.length === 0 && (<tr><td colSpan={viewMode === 'DAYS' ? 8 : 9} className="p-10 text-center text-neutral-400">검색된 재고가 없습니다.</td></tr>)}
+              {paginatedItems.length === 0 && (<tr><td colSpan={viewMode === 'DAYS' ? (showHiddenStock ? 9 : 8) : (showHiddenStock ? 10 : 9)} className="p-10 text-center text-neutral-400">검색된 재고가 없습니다.</td></tr>)}
             </tbody>
           </table>
         </div>

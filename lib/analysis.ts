@@ -8,7 +8,7 @@ const THRESHOLDS = {
   IMMINENT_DAYS: 30, 
   CRITICAL_DAYS: 60, 
   SAFETY_BUFFER_DAYS: 14, 
-  FIXED_ADS_DAYS: 60, // ADS 계산 기준일수 (60일 고정)
+  FIXED_ADS_DAYS: 60, 
 };
 
 // 브랜드/카테고리 추론 헬퍼
@@ -21,12 +21,12 @@ function inferBrandInfo(name: string) {
   return { brand: '기타', category: '기타' };
 }
 
-// 재고 상태 판정 헬퍼 (순수하게 날짜 기준으로만 판정)
+// 재고 상태 판정 헬퍼
 function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
   if (days <= 0) return 'disposed';                    
-  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; // 30일 이하
-  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; // 60일 이하
-  return 'healthy';                                    // 그 외 양호
+  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
+  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
+  return 'healthy';                                    
 }
 
 export function analyzeSnopData(
@@ -37,21 +37,21 @@ export function analyzeSnopData(
   endDateStr: string
 ): DashboardAnalysis {
   
-  // 조회 기간 필터용 문자열 (YYYYMMDD)
   const filterStart = startDateStr.replace(/-/g, '');
   const filterEnd = endDateStr.replace(/-/g, '');
   const today = new Date();
   const todayYmd = format(today, 'yyyyMMdd');
 
-  // 1. 재고 데이터 집계 (배치별 합산)
-  const invAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>();
+  // 1. 재고 데이터 집계 (배치별 합산 & 품질재고 합산)
+  const invAggMap = new Map<string, { totalStock: number, qualityStock: number, batches: InventoryBatch[], info: SapInventory }>();
   
   inventoryList.forEach(inv => {
     if (!invAggMap.has(inv.MATNR)) {
-      invAggMap.set(inv.MATNR, { totalStock: 0, batches: [], info: inv });
+      invAggMap.set(inv.MATNR, { totalStock: 0, qualityStock: 0, batches: [], info: inv });
     }
     const target = invAggMap.get(inv.MATNR)!;
     target.totalStock += Number(inv.CLABS || 0);
+    target.qualityStock += Number(inv.CINSM || 0); // ✅ [추가] 품질 재고 합산
     
     // 잔여율(remain_rate) 단위 보정
     let rawRate = Number(inv.remain_rate || 0);
@@ -59,18 +59,20 @@ export function analyzeSnopData(
         rawRate = rawRate * 100; 
     }
 
-    target.batches.push({
-      quantity: Number(inv.CLABS || 0),
-      expirationDate: inv.VFDAT || '',
-      remainDays: Number(inv.remain_day || 0),
-      remainRate: rawRate, 
-      location: inv.LGOBE || ''
-    });
+    // 배치 정보에는 가용 재고만 포함 (유통기한 관리는 가용재고 기준)
+    if (Number(inv.CLABS) > 0) {
+      target.batches.push({
+        quantity: Number(inv.CLABS || 0),
+        expirationDate: inv.VFDAT || '',
+        remainDays: Number(inv.remain_day || 0),
+        remainRate: rawRate, 
+        location: inv.LGOBE || ''
+      });
+    }
   });
 
   const integratedMap = new Map<string, IntegratedItem>();
   
-  // 거래처 통계용 Map
   type CustomerTemp = CustomerStat & { 
     boughtMap: Map<string, {name:string, qty:number, value:number, unit:string, umrezBox:number}> 
   };
@@ -229,18 +231,13 @@ export function analyzeSnopData(
     // 미납 금액 집계
     totalUnfulfilledValue += item.totalUnfulfilledValue;
     
-    // 긴급 납품 카운트 (7일 이상 지연)
+    // 긴급 납품 카운트
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
 
     // ADS 계산
     item.inventory.ads = item.totalActualQty / THRESHOLDS.FIXED_ADS_DAYS;
 
-    // 🚨 [수정] 핵심 로직 변경
-    // 기존에 존재하던 "미납 발생 시 재고 상태를 강제로 Critical로 변경" 하는 로직을 완전히 제거했습니다.
-    // 이제 item.inventory.status는 오직 initializeItem 함수에서 계산된 '유통기한 잔여일'에 의해서만 결정됩니다.
-    // 결과적으로 재고 현황 탭에는 잔여일수가 60일 이하인 품목만 정확히 분류됩니다.
-
-    // 재고 건전성 카운팅 (순수 유통기한 기준)
+    // 재고 건전성 카운팅
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
         else if (item.inventory.status === 'imminent') stockHealth.imminent++; 
@@ -289,13 +286,12 @@ function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
   nameHint: string,
-  invMap: Map<string, { totalStock: number, batches: InventoryBatch[], info: SapInventory }>,
+  invMap: Map<string, { totalStock: number, qualityStock: number, batches: InventoryBatch[], info: SapInventory }>,
   unit: string,
   umrezBox: number
 ) {
   const invData = invMap.get(code);
   
-  // 가장 짧은 소비기한 찾기
   let minRemaining = 9999;
   if (invData && invData.batches.length > 0) {
     minRemaining = Math.min(...invData.batches.map(b => b.remainDays));
@@ -303,8 +299,9 @@ function initializeItem(
     minRemaining = Number(invData.info.remain_day);
   }
 
-  // 여기서 결정된 status가 최종 status가 됩니다 (중간에 변조되지 않음)
-  const status = invData ? getStockStatus(minRemaining) : 'healthy';
+  // 재고가 없으면 status는 healthy (표시 안됨), 있으면 날짜 기준 판정
+  const hasAnyStock = (invData?.totalStock || 0) > 0 || (invData?.qualityStock || 0) > 0;
+  const status = hasAnyStock ? getStockStatus(minRemaining) : 'healthy';
   
   let riskScore = 0;
   if (status === 'disposed') riskScore = 50;
@@ -331,9 +328,10 @@ function initializeItem(
     totalReqQty: 0, totalActualQty: 0, totalUnfulfilledQty: 0, totalUnfulfilledValue: 0, totalSalesAmount: 0,
     inventory: {
       totalStock: invData?.totalStock || 0,
+      qualityStock: invData?.qualityStock || 0, // ✅ [추가] 품질재고 할당
       usableStock: invData?.totalStock || 0,
       batches: invData?.batches || [],
-      status, // 초기 상태 (날짜 기준) - 변조되지 않음
+      status, 
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore,
       ads: 0,

@@ -5,7 +5,7 @@ import { analyzeSnopData } from '@/lib/analysis';
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
 import { unstable_cache } from 'next/cache';
 import { gzipSync, gunzipSync } from 'zlib';
-import { addMonths, format } from 'date-fns'; // ✅ 날짜 라이브러리 추가
+import { addMonths, format } from 'date-fns'; 
 
 // 1. [내부 함수] 실제 BigQuery 조회
 async function fetchRawData(sDate: string, eDate: string) {
@@ -62,16 +62,17 @@ async function fetchRawData(sDate: string, eDate: string) {
     WHERE P.GSTRP BETWEEN '${sDate}' AND '${futureEnd}' -- ✅ [수정] 미래 계획까지 조회
   `;
 
-  // 3. 재고
+  // 3. 재고 (수정된 쿼리)
   const inventoryQuery = `
     SELECT 
       MATNR, MATNR_T, MEINS, LGOBE, VFDAT, 
-      CLABS, 
+      CLABS, -- 가용 재고
+      IFNULL(CINSM, 0) as CINSM, -- ✅ [추가] 품질 대기 재고
       IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
       remain_day, remain_rate, 
       PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
-    WHERE CLABS > 0
+    WHERE CLABS > 0 OR CINSM > 0 -- ✅ [수정] 품질 재고만 있는 경우도 조회
   `;
 
   try {
@@ -94,8 +95,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 
 // 2. [캐싱 대상] 분석 결과 생성 및 압축
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 캐시 키 업데이트 (v12 - 미래계획 반영)
-    const cacheKey = `dashboard-analysis-v12-${sDate}-${eDate}`;
+    // 캐시 키 업데이트 (v13 - 품질재고 반영)
+    const cacheKey = `dashboard-analysis-v13-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

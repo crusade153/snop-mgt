@@ -1,6 +1,6 @@
 /**
  * 📘 SAP Data Type Definitions for Harim Nexus S&OP
- * * BigQuery 데이터 매핑용 타입 정의 (Updated v2.1 - 필드 누락 수정)
+ * * BigQuery 데이터 매핑용 타입 정의 (Updated v2.2 - 품질재고 추가)
  */
 
 // 1. 판매 오더 (Sales Order)
@@ -9,9 +9,8 @@ export interface SapOrder {
   POSNR: string;        // 품목 번호
   AUART: string;        // 주문 유형
   
-  // 🚨 [수정] 누락되었던 필드 복구 (orders page에서 사용됨)
-  BEZEI_TVAKT?: string; // 주문 유형 설명 (예: 표준 오더)
-  LGOBE?: string;       // 저장 위치 명 (예: 완제품 창고)
+  BEZEI_TVAKT?: string; // 주문 유형 설명
+  LGOBE?: string;       // 저장 위치 명
   
   KUNNR: string;        // 판매처 번호
   NAME1: string;        // 판매처 명
@@ -41,6 +40,7 @@ export interface SapInventory {
   MATNR_T: string;      // 자재 내역
   MEINS: string;        // 기본 단위
   CLABS: number;        // 가용 재고
+  CINSM?: number;       // ✅ [추가] 품질 대기 재고
   VFDAT: string;        // 유통기한
   LGOBE: string;        // 저장 위치 명
   

@@ -51,6 +51,7 @@ export interface IntegratedItem {
 
   inventory: {
     totalStock: number;       
+    qualityStock: number;     // ✅ [추가] 품질 대기 재고 합계
     usableStock: number;      
     status: 'healthy' | 'critical' | 'imminent' | 'disposed'; 
     remainingDays: number;    
@@ -62,7 +63,7 @@ export interface IntegratedItem {
 
   production: {
     planQty: number;          // 조회 기간(과거) 계획 합계
-    futurePlanQty: number;    // ✅ [추가] 오늘 이후 입고 예정 합계
+    futurePlanQty: number;    // 오늘 이후 입고 예정 합계
     receivedQty: number;      
     achievementRate: number;  
     lastReceivedDate: string | null;

@@ -6,7 +6,7 @@ import { getDashboardData } from '@/actions/dashboard-actions';
 import { 
   Sliders, Search, TrendingUp, AlertTriangle, 
   CheckCircle, XCircle, ChevronLeft, ChevronRight,
-  ShieldAlert, Layers, Percent
+  ShieldAlert, Layers, Percent, Eye, EyeOff, CheckSquare, Square // ✅ 아이콘 추가
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { IntegratedItem, DashboardAnalysis } from '@/types/analysis';
@@ -23,6 +23,7 @@ interface SimulatedItem extends IntegratedItem {
     isRisk: boolean;
     usableStock: number;
     wasteStock: number;
+    qualityStock: number; // ✅ 시뮬레이션용 품질 재고
     buckets: { 
         under50: number;
         r50_70: number;
@@ -57,11 +58,15 @@ export default function InventoryPage() {
 
   const data = rawData;
 
-  // 초기값 설정: Target 30일, Rate 30%
+  // 초기값 설정
   const [targetDays, setTargetDays] = useState<number>(30); 
   const [minShelfRate, setMinShelfRate] = useState<number>(30); 
   const [searchTerm, setSearchTerm] = useState<string>('');
   
+  // ✅ [신규 기능] 숨은 재고 토글 및 시뮬레이션 포함 여부
+  const [showHiddenStock, setShowHiddenStock] = useState(false);
+  const [includeQualityInSim, setIncludeQualityInSim] = useState(false);
+
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('ALL');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
@@ -93,7 +98,8 @@ export default function InventoryPage() {
     if (!data) return { all: [], kpi: { good: 0, shortage: 0, excess: 0, risk: 0, totalWaste: 0, wasteCount: 0 } };
 
     let items = data.integratedArray.filter((item: IntegratedItem) => {
-      const hasStock = item.inventory.totalStock > 0;
+      // ✅ [수정] 품질재고도 재고가 있는 것으로 간주 (표시 여부는 아래 필터링에서 결정하지 않음)
+      const hasStock = item.inventory.totalStock > 0 || item.inventory.qualityStock > 0;
       const matchesSearch = searchTerm === '' || 
         item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
         item.code.includes(searchTerm);
@@ -103,29 +109,32 @@ export default function InventoryPage() {
     const simulatedItems: SimulatedItem[] = items.map((item: IntegratedItem) => {
       const currentADS = item.inventory.ads || 0;
       
-      const usableStock = item.inventory.batches
+      let usableStock = item.inventory.batches
         .filter(b => b.remainRate >= minShelfRate) 
         .reduce((sum, b) => sum + b.quantity, 0);
 
-      const wasteStock = item.inventory.totalStock - usableStock;
+      // ✅ [핵심] 옵션이 켜져있으면 품질재고를 가용재고에 합산하여 시뮬레이션
+      if (includeQualityInSim) {
+        usableStock += item.inventory.qualityStock;
+      }
+
+      const wasteStock = item.inventory.totalStock - item.inventory.batches
+        .filter(b => b.remainRate >= minShelfRate) 
+        .reduce((sum, b) => sum + b.quantity, 0); // 폐기 예상은 순수 가용재고 기준
+
       const targetStock = Math.ceil(currentADS * targetDays);
       const stockDays = currentADS > 0 ? usableStock / currentADS : 999;
 
-      // 🚨 [핵심 수정] 상태 판정 로직 강화 (Threshold Adjustment)
       let simStatus: 'shortage' | 'excess' | 'good' = 'good';
       
-      // 1. 부족(Shortage): 보유일수가 목표일수보다 적으면 무조건 부족 (기존 0.5배에서 1.0배로 강화)
-      // 예: 목표 60일, 보유 36일 -> 부족 판정
       if (stockDays < targetDays) {
         simStatus = 'shortage';
       } 
-      // 2. 과잉(Excess): 목표일수의 2배 초과 시 과잉 (유지)
       else if (stockDays > targetDays * 2) {
         simStatus = 'excess';
       }
 
       const futurePlan = item.production.futurePlanQty ?? 0;
-      // 리스크: '부족' 상태인데 '미래 입고 계획'도 없는 경우
       const isRisk = simStatus === 'shortage' && futurePlan === 0;
 
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
@@ -140,7 +149,10 @@ export default function InventoryPage() {
 
       return {
         ...item,
-        sim: { currentADS, targetStock, stockDays, simStatus, isRisk, usableStock, wasteStock, buckets }
+        sim: { 
+            currentADS, targetStock, stockDays, simStatus, isRisk, usableStock, wasteStock, buckets,
+            qualityStock: item.inventory.qualityStock // Sim 객체에 전달
+        }
       };
     });
 
@@ -153,17 +165,14 @@ export default function InventoryPage() {
       wasteCount: simulatedItems.filter(i => i.sim.wasteStock > 0).length 
     };
 
-    // 정렬: 부족한 순서대로(Shortage -> Good -> Excess)
     simulatedItems.sort((a, b) => {
-        // 리스크(계획없음) 최우선
         if (a.sim.isRisk && !b.sim.isRisk) return -1;
         if (!a.sim.isRisk && b.sim.isRisk) return 1;
-        // 그 다음 보유일수 짧은 순
         return a.sim.stockDays - b.sim.stockDays;
     });
 
     return { all: simulatedItems, kpi };
-  }, [data, targetDays, minShelfRate, searchTerm]); 
+  }, [data, targetDays, minShelfRate, searchTerm, includeQualityInSim]); // ✅ 의존성 추가
 
   const filteredAndPaginated = useMemo(() => {
     let list = simulation.all || [];
@@ -206,13 +215,46 @@ export default function InventoryPage() {
             </span>
           </p>
         </div>
-        <div className="relative w-full md:w-64">
-          <input 
-            type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
-            onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-            className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue"
-          />
-          <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
+        
+        <div className="flex flex-col md:flex-row gap-3 items-end md:items-center">
+            {/* ✅ [신규] 숨은 재고 컨트롤러 */}
+            <div className="flex items-center gap-2">
+                <button 
+                    onClick={() => setShowHiddenStock(!showHiddenStock)}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-all border ${
+                    showHiddenStock 
+                        ? 'bg-purple-50 text-purple-700 border-purple-200' 
+                        : 'bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50'
+                    }`}
+                >
+                    {showHiddenStock ? <Eye size={14}/> : <EyeOff size={14}/>}
+                    {showHiddenStock ? '품질재고 숨기기' : '숨은 재고(품질) 보기'}
+                </button>
+
+                {showHiddenStock && (
+                    <button 
+                        onClick={() => setIncludeQualityInSim(!includeQualityInSim)}
+                        className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-all border ${
+                            includeQualityInSim 
+                            ? 'bg-blue-600 text-white border-blue-600' 
+                            : 'bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50'
+                        }`}
+                        title="품질 대기 재고를 가용 재고에 포함하여 시뮬레이션합니다."
+                    >
+                        {includeQualityInSim ? <CheckSquare size={14}/> : <Square size={14}/>}
+                        가용재고에 포함
+                    </button>
+                )}
+            </div>
+
+            <div className="relative w-full md:w-64">
+                <input 
+                    type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
+                    onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                    className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue"
+                />
+                <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
+            </div>
         </div>
       </div>
 
@@ -307,10 +349,15 @@ export default function InventoryPage() {
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 w-[20%]">제품명</th>
                 <th className="px-2 py-3 border-b font-bold text-neutral-700 text-right">총 재고</th>
                 
+                {/* ✅ [신규] 품질재고 컬럼 */}
+                {showHiddenStock && (
+                    <th className="px-2 py-3 border-b font-bold text-purple-700 text-right bg-purple-50">품질대기</th>
+                )}
+
                 {/* 구간별 컬럼 */}
                 <th className="px-2 py-3 border-b font-bold text-[#C62828] text-right bg-red-50/30">~50%</th>
                 <th className="px-2 py-3 border-b font-bold text-[#E65100] text-right bg-orange-50/30">50~70%</th>
-                <th className="px-2 py-3 border-b font-bold text-[#F57F17] text-right bg-yellow-50/30">70~75%</th>
+                <th className="px-2 py-3 border-b font-bold text-[#F57F17] text-right bg-yellow-50/50">70~75%</th>
                 <th className="px-2 py-3 border-b font-bold text-[#1565C0] text-right bg-blue-50/30">75~85%</th>
                 <th className="px-2 py-3 border-b font-bold text-[#2E7D32] text-right bg-green-50/30">85%~</th>
 
@@ -327,6 +374,9 @@ export default function InventoryPage() {
                 const futurePlan = item.production.futurePlanQty ?? 0;
                 const dPlan = formatQty(futurePlan, item.umrezBox, item.unit);
                 const buckets = item.sim.buckets;
+                
+                // ✅ [신규] 품질재고
+                const dQuality = formatQty(item.inventory.qualityStock, item.umrezBox, item.unit);
 
                 return (
                   <tr key={item.code} className={`hover:bg-[#F9F9F9] transition-colors h-[48px] ${item.sim.isRisk ? 'bg-[#FFF8F8]' : ''}`}>
@@ -338,14 +388,20 @@ export default function InventoryPage() {
                       {dTotal.value}
                     </td>
 
-                    {/* 구간별 데이터 표시 */}
+                    {/* ✅ [신규] 품질재고 셀 */}
+                    {showHiddenStock && (
+                        <td className="px-2 py-3 text-right font-bold text-purple-700 bg-purple-50/30">
+                            {item.inventory.qualityStock > 0 ? dQuality.value : '-'}
+                        </td>
+                    )}
+
                     <td className="px-2 py-3 text-right text-[#C62828] bg-red-50/30 font-medium">
                         {buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}
                     </td>
                     <td className="px-2 py-3 text-right text-[#E65100] bg-orange-50/30 font-medium">
                         {buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}
                     </td>
-                    <td className="px-2 py-3 text-right text-[#F57F17] bg-yellow-50/30 font-medium">
+                    <td className="px-2 py-3 text-right text-[#F57F17] bg-yellow-50/50 font-medium">
                         {buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}
                     </td>
                     <td className="px-2 py-3 text-right text-[#1565C0] bg-blue-50/30 font-medium">
@@ -358,11 +414,16 @@ export default function InventoryPage() {
                     <td className="px-2 py-3 text-right text-neutral-600">
                       {dAds.value}
                     </td>
-                    {/* 보유일수 색상: 부족하면 빨강, 적정이면 초록 */}
+                    
+                    {/* 보유일수: 옵션에 따라 달라질 수 있음을 색상으로 힌트 */}
                     <td className="px-2 py-3 text-right font-medium">
                       <span className={`${item.sim.simStatus === 'shortage' ? 'text-[#E53935] font-bold' : 'text-[#2E7D32]'}`}>
                         {item.sim.stockDays.toFixed(1)}일
                       </span>
+                      {/* 가용재고 포함 옵션 활성화 시 아이콘 표시 */}
+                      {includeQualityInSim && item.inventory.qualityStock > 0 && (
+                        <span className="ml-1 text-[9px] text-purple-600 font-bold" title="품질재고 포함됨">+Q</span>
+                      )}
                     </td>
                     <td className="px-2 py-3 text-center">
                       <SimulationBadge status={item.sim.simStatus} />
@@ -373,14 +434,13 @@ export default function InventoryPage() {
                           {dPlan.value}
                         </span>
                       ) : (
-                        // 리스크(계획없음) 상태이면 경고, 아니면 그냥 - 표시
                         item.sim.isRisk ? <span className="px-2 py-1 rounded bg-[#FFEBEE] text-[#C62828] text-[11px] font-bold">⚠️ 계획없음</span> : <span className="text-neutral-300 text-[11px]">-</span>
                       )}
                     </td>
                   </tr>
                 );
               })}
-              {filteredAndPaginated.items.length === 0 && <tr><td colSpan={11} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>}
+              {filteredAndPaginated.items.length === 0 && <tr><td colSpan={showHiddenStock ? 12 : 11} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>}
             </tbody>
           </table>
         </div>

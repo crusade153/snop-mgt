@@ -34,49 +34,39 @@ export default function ForecastPage() {
   // 차트 데이터 변환
   const convertValue = (val: number) => {
     if (unitMode === 'BOX' && activeItem) {
-      return val / (activeItem.info.umrezBox || 1);
+      return Math.round(val / (activeItem.info.umrezBox || 1));
     }
     return val;
   };
 
   const historyVals = activeItem?.historical.map((d:any) => convertValue(d.value)) || [];
   const forecastVals = activeItem?.forecast.map((d:any) => convertValue(d.value)) || [];
+  
+  // ✅ [추가] 전년 데이터 변환 (데이터가 없으면 0)
+  const lastYearVals = activeItem?.lastYear?.map((d:any) => convertValue(d.value)) || [];
+
   const allLabels = activeItem ? [...activeItem.historical, ...activeItem.forecast].map((d:any) => d.date) : [];
 
   const nextMonthForecast = activeItem ? convertValue(activeItem.forecast[0]?.value || 0) : 0;
   const displayUnit = unitMode === 'BOX' ? 'BOX' : (activeItem?.info.unit || 'EA');
 
-  // 💡 [수정] 툴팁: '비유' 제거하고 '공식(Formula)' 복구
+  // 툴팁 컴포넌트
   const Tooltip = ({ title, formula, desc, questions, direction = 'right' }: { title: string, formula?: string, desc: string, questions?: string[], direction?: 'right' | 'left' }) => (
     <div className={`absolute z-20 hidden group-hover:block w-80 p-4 bg-neutral-900 text-white text-xs rounded-xl shadow-xl -top-2 ${direction === 'right' ? 'left-full ml-4' : 'right-full mr-4'} animate-in fade-in zoom-in-95 duration-200 border border-neutral-700`}>
-      
-      {/* 화살표 */}
       <div className={`absolute top-6 w-3 h-3 bg-neutral-900 rotate-45 border-l border-b border-neutral-700 ${direction === 'right' ? '-left-1.5' : '-right-1.5 border-l-0 border-b-0 border-r border-t'}`}></div>
-      
       <div className="relative space-y-3">
-        {/* 1. 타이틀 */}
         <h4 className="font-bold text-sm text-[#42A5F5] flex items-center gap-2 border-b border-neutral-700 pb-2">
           <Info size={16}/> {title}
         </h4>
-
-        {/* 2. 계산 공식 (Formula) - 복구됨 */}
         {formula && (
           <div className="bg-neutral-800 p-2.5 rounded-lg border border-neutral-700">
             <div className="text-[10px] text-[#FFA726] font-bold mb-1 flex items-center gap-1">
               <Calculator size={10}/> 계산 공식 (Formula)
             </div>
-            <code className="text-neutral-300 font-mono text-xs block leading-relaxed">
-              {formula}
-            </code>
+            <code className="text-neutral-300 font-mono text-xs block leading-relaxed">{formula}</code>
           </div>
         )}
-
-        {/* 3. 설명 텍스트 */}
-        <p className="leading-relaxed text-neutral-300">
-          {desc}
-        </p>
-
-        {/* 4. 예상 질문 (Q&A) */}
+        <p className="leading-relaxed text-neutral-300">{desc}</p>
         {questions && (
           <div className="space-y-2 pt-2 border-t border-neutral-700">
             {questions.map((q, i) => (
@@ -96,7 +86,7 @@ export default function ForecastPage() {
       <div className="pb-4 border-b border-neutral-200 mb-6 flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">🔮 수요 예측 (Sales Forecast)</h1>
-          <p className="text-sm text-neutral-500 mt-1">과거 6개월 데이터를 기반으로 향후 6개월의 수요를 시뮬레이션합니다.</p>
+          <p className="text-sm text-neutral-500 mt-1">과거 6개월 데이터 기반 향후 6개월 수요 시뮬레이션 (전년 동월 비교 포함)</p>
         </div>
         <button onClick={() => handleSearch(searchTerm)} className="flex items-center gap-2 px-3 py-2 bg-neutral-900 text-white rounded-lg text-sm font-bold hover:bg-neutral-700 transition-colors">
           <RefreshCw size={14} /> 데이터 갱신
@@ -149,15 +139,10 @@ export default function ForecastPage() {
                   <div className="text-xs opacity-60 mt-1 text-neutral-700 font-medium">
                     과거 대비 {activeItem.changeRate > 0 ? '+' : ''}{activeItem.changeRate.toFixed(1)}% 변동 예상
                   </div>
-                  {/* 툴팁: 공식 복구 */}
                   <Tooltip 
                     title="트렌드란 무엇인가요?"
                     formula="(예측평균 - 과거평균) ÷ 과거평균 × 100"
                     desc="과거 6개월의 평균 판매량과 향후 6개월 예측값의 평균을 비교하여, 전반적인 성장률을 계산합니다."
-                    questions={[
-                      "왜 상승세인가요? → 과거보다 미래에 평균적으로 더 많이 팔릴 것으로 계산되었습니다.",
-                      "몇 개월 기준인가요? → 최근 6개월 실적을 바탕으로 미래 6개월을 봅니다."
-                    ]}
                     direction="right"
                   />
                 </div>
@@ -171,14 +156,10 @@ export default function ForecastPage() {
                     {nextMonthForecast.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span className="text-sm font-normal text-neutral-400">{displayUnit}</span>
                   </div>
                   <div className="text-xs text-neutral-400 mt-1">추세선(Trend Line) 기준 예측값</div>
-                  {/* 툴팁: 공식 복구 */}
                   <Tooltip 
                     title="어떻게 계산된 숫자인가요?"
                     formula="y = ax + b (선형 회귀 방정식)"
                     desc="단순 평균이 아니라, 전체적인 데이터의 흐름(추세선)을 그렸을 때 다음 달에 위치하게 되는 점의 값입니다."
-                    questions={[
-                      "갑자기 왜 이렇게 높게/낮게 나오나요? → 최근 판매량이 급격히 변했다면, 그 가속도가 반영되어 예측값이 더 크게 변할 수 있습니다."
-                    ]}
                     direction="right"
                   />
                 </div>
@@ -190,15 +171,10 @@ export default function ForecastPage() {
                   </div>
                   <div className="text-2xl font-bold text-[#2E7D32]">{activeItem.metrics.accuracy}%</div>
                   <div className="text-xs text-neutral-400 mt-1">변동성 기반 신뢰 점수</div>
-                  {/* 툴팁: 공식 복구 */}
                   <Tooltip 
                     title="신뢰도가 왜 100%가 아닌가요?"
                     formula="100 - (표준편차 ÷ 평균판매량 × 100)"
                     desc="과거 판매량이 얼마나 일정했는지를 나타냅니다. 판매량이 규칙적일수록 표준편차가 작아져 신뢰도가 높아집니다."
-                    questions={[
-                      "신뢰도 50%는 무슨 뜻인가요? → 과거 판매량의 기복이 심해서, 예측값이 빗나갈 확률이 반반이라는 뜻입니다.",
-                      "어떻게 높이나요? → 꾸준한 발주와 판매 관리가 선행되어야 신뢰도가 올라갑니다."
-                    ]}
                     direction="left"
                   />
                 </div>
@@ -209,12 +185,17 @@ export default function ForecastPage() {
                 <h3 className="font-bold text-lg mb-6 text-neutral-800 flex justify-between items-center">
                   <div className="flex items-center gap-2">
                     <span>📈 수요 흐름 분석</span>
-                    <span className="text-xs font-normal text-neutral-400 bg-neutral-100 px-2 py-1 rounded">실선: 실적 / 점선: 예측</span>
+                    <span className="text-xs font-normal text-neutral-400 bg-neutral-100 px-2 py-1 rounded">실선: 실적 / 점선: 예측 / <span className="font-bold text-gray-400">회색: 전년동월</span></span>
                   </div>
                   <span className="text-xs font-normal text-neutral-500 bg-neutral-100 px-2 py-1 rounded">단위: {displayUnit}</span>
                 </h3>
                 <div className="h-[350px] w-full">
-                  <CanvasLineChart historyData={historyVals} forecastData={forecastVals} labels={allLabels} />
+                  <CanvasLineChart 
+                    historyData={historyVals} 
+                    forecastData={forecastVals}
+                    lastYearData={lastYearVals} // ✅ 전년 데이터 전달
+                    labels={allLabels} 
+                  />
                 </div>
               </div>
             </>

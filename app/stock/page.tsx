@@ -2,9 +2,11 @@
 
 import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Search, Calendar, ChevronLeft, ChevronRight, Percent, Eye, EyeOff } from 'lucide-react';
+import { Search, Calendar, ChevronLeft, ChevronRight, Percent, Eye, EyeOff, Download, FileSpreadsheet } from 'lucide-react';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
+import * as XLSX from 'xlsx'; // ✅ 엑셀 라이브러리 import
+import { format } from 'date-fns';
 
 type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed';
 type ViewMode = 'DAYS' | 'RATE'; 
@@ -15,7 +17,7 @@ export default function StockStatusPage() {
 
   const [activeTab, setActiveTab] = useState<TabType>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('DAYS'); 
-  const [showHiddenStock, setShowHiddenStock] = useState(false); // ✅ [추가] 숨은 재고 보기 토글
+  const [showHiddenStock, setShowHiddenStock] = useState(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
@@ -63,8 +65,13 @@ export default function StockStatusPage() {
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
 
-  if (isLoading) return <LoadingSpinner />;
-  if (!data) return <ErrorDisplay />;
+  // Helper: 단위 변환 함수 (값만 리턴)
+  const getConvertedQty = (val: number, conversion: number) => {
+    if (unitMode === 'BOX') {
+      return Number((val / (conversion > 0 ? conversion : 1)).toFixed(1));
+    }
+    return val;
+  };
 
   const formatQty = (val: number, conversion: number, baseUnit: string) => {
     if (unitMode === 'BOX') {
@@ -90,9 +97,74 @@ export default function StockStatusPage() {
     return buckets;
   };
 
+  // ✅ [New] 엑셀 다운로드 핸들러
+  const handleExcelDownload = () => {
+    if (filteredData.length === 0) {
+      alert("다운로드할 데이터가 없습니다.");
+      return;
+    }
+
+    const todayStr = format(new Date(), 'yyyyMMdd_HHmmss');
+    const unitLabel = unitMode === 'BOX' ? 'BOX' : 'EA/KG';
+
+    // 1. 엑셀용 데이터 매핑
+    const excelData = filteredData.map((item, idx) => {
+      const umrez = item.umrezBox;
+      const buckets = calculateRateBuckets(item.inventory.batches);
+      const worstBatch = item.inventory.batches.sort((a, b) => a.remainDays - b.remainDays)[0];
+
+      return {
+        'No': idx + 1,
+        '상태': item.inventory.status.toUpperCase(),
+        '제품코드': item.code,
+        '제품명': item.name,
+        '단위기준': unitLabel,
+        [`총 재고(${unitLabel})`]: getConvertedQty(item.inventory.totalStock, umrez),
+        [`품질대기(${unitLabel})`]: getConvertedQty(item.inventory.qualityStock, umrez),
+        '최단 유통기한': worstBatch ? worstBatch.expirationDate : '-',
+        '잔여일수': item.inventory.remainingDays,
+        '최저 잔여율(%)': worstBatch ? `${worstBatch.remainRate.toFixed(1)}%` : '-',
+        [`잔여율 50%미만(${unitLabel})`]: getConvertedQty(buckets.under50, umrez),
+        [`잔여율 50~70%(${unitLabel})`]: getConvertedQty(buckets.r50_70, umrez),
+        [`잔여율 70~75%(${unitLabel})`]: getConvertedQty(buckets.r70_75, umrez),
+        [`잔여율 75~85%(${unitLabel})`]: getConvertedQty(buckets.r75_85, umrez),
+        [`잔여율 85%이상(${unitLabel})`]: getConvertedQty(buckets.over85, umrez),
+      };
+    });
+
+    // 2. 워크시트 생성
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+    // 3. 컬럼 너비 조정 (선택 사항)
+    const wscols = [
+      { wch: 5 },  // No
+      { wch: 10 }, // 상태
+      { wch: 12 }, // 제품코드
+      { wch: 40 }, // 제품명
+      { wch: 10 }, // 단위
+      { wch: 15 }, // 총재고
+      { wch: 15 }, // 품질대기
+      { wch: 12 }, // 유통기한
+      { wch: 10 }, // 잔여일수
+      // 나머지 자동
+    ];
+    worksheet['!cols'] = wscols;
+
+    // 4. 워크북 생성 및 파일 쓰기
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "재고현황");
+    
+    const fileName = `재고현황_${unitLabel}_${todayStr}.xlsx`;
+    XLSX.writeFile(workbook, fileName);
+  };
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!data) return <ErrorDisplay />;
+
   return (
     <div className="space-y-6">
-      <div className="pb-4 border-b border-neutral-200 flex justify-between items-end">
+      {/* Header Area */}
+      <div className="pb-4 border-b border-neutral-200 flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
         <div>
             <h1 className="text-[20px] font-bold text-neutral-900 flex items-center gap-2">
             📦 재고 상세 현황 (Current Stock Status)
@@ -103,7 +175,17 @@ export default function StockStatusPage() {
         </div>
         
         <div className="flex gap-2">
-            {/* ✅ [추가] 숨은 재고 토글 버튼 */}
+            {/* ✅ [New] 엑셀 다운로드 버튼 */}
+            <button 
+                onClick={handleExcelDownload}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all bg-green-600 text-white hover:bg-green-700 shadow-sm"
+                title="현재 필터링된 데이터를 엑셀로 다운로드합니다."
+            >
+                <FileSpreadsheet size={14}/> 엑셀 다운로드
+            </button>
+
+            <div className="w-[1px] h-8 bg-neutral-300 mx-1"></div>
+
             <button 
                 onClick={() => setShowHiddenStock(!showHiddenStock)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all border ${
@@ -133,6 +215,7 @@ export default function StockStatusPage() {
         </div>
       </div>
 
+      {/* Filter & Search */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
           <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
@@ -154,6 +237,7 @@ export default function StockStatusPage() {
         </div>
       </div>
 
+      {/* Table Area */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
         <div className="overflow-x-auto min-h-[500px]">
           <table className="w-full text-sm text-left border-collapse table-fixed">
@@ -166,7 +250,6 @@ export default function StockStatusPage() {
                   총 재고 (가용)
                 </th>
                 
-                {/* ✅ [추가] 숨은 재고 헤더 (토글 시 등장) */}
                 {showHiddenStock && (
                     <th className="px-4 py-3 border-b border-neutral-200 font-bold text-purple-700 text-right w-28 bg-purple-50">
                         품질대기
@@ -194,8 +277,6 @@ export default function StockStatusPage() {
             <tbody className="divide-y divide-neutral-200">
               {paginatedItems.map((item: IntegratedItem, idx: number) => {
                 const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
-                
-                // ✅ [추가] 품질 재고 데이터 포맷팅
                 const qualityStockVal = item.inventory.qualityStock || 0;
                 const displayQuality = formatQty(qualityStockVal, item.umrezBox, item.unit);
 
@@ -216,7 +297,6 @@ export default function StockStatusPage() {
                     
                     <td className="px-4 py-3 text-right font-bold text-neutral-800 border-r border-neutral-100">
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-400">{unitLabel}</span>
-                      {/* 숨김 상태일 때 품질재고 존재 여부 힌트 */}
                       {!showHiddenStock && qualityStockVal > 0 && (
                         <div className="text-[9px] text-purple-500 mt-0.5 flex justify-end items-center gap-0.5 font-normal">
                           +품질 {displayQuality.value}
@@ -224,7 +304,6 @@ export default function StockStatusPage() {
                       )}
                     </td>
 
-                    {/* ✅ [추가] 숨은 재고 셀 (토글 시 등장) */}
                     {showHiddenStock && (
                         <td className="px-4 py-3 text-right font-bold text-purple-700 bg-purple-50/30 border-r border-purple-100">
                             {qualityStockVal > 0 ? displayQuality.value : '-'}

@@ -393,7 +393,6 @@ export default function InventoryPage() {
           active={filterStatus === 'EXCESS'}
           onClick={() => handleFilterClick('EXCESS')}
         />
-        {/* ✅ [수정] 가용불가 카드: 불필요한 재고 수량 제거, 품목 수만 표시 */}
         <SimulationKpi 
           title={`가용불가(${minShelfRate}%미만)`} 
           value={`${simulation.kpi.wasteCount}개 품목`} 
@@ -421,32 +420,34 @@ export default function InventoryPage() {
         
         <div className="overflow-x-auto min-h-[400px]">
           <table className="w-full text-sm text-left border-collapse">
+            {/* [Table Header] 순서 재배치 */}
             <thead className="bg-[#FAFAFA]">
               <tr>
+                {/* 1. 제품 식별 */}
                 <SortableHeader label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort} width="20%" />
-                <SortableHeader label="총 재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
                 
-                {/* 품질재고 컬럼 */}
+                {/* 2. 결론 (상태 & 보유일수) - 사용자가 가장 먼저 봐야 함 */}
+                <SortableHeader label="상태" sortKey="status" currentSort={sortConfig} onSort={handleSort} align="center" />
+                <SortableHeader label="보유일수" sortKey="stockDays" currentSort={sortConfig} onSort={handleSort} align="right" />
+
+                {/* 3. 원인 (ADS) */}
+                <SortableHeader label={`ADS (${adsPeriod}일)`} sortKey="ads" currentSort={sortConfig} onSort={handleSort} align="right" />
+
+                {/* 4. 대책 (생산계획) */}
+                <SortableHeader label="생산계획(당일)" sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" />
+
+                {/* 5. 상세 데이터 (총재고 & 품질) */}
+                <SortableHeader label="총 재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
                 {showHiddenStock && (
                     <SortableHeader label="품질대기" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
                 )}
 
-                {/* 구간별 컬럼 */}
+                {/* 6. 심층 데이터 (구간별 재고) - 가장 우측 */}
                 <SortableHeader label="~50%" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
                 <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" />
                 <SortableHeader label="70~75%" sortKey="bucket_70_75" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#F57F17] bg-yellow-50/50" />
                 <SortableHeader label="75~85%" sortKey="bucket_75_85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#1565C0] bg-blue-50/30" />
                 <SortableHeader label="85%~" sortKey="bucket_over85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#2E7D32] bg-green-50/30" />
-
-                <SortableHeader label={`ADS (${adsPeriod}일)`} sortKey="ads" currentSort={sortConfig} onSort={handleSort} align="right" />
-                <SortableHeader label="보유일수" sortKey="stockDays" currentSort={sortConfig} onSort={handleSort} align="right" />
-                <SortableHeader label="상태" sortKey="status" currentSort={sortConfig} onSort={handleSort} align="center" />
-                
-                {/* ✅ [수정] 용어 변경: 생산(Future) -> 생산계획(당일) */}
-                <SortableHeader 
-                    label="생산계획(당일)" 
-                    sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" 
-                />
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
@@ -454,7 +455,6 @@ export default function InventoryPage() {
                 const dTotal = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
                 const dAds = formatQty(item.sim.currentADS, item.umrezBox, item.unit, 0); 
                 
-                // ✅ [수정] 미래 생산 계획 (To Date 당일)
                 const futurePlan = item.sim.targetDatePlan;
                 const dPlan = formatQty(futurePlan, item.umrezBox, item.unit);
                 
@@ -463,20 +463,56 @@ export default function InventoryPage() {
 
                 return (
                   <tr key={item.code} className={`hover:bg-[#F9F9F9] transition-colors h-[48px] ${item.sim.isRisk ? 'bg-[#FFF8F8]' : ''}`}>
+                    {/* 1. 제품명 */}
                     <td className="px-4 py-3">
                       <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
                       <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
                     </td>
+
+                    {/* 2. 상태 (Badge) */}
+                    <td className="px-2 py-3 text-center">
+                      <SimulationBadge status={item.sim.simStatus} />
+                    </td>
+
+                    {/* 2-1. 보유일수 */}
+                    <td className="px-2 py-3 text-right font-medium">
+                      <span className={`${item.sim.simStatus === 'shortage' ? 'text-[#E53935] font-bold' : 'text-[#2E7D32]'}`}>
+                        {item.sim.stockDays.toFixed(1)}일
+                      </span>
+                      {includeQualityInSim && item.inventory.qualityStock > 0 && (
+                        <span className="ml-1 text-[9px] text-purple-600 font-bold" title="품질재고 포함됨">+Q</span>
+                      )}
+                    </td>
+
+                    {/* 3. ADS */}
+                    <td className="px-2 py-3 text-right text-neutral-600">
+                      {dAds.value}
+                    </td>
+
+                    {/* 4. 생산계획 */}
+                    <td className="px-2 py-3 text-center">
+                      {futurePlan > 0 ? (
+                        <span className="px-2 py-1 rounded bg-[#E3F2FD] text-[#1565C0] text-[11px] font-bold">
+                          {dPlan.value}
+                        </span>
+                      ) : (
+                        item.sim.isRisk ? <span className="px-2 py-1 rounded bg-[#FFEBEE] text-[#C62828] text-[11px] font-bold">⚠️ 계획없음</span> : <span className="text-neutral-300 text-[11px]">-</span>
+                      )}
+                    </td>
+
+                    {/* 5. 총 재고 */}
                     <td className="px-2 py-3 text-right font-bold text-neutral-800">
                       {dTotal.value}
                     </td>
 
+                    {/* 5-1. 품질재고 (조건부) */}
                     {showHiddenStock && (
                         <td className="px-2 py-3 text-right font-bold text-purple-700 bg-purple-50/30">
                             {item.inventory.qualityStock > 0 ? dQuality.value : '-'}
                         </td>
                     )}
 
+                    {/* 6. 구간별 재고 (Buckets) */}
                     <td className="px-2 py-3 text-right text-[#C62828] bg-red-50/30 font-medium">
                         {buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}
                     </td>
@@ -491,31 +527,6 @@ export default function InventoryPage() {
                     </td>
                     <td className="px-2 py-3 text-right text-[#2E7D32] bg-green-50/30 font-medium">
                         {buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).value : '-'}
-                    </td>
-
-                    <td className="px-2 py-3 text-right text-neutral-600">
-                      {dAds.value}
-                    </td>
-                    
-                    <td className="px-2 py-3 text-right font-medium">
-                      <span className={`${item.sim.simStatus === 'shortage' ? 'text-[#E53935] font-bold' : 'text-[#2E7D32]'}`}>
-                        {item.sim.stockDays.toFixed(1)}일
-                      </span>
-                      {includeQualityInSim && item.inventory.qualityStock > 0 && (
-                        <span className="ml-1 text-[9px] text-purple-600 font-bold" title="품질재고 포함됨">+Q</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-3 text-center">
-                      <SimulationBadge status={item.sim.simStatus} />
-                    </td>
-                    <td className="px-2 py-3 text-center">
-                      {futurePlan > 0 ? (
-                        <span className="px-2 py-1 rounded bg-[#E3F2FD] text-[#1565C0] text-[11px] font-bold">
-                          {dPlan.value}
-                        </span>
-                      ) : (
-                        item.sim.isRisk ? <span className="px-2 py-1 rounded bg-[#FFEBEE] text-[#C62828] text-[11px] font-bold">⚠️ 계획없음</span> : <span className="text-neutral-300 text-[11px]">-</span>
-                      )}
                     </td>
                   </tr>
                 );

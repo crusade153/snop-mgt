@@ -18,7 +18,6 @@ export default function DailyWatchPage() {
   const { unitMode } = useUiStore(); // 단위 설정 (BOX / EA)
   
   // ✅ [최적화] React Query로 데이터 페칭 로직 교체
-  // staleTime: Infinity -> 한 번 가져온 데이터는 새로고침 전까지 다시 요청하지 않음 (캐시 사용)
   const { data: report, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['daily-watch-report', endDate],
     queryFn: () => getDailyWatchReport(endDate),
@@ -27,7 +26,7 @@ export default function DailyWatchPage() {
     refetchOnWindowFocus: false, // 윈도우 포커스 시 재요청 방지
   });
 
-  // 데이터 바인딩 (데이터가 없으면 기본값)
+  // 데이터 바인딩
   const items = report?.data || [];
   const summary = report?.summary || { scannedCount: 0, topOrders: [], lowestBalance: [] };
   const runTime = report?.runTime || '';
@@ -39,13 +38,43 @@ export default function DailyWatchPage() {
   
   const ITEMS_PER_PAGE = 15;
 
-  // ✅ [Helper] 단위 변환 함수 (소수점 제어 및 단위 표시)
+  // ✅ [Helper] 단위 변환 함수
   const formatQty = (qty: number, umrez: number, unit: string) => {
     if (unitMode === 'BOX') {
       const boxes = qty / (umrez > 0 ? umrez : 1);
       return `${boxes.toLocaleString(undefined, { maximumFractionDigits: 1 })} Box`;
     }
     return `${Math.round(qty).toLocaleString()} ${unit}`;
+  };
+
+  // ✅ [New] 메시지 동적 렌더링 함수 (단위 변환 적용)
+  const renderMessage = (item: DailyAlertItem) => {
+    // 1. 결품 예상 (Shortage): 수요 vs 공급 숫자 변환
+    if (item.type === 'SHORTAGE' && item.val1 !== undefined && item.val2 !== undefined) {
+       const dDemand = formatQty(item.val1, item.umrez, item.unit);
+       const dSupply = formatQty(item.val2, item.umrez, item.unit);
+       
+       return (
+         <span>
+           향후 7일간 확정된 납품 요청(<strong>{dDemand}</strong>) 대비 
+           재고(<strong>{dSupply}</strong>) 부족
+         </span>
+       );
+    }
+    
+    // 2. 소진 불가 (Burn-down): 판매속도(ADS) 변환
+    if (item.type === 'FRESHNESS' && item.id.startsWith('burn-') && item.val1 !== undefined) {
+        const dAds = formatQty(item.val1, item.umrez, item.unit);
+        const days = item.val2; // 잔여일
+        return (
+            <span>
+                판매 속도(<strong>{dAds}/일</strong>) 대비 유통기한 부족 (잔여 {days}일)
+            </span>
+        );
+    }
+
+    // 그 외는 서버에서 온 메시지 그대로 표시
+    return item.message;
   };
 
   // 필터링 및 페이징 로직
@@ -133,10 +162,10 @@ export default function DailyWatchPage() {
           <div className="font-bold text-neutral-900 text-sm">{item.productName}</div>
           <div className="text-[11px] text-neutral-400 font-mono">{item.productCode}</div>
         </td>
+        {/* ✅ [수정] renderMessage 함수를 사용하여 메시지 내 숫자도 단위 변환 적용 */}
         <td className="px-4 py-3 text-sm text-neutral-700">
-          {item.message}
+          {renderMessage(item)}
         </td>
-        {/* ✅ 수정: 변환된 수량 표시 */}
         <td className="px-4 py-3 text-right font-bold text-neutral-900 text-sm whitespace-nowrap">
           {formatQty(item.qty, item.umrez, item.unit)}
         </td>

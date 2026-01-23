@@ -15,6 +15,9 @@ export interface DailyAlertItem {
   qty: number;
   umrez: number;
   unit: string;
+  // ✅ [수정] 메시지 내 숫자 동적 변환을 위한 추가 필드
+  val1?: number; // (예: 수요량, ADS)
+  val2?: number; // (예: 공급량, 잔여일)
 }
 
 export interface DailySummary {
@@ -217,8 +220,10 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
           level: 'CRITICAL',
           productCode: code,
           productName: val.name,
-          // ✅ 메시지 수정: "가정"이 아님을 명확히 표시
           message: `향후 7일간 확정된 납품 요청(${fmt(val.demand)}) 대비 재고(${fmt(val.stock + val.supply)}) 부족`,
+          // ✅ [수정] 동적 메시지 생성을 위한 원본 데이터 전달
+          val1: val.demand, 
+          val2: val.stock + val.supply, 
           action: '생산 우선순위 상향 또는 분할 출고 협의',
           qty: balance, // 부족분 (음수)
           umrez: val.umrez,
@@ -276,6 +281,9 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
           productCode: val.code,
           productName: val.name,
           message: `판매 속도(${val.ads.toFixed(1)}/일) 대비 유통기한 부족 (잔여 ${val.minDays}일)`,
+          // ✅ [수정] ADS 및 잔여일 데이터 전달
+          val1: val.ads,
+          val2: val.minDays,
           action: '소비기한 내 소진 불가. 긴급 프로모션 필요',
           qty: val.overStock,
           umrez: val.umrez,

@@ -5,7 +5,7 @@ import { searchProducts, executeInventorySimulation } from '@/actions/simulation
 import InventoryBalanceChart from '@/components/charts/inventory-balance-chart';
 import { 
   Search, Play, Calendar, AlertTriangle, CheckCircle, 
-  Package, Truck, ShoppingCart, RefreshCw, AlertCircle // ✅ AlertCircle 추가
+  Package, Truck, ShoppingCart, RefreshCw, AlertCircle
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store'; 
 
@@ -18,8 +18,8 @@ export default function SimulationPage() {
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [hasSearched, setHasSearched] = useState(false);
 
-  // 2. 시뮬레이션 입력값 (기준 단위로 저장)
-  const [baseQty, setBaseQty] = useState<number>(1000); // EA/KG 기준
+  // 2. 시뮬레이션 입력값 (항상 기준 단위(EA)로 저장)
+  const [baseQty, setBaseQty] = useState<number>(1000); 
   const [minShelfLife, setMinShelfLife] = useState(30);
   const [targetDate, setTargetDate] = useState(new Date().toISOString().slice(0, 10));
 
@@ -27,24 +27,39 @@ export default function SimulationPage() {
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // Helper: 단위 변환 (보여줄 때)
+  // ✅ [Helper] 화면 표시용 단위 변환 함수
+  // val: 기준 단위 수량 (EA)
   const formatQty = (val: number) => {
     const umrez = selectedProduct?.UMREZ_BOX || 1;
     if (unitMode === 'BOX') {
+      // 박스 환산 (소수점 1자리)
       return (val / umrez).toLocaleString(undefined, { maximumFractionDigits: 1 });
     }
-    return val.toLocaleString();
+    // 기준 단위 (정수)
+    return Math.round(val).toLocaleString();
   };
 
-  // Helper: 입력값 처리 (입력 -> 기준단위 저장)
+  // ✅ [Helper] 입력값 처리 (사용자 입력 -> 기준 단위 저장)
   const handleQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = Number(e.target.value);
+    const inputVal = Number(e.target.value);
+    const umrez = selectedProduct?.UMREZ_BOX || 1;
+    
+    if (unitMode === 'BOX') {
+      // 박스로 입력받으면 -> EA로 변환해서 저장
+      setBaseQty(inputVal * umrez);
+    } else {
+      // EA로 입력받으면 -> 그대로 저장
+      setBaseQty(inputVal);
+    }
+  };
+
+  // 현재 입력된 값을 화면에 보여줄 때 (저장된 EA -> 화면 모드에 맞게 역변환)
+  const getDisplayQty = () => {
     const umrez = selectedProduct?.UMREZ_BOX || 1;
     if (unitMode === 'BOX') {
-      setBaseQty(val * umrez); // BOX 입력 -> EA 저장
-    } else {
-      setBaseQty(val);
+      return baseQty / umrez;
     }
+    return baseQty;
   };
 
   const handleSearch = async () => {
@@ -58,12 +73,15 @@ export default function SimulationPage() {
   const handleRun = async () => {
     if (!selectedProduct) return alert("제품을 먼저 선택해주세요.");
     setLoading(true);
+    
+    // 서버에는 항상 '기준 단위(EA)'로 전송
     const res = await executeInventorySimulation(selectedProduct.MATNR, {
       productName: selectedProduct.MATNR_T,
       minShelfLife,
       targetDate,
-      additionalQty: baseQty // 기준 단위로 전송
+      additionalQty: baseQty 
     });
+    
     if (res.success) {
       setResult(res.data);
     } else {
@@ -188,7 +206,7 @@ export default function SimulationPage() {
                 </span>
                 <input 
                   type="number" 
-                  value={unitMode === 'BOX' ? baseQty / (selectedProduct?.UMREZ_BOX || 1) : baseQty}
+                  value={getDisplayQty()}
                   onChange={handleQtyChange}
                   className="w-full p-2 text-sm font-bold border border-neutral-300 rounded-lg text-primary-blue focus:outline-none focus:border-primary-blue"
                 />
@@ -210,7 +228,7 @@ export default function SimulationPage() {
           {result ? (
             <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
               
-              {/* 🚨 [신규 기능] 생산 실적 미마감 알림 배너 */}
+              {/* 생산 실적 미마감 알림 */}
               {result.missedProduction && result.missedProduction.length > 0 && (
                 <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-start gap-3 shadow-sm">
                   <div className="bg-orange-100 p-2 rounded-full shrink-0">
@@ -224,8 +242,6 @@ export default function SimulationPage() {
                       이번 달 생산 계획이 있으나 실적 처리가 되지 않아 ATP 계산에서 제외되었습니다.<br/>
                       <strong>실제 생산 여부를 생산팀에 확인해주세요.</strong>
                     </p>
-                    
-                    {/* 미마감 리스트 테이블 */}
                     <div className="bg-white border border-orange-100 rounded-lg overflow-hidden">
                       <table className="w-full text-xs text-left">
                         <thead className="bg-orange-50 text-orange-700 font-medium">
@@ -254,7 +270,7 @@ export default function SimulationPage() {
                 </div>
               )}
 
-              {/* (1) 판정 배너 */}
+              {/* 판정 배너 */}
               <div className={`p-6 rounded-xl border-l-8 shadow-sm flex items-start gap-4 ${
                 result.isPossible ? 'bg-green-50 border-green-500 text-green-900' : 'bg-red-50 border-red-500 text-red-900'
               }`}>
@@ -271,7 +287,7 @@ export default function SimulationPage() {
                 </div>
               </div>
 
-              {/* (2) 요약 카드 */}
+              {/* 요약 카드 */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="p-4 bg-white border border-neutral-200 rounded-xl shadow-sm">
                   <div className="text-xs text-neutral-500 flex items-center gap-1 mb-1"><Package size={14}/> 현재 유효 재고</div>
@@ -295,15 +311,16 @@ export default function SimulationPage() {
                 </div>
               </div>
 
-              {/* (3) 상세 분석 영역 */}
+              {/* 상세 분석 영역 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
-                {/* 왼쪽: 재고 추이 차트 */}
+                {/* 재고 추이 차트 */}
                 <div className="md:col-span-2 bg-white p-6 rounded-xl border border-neutral-200 shadow-sm">
                   <h3 className="font-bold text-lg mb-4 text-neutral-800 flex items-center gap-2">
                     📅 예상 재고 추이 (Inventory Balance)
                   </h3>
                   <div className="h-[300px] w-full">
+                    {/* 차트에 데이터를 넘길 때는 그대로 넘기고, 차트 내부 로직은 생략 (기존 유지) */}
                     <InventoryBalanceChart timeline={result.timeline} />
                   </div>
                   <div className="text-center mt-4 text-xs text-neutral-500">
@@ -311,7 +328,7 @@ export default function SimulationPage() {
                   </div>
                 </div>
 
-                {/* 오른쪽: 상세 수불 내역 */}
+                {/* 상세 수불 내역 */}
                 <div className="bg-white rounded-xl border border-neutral-200 shadow-sm flex flex-col overflow-hidden h-[400px]">
                   <div className="p-4 border-b border-neutral-100 bg-neutral-50">
                     <h3 className="font-bold text-neutral-800 text-sm flex items-center gap-2">

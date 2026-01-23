@@ -84,7 +84,7 @@ export default function FulfillmentPage() {
                 <th className="px-4 py-3 border-b font-bold text-neutral-700">거래처명</th>
                 <th className="px-4 py-3 border-b text-right font-bold text-neutral-700">총 주문</th>
                 <th className="px-4 py-3 border-b text-right font-bold text-neutral-700">총 매출액</th>
-                <th className="px-4 py-3 border-b text-right font-bold text-neutral-700">미납 손실액</th>
+                <th className="px-4 py-3 border-b text-right font-bold text-neutral-700">미납 기회손실액</th>
                 <th className="px-4 py-3 border-b text-center font-bold text-neutral-700">준수율</th>
               </tr>
             </thead>
@@ -143,7 +143,7 @@ export default function FulfillmentPage() {
                   <h3 className="text-lg font-bold text-neutral-900 leading-snug">{selectedCustomer.name}</h3>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs text-neutral-500 mb-1">총 미납 손실액</div>
+                  <div className="text-xs text-neutral-500 mb-1">총 미납 기회손실액</div>
                   <div className="text-xl font-bold text-[#E53935]">{Math.round(selectedCustomer.missedRevenue / 1000000).toLocaleString()}백만원</div>
                 </div>
               </div>

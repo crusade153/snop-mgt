@@ -1,48 +1,54 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react';
-import { getDailyWatchReport, DailyAlertItem, DailySummary } from '@/actions/daily-actions';
+import { useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query'; // ✅ React Query 도입
+import { getDailyWatchReport, DailyAlertItem } from '@/actions/daily-actions';
 import { useDateStore } from '@/store/date-store';
+import { useUiStore } from '@/store/ui-store';
 import { 
   AlertTriangle, TrendingUp, CalendarClock, Truck, CheckCircle, 
   RefreshCw, Clock, Info, CheckSquare, BarChart2, Package, 
-  ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Filter
+  ChevronLeft, ChevronRight, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 type TabType = 'ALL' | 'SPIKE' | 'SHORTAGE' | 'FRESHNESS' | 'MISS';
 
 export default function DailyWatchPage() {
   const { endDate } = useDateStore(); 
+  const { unitMode } = useUiStore(); // 단위 설정 (BOX / EA)
   
-  const [items, setItems] = useState<DailyAlertItem[]>([]);
-  const [summary, setSummary] = useState<DailySummary>({ scannedCount: 0, topOrders: [], lowestBalance: [] });
-  const [loading, setLoading] = useState(true);
-  const [runTime, setRunTime] = useState('');
+  // ✅ [최적화] React Query로 데이터 페칭 로직 교체
+  // staleTime: Infinity -> 한 번 가져온 데이터는 새로고침 전까지 다시 요청하지 않음 (캐시 사용)
+  const { data: report, isLoading, refetch, isRefetching } = useQuery({
+    queryKey: ['daily-watch-report', endDate],
+    queryFn: () => getDailyWatchReport(endDate),
+    staleTime: Infinity, 
+    gcTime: 1000 * 60 * 60 * 24, // 24시간 동안 캐시 유지
+    refetchOnWindowFocus: false, // 윈도우 포커스 시 재요청 방지
+  });
+
+  // 데이터 바인딩 (데이터가 없으면 기본값)
+  const items = report?.data || [];
+  const summary = report?.summary || { scannedCount: 0, topOrders: [], lowestBalance: [] };
+  const runTime = report?.runTime || '';
 
   // UI 상태
   const [activeTab, setActiveTab] = useState<TabType>('ALL');
   const [currentPage, setCurrentPage] = useState(1);
-  const [isGuideOpen, setIsGuideOpen] = useState(false); // 가이드 접기/펼치기 상태
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
   
-  // 테이블 뷰를 위해 페이지당 아이템 수 증가 (6 -> 15)
   const ITEMS_PER_PAGE = 15;
 
-  const fetchReport = async () => {
-    setLoading(true);
-    const res = await getDailyWatchReport(endDate);
-    if (res.success) {
-      setItems(res.data);
-      setSummary(res.summary);
-      setRunTime(res.runTime);
+  // ✅ [Helper] 단위 변환 함수 (소수점 제어 및 단위 표시)
+  const formatQty = (qty: number, umrez: number, unit: string) => {
+    if (unitMode === 'BOX') {
+      const boxes = qty / (umrez > 0 ? umrez : 1);
+      return `${boxes.toLocaleString(undefined, { maximumFractionDigits: 1 })} Box`;
     }
-    setLoading(false);
+    return `${Math.round(qty).toLocaleString()} ${unit}`;
   };
 
-  useEffect(() => {
-    fetchReport();
-  }, [endDate]);
-
-  // 필터링 및 페이징
+  // 필터링 및 페이징 로직
   const filteredItems = useMemo(() => {
     if (activeTab === 'ALL') return items;
     return items.filter(item => item.type === activeTab);
@@ -61,7 +67,6 @@ export default function DailyWatchPage() {
 
   // 탭 버튼 컴포넌트
   const TabButton = ({ label, type, count }: { label: string, type: TabType, count: number }) => {
-    // 타입별 색상 매핑
     let activeClass = 'bg-neutral-800 text-white';
     if (type === 'SPIKE') activeClass = 'bg-orange-600 text-white';
     if (type === 'SHORTAGE') activeClass = 'bg-red-600 text-white';
@@ -131,8 +136,9 @@ export default function DailyWatchPage() {
         <td className="px-4 py-3 text-sm text-neutral-700">
           {item.message}
         </td>
+        {/* ✅ 수정: 변환된 수량 표시 */}
         <td className="px-4 py-3 text-right font-bold text-neutral-900 text-sm whitespace-nowrap">
-          {item.value}
+          {formatQty(item.qty, item.umrez, item.unit)}
         </td>
         <td className="px-4 py-3 text-right">
           <div className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-50 px-2.5 py-1 rounded border border-blue-100 max-w-[280px] truncate justify-end">
@@ -146,7 +152,7 @@ export default function DailyWatchPage() {
 
   return (
     <div className="max-w-[1600px] mx-auto py-6 animate-in fade-in slide-in-from-bottom-4">
-      {/* 1. 컴팩트 헤더 섹션 */}
+      {/* 1. 헤더 섹션 */}
       <div className="flex flex-col md:flex-row justify-between items-center mb-4 pb-4 border-b border-neutral-200">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-neutral-900 flex items-center gap-2">
@@ -162,7 +168,6 @@ export default function DailyWatchPage() {
         </div>
         
         <div className="flex items-center gap-3">
-          {/* 가이드 토글 버튼 */}
           <button 
             onClick={() => setIsGuideOpen(!isGuideOpen)}
             className="flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-neutral-800 transition-colors"
@@ -176,17 +181,17 @@ export default function DailyWatchPage() {
             <Clock size={12}/> {runTime ? `갱신: ${runTime}` : '...'}
           </span>
           <button 
-            onClick={fetchReport} 
-            disabled={loading}
+            onClick={() => refetch()} 
+            disabled={isLoading || isRefetching}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 text-white rounded text-xs font-bold hover:bg-neutral-800 transition-colors disabled:opacity-50 ml-2"
           >
-            <RefreshCw size={12} className={loading ? 'animate-spin' : ''}/>
+            <RefreshCw size={12} className={isLoading || isRefetching ? 'animate-spin' : ''}/>
             새로고침
           </button>
         </div>
       </div>
 
-      {/* 2. 접이식 가이드 섹션 (기본적으로 닫힘 or 사용자가 제어) */}
+      {/* 2. 가이드 섹션 */}
       {isGuideOpen && (
         <div className="mb-6 bg-neutral-50 rounded-lg border border-neutral-200 p-4 animate-in slide-in-from-top-2 fade-in duration-200">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -212,9 +217,9 @@ export default function DailyWatchPage() {
         </div>
       </div>
 
-      {/* 4. 메인 테이블 리스트 뷰 */}
+      {/* 4. 메인 테이블 */}
       <div className="bg-white border border-neutral-200 rounded-lg shadow-sm overflow-hidden min-h-[400px]">
-        {loading ? (
+        {isLoading ? (
           <div className="flex flex-col items-center justify-center h-[400px] gap-3">
             <div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div>
             <p className="text-sm text-neutral-500">데이터 정밀 분석 중...</p>
@@ -275,7 +280,7 @@ export default function DailyWatchPage() {
         )}
       </div>
 
-      {/* 5. Daily Briefing (특이사항 없을 때도 유용한 정보) */}
+      {/* 5. Daily Briefing */}
       <div className="mt-8 pt-6 border-t border-neutral-200">
         <h3 className="text-base font-bold text-neutral-800 mb-4 flex items-center gap-2">
           <CheckSquare size={16} /> Daily Briefing (주요 현황 요약)
@@ -296,7 +301,9 @@ export default function DailyWatchPage() {
                     </span>
                     <span className="text-neutral-800 font-medium">{item.name}</span>
                   </div>
-                  <span className="font-bold text-blue-600">{Math.round(item.qty).toLocaleString()} Box</span>
+                  <span className="font-bold text-blue-600">
+                    {formatQty(item.qty, item.umrez, item.unit)}
+                  </span>
                 </div>
               )) : <div className="text-xs text-neutral-400 text-center py-2">데이터 없음</div>}
             </div>
@@ -317,7 +324,7 @@ export default function DailyWatchPage() {
                     <span className="text-neutral-800 font-medium">{item.name}</span>
                   </div>
                   <span className={`font-bold ${item.balance < 0 ? 'text-red-600' : 'text-neutral-700'}`}>
-                    {Math.round(item.balance).toLocaleString()} Box
+                    {formatQty(item.balance, item.umrez, item.unit)}
                   </span>
                 </div>
               )) : <div className="text-xs text-neutral-400 text-center py-2">데이터 없음</div>}
@@ -329,7 +336,6 @@ export default function DailyWatchPage() {
   );
 }
 
-// 컴팩트 가이드 아이템
 function GuideItem({ icon, title, desc }: any) {
   return (
     <div className="flex items-start gap-3 p-2">

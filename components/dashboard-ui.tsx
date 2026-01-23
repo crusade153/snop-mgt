@@ -1,15 +1,17 @@
 'use client'
 
 import { useDashboardData } from '@/hooks/use-dashboard'; 
-import { Filter, HelpCircle } from 'lucide-react';
+import { Filter, HelpCircle, AlertTriangle, TrendingUp, CalendarClock, Truck, CheckCircle } from 'lucide-react';
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
+import { DailyAlertItem } from '@/actions/daily-actions'; // ✅ 타입 import
 
 interface Props {
   initialData: DashboardAnalysis | null;
+  dailyAlerts?: DailyAlertItem[]; // ✅ Props 추가
 }
 
-export default function DashboardClientUserInterface({ initialData }: Props) {
+export default function DashboardClientUserInterface({ initialData, dailyAlerts = [] }: Props) {
   const { data, isLoading } = useDashboardData(initialData || undefined);
   const { unitMode } = useUiStore(); 
 
@@ -35,6 +37,58 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
     return { value: val.toLocaleString(), unit: baseUnit };
   };
 
+  // 🚨 일일 관리 카드 렌더링 함수
+  const renderAlertCard = (item: DailyAlertItem) => {
+    let icon, bgColor, borderColor, titleColor, category;
+    switch (item.type) {
+      case 'SPIKE':
+        icon = <TrendingUp size={18} className="text-[#E65100]" />;
+        bgColor = 'bg-orange-50';
+        borderColor = 'border-orange-200';
+        titleColor = 'text-orange-800';
+        category = '수요 급변';
+        break;
+      case 'SHORTAGE':
+        icon = <AlertTriangle size={18} className="text-[#C62828]" />;
+        bgColor = 'bg-red-50';
+        borderColor = 'border-red-200';
+        titleColor = 'text-red-800';
+        category = '결품 예상';
+        break;
+      case 'FRESHNESS':
+        icon = <CalendarClock size={18} className="text-[#C62828]" />;
+        bgColor = 'bg-red-50';
+        borderColor = 'border-red-200';
+        titleColor = 'text-red-800';
+        category = '유통기한 임박';
+        break;
+      case 'MISS':
+        icon = <Truck size={18} className="text-yellow-600" />;
+        bgColor = 'bg-yellow-50';
+        borderColor = 'border-yellow-200';
+        titleColor = 'text-yellow-800';
+        category = '미납 발생';
+        break;
+    }
+
+    return (
+      <div key={item.id} className={`flex items-start gap-3 p-3 rounded-lg border ${bgColor} ${borderColor} shadow-sm min-w-[300px] max-w-[400px]`}>
+        <div className="mt-0.5">{icon}</div>
+        <div className="flex-1">
+          <div className="flex justify-between items-start mb-1">
+            <span className={`text-[11px] font-bold ${titleColor}`}>{category}</span>
+            <span className={`text-sm font-bold ${titleColor}`}>{item.value}</span>
+          </div>
+          <div className="font-bold text-neutral-900 text-sm mb-1">{item.productName}</div>
+          <p className="text-[11px] text-neutral-700 leading-tight mb-2">{item.message}</p>
+          <div className="flex items-center gap-1 text-[10px] text-blue-700 font-bold bg-white/50 px-2 py-1 rounded">
+            <CheckCircle size={10} /> {item.action}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* 1. Page Header */}
@@ -45,7 +99,24 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
         </div>
       </div>
 
-      {/* 2. KPI Cards */}
+      {/* 🚨 2. Daily Morning Watch Section (최상단 배치) */}
+      {dailyAlerts.length > 0 && (
+        <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-[#E53935]"></span>
+            </span>
+            <h2 className="text-sm font-bold text-[#E53935]">Daily Morning Watch (오늘의 관리 포인트)</h2>
+          </div>
+          
+          <div className="flex gap-4 overflow-x-auto pb-2">
+            {dailyAlerts.map(item => renderAlertCard(item))}
+          </div>
+        </div>
+      )}
+
+      {/* 3. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <KpiCard title="제품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
         <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
@@ -67,12 +138,11 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
         <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.imminent} unit="개 제품" type="warning" />
       </div>
 
-      {/* 3. Analysis Section */}
+      {/* ... 나머지 차트 및 테이블 코드 (변경 없음) ... */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <RankingCard title="🏆 Top 5 베스트 제품 (매출)" data={data.salesAnalysis.topProducts} />
         <RankingCard title="🏢 Top 5 거래처 (매출)" data={data.salesAnalysis.topCustomers} />
         
-        {/* 재고 건전성 */}
         <div className="bg-white rounded p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-[16px] font-semibold text-neutral-900">📦 재고 건전성</h2>
@@ -86,10 +156,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
         </div>
       </div>
 
-      {/* 4. Table Section */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden mt-2">
         <div className="p-5 border-b border-neutral-200 flex justify-between items-center bg-white">
-          {/* ✅ [수정] 명칭 변경: 위험 항목 -> 주요 관리 항목 */}
           <h2 className="text-[16px] font-semibold text-neutral-900">📋 통합 S&OP 상세 현황 (Top 20 주요 관리 항목)</h2>
           <button className="text-xs text-neutral-500 flex items-center gap-1 hover:text-primary-blue">
             <Filter size={12} /> 필터
@@ -106,12 +174,10 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                   재고 ({unitMode === 'BOX' ? 'BOX' : '기준'})
                 </th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">상태</th>
-                {/* ✅ [수정] 툴팁 추가 및 수량 기준 명시 */}
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right group cursor-help">
                   <div className="flex items-center justify-end gap-1">
                     일평균 판매량
                     <HelpCircle size={12} className="text-neutral-400" />
-                    {/* Tooltip */}
                     <div className="absolute hidden group-hover:block right-4 mt-8 p-2 bg-gray-800 text-white text-xs rounded shadow-lg z-50 whitespace-nowrap font-normal">
                       최근 60일 실적수량 ÷ 60
                     </div>
@@ -124,9 +190,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue)
                 .slice(0, 20)
                 .map((item: IntegratedItem) => {
-                  
                   const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
-                  // ✅ [수정] ADS 값 표시 (단위변환 적용)
                   const displayAds = formatQty(item.inventory.ads, item.umrezBox, item.unit);
 
                   return (
@@ -141,7 +205,6 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                         <span className="text-[10px] text-neutral-400 ml-1">{displayStock.unit}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {/* ✅ [수정] 미납이 있으면 무조건 '미납 관리' 배지 표시 */}
                         {item.totalUnfulfilledQty > 0 ? (
                           <span className="px-2 py-1 rounded text-[11px] font-bold bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]">
                             미납 관리
@@ -150,7 +213,6 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                           <StatusBadge status={item.inventory.status} />
                         )}
                       </td>
-                      {/* ✅ [수정] 계산된 수량 ADS 값 출력 */}
                       <td className="px-4 py-3 text-right font-medium text-neutral-800">
                         {displayAds.value} <span className="text-[10px] text-neutral-400 font-normal">{displayAds.unit}</span>
                       </td>
@@ -165,7 +227,6 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   );
 }
 
-// Sub Components
 function KpiCard({ title, value, unit, type, tooltip }: any) {
   const styles: any = {
     brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },

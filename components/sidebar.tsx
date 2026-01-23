@@ -6,14 +6,13 @@ import { createBrowserClient } from '@supabase/ssr';
 import { 
   LayoutDashboard, Truck, ClipboardList, FileText, 
   Package, Factory, ChevronRight,
-  Boxes, 
-  BrainCircuit, 
-  LineChart,
-  LogOut,
-  CalendarClock // ✅ 새 아이콘 추가
+  Boxes, BrainCircuit, LineChart, LogOut, CalendarClock,
+  Sun // ✅ 아이콘
 } from 'lucide-react';
 
 const menuItems = [
+  // 🚨 [수정] 일일 관리를 최상단으로 이동
+  { name: '일일 관리 (Morning)', href: '/daily', icon: Sun },
   { name: '종합 현황', href: '/dashboard', icon: LayoutDashboard },
   { name: '납품 현황', href: '/fulfillment', icon: Truck },
   { name: '미납 리스트', href: '/delivery', icon: ClipboardList },
@@ -23,7 +22,6 @@ const menuItems = [
   { name: '생산 분석', href: '/production', icon: Factory },
   { name: '수요 예측', href: '/forecast', icon: BrainCircuit },
   { name: '시뮬레이션 (ATP)', href: '/simulation', icon: LineChart },
-  // 🚨 [추가] S&OP 플래너 메뉴
   { name: 'S&OP 플래너', href: '/snop', icon: CalendarClock },
 ];
 

@@ -71,7 +71,7 @@ export default function DeliveryPage() {
           <div className="text-[24px] font-bold text-[#C62828]">{totalUnfulfilledCount.toLocaleString()}<span className="text-[12px] font-normal ml-1 opacity-80">건</span></div>
         </div>
         <div className="p-5 rounded shadow border border-[#E53935] bg-[#FFEBEE]">
-          <div className="text-[12px] font-bold text-[#E53935] mb-1">총 미납 손실액</div>
+          <div className="text-[12px] font-bold text-[#E53935] mb-1">총 미납 기회손실</div>
           <div className="text-[24px] font-bold text-[#C62828]">{Math.round(data.kpis.totalUnfulfilledValue / 1000000).toLocaleString()}<span className="text-[12px] font-normal ml-1 opacity-80">백만원</span></div>
         </div>
       </div>
@@ -147,7 +147,7 @@ export default function DeliveryPage() {
                   <h3 className="text-lg font-bold text-neutral-900 leading-snug">{selectedProduct.name}</h3>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs text-neutral-500 mb-1">총 미납 손실액</div>
+                  <div className="text-xs text-neutral-500 mb-1">총 미납 기회액</div>
                   <div className="text-xl font-bold text-[#E53935]">{Math.round(selectedProduct.totalUnfulfilledValue / 1000000).toLocaleString()}백만원</div>
                 </div>
               </div>

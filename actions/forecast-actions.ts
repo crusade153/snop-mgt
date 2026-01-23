@@ -4,39 +4,17 @@ import bigqueryClient from '@/lib/bigquery';
 import { generateForecast } from '@/lib/forecasting-engine';
 import { subMonths, subYears, addMonths, format, parseISO, startOfMonth } from 'date-fns';
 
-// 1. 매출액 기준 상위 10개 조회
-async function getTopSalesItemsByAmount(endDateStr: string) {
-  const endDate = new Date(endDateStr);
-  const startDate = subMonths(endDate, 3);
-  
-  const startStr = format(startDate, 'yyyyMMdd');
-  const endStr = format(endDate, 'yyyyMMdd');
-
-  const query = `
-    SELECT 
-      A.MATNR, 
-      A.ARKTX, 
-      SUM(A.NETWR) as total_sales_amt,
-      MAX(M.MEINS) as MEINS,
-      MAX(IFNULL(M.UMREZ_BOX, 1)) as UMREZ_BOX
-    FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
-    LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON A.MATNR = M.MATNR
-    WHERE A.VDATU BETWEEN '${startStr}' AND '${endStr}'
-    GROUP BY A.MATNR, A.ARKTX
-    ORDER BY total_sales_amt DESC
-    LIMIT 10
-  `;
-  
-  const [rows] = await bigqueryClient.query({ query });
-  return rows;
-}
-
-// 2. 전체 품목 검색
+// 1. [수정] 전체 유효 품목 검색 (검색어가 없으면 전체 조회)
 async function searchAllItems(term: string, endDateStr: string) {
   const endDate = new Date(endDateStr);
-  const startDate = subMonths(endDate, 12); 
+  const startDate = subMonths(endDate, 6); // 최근 6개월 실적 기준
   const startStr = format(startDate, 'yyyyMMdd');
   const endStr = format(endDate, 'yyyyMMdd');
+
+  // 검색어가 있으면 필터링, 없으면 판매금액 순으로 상위 300개 (성능 고려)
+  const whereCondition = term 
+    ? `AND (A.MATNR LIKE '%${term}%' OR A.ARKTX LIKE '%${term}%')`
+    : ``;
 
   const query = `
     SELECT 
@@ -48,16 +26,17 @@ async function searchAllItems(term: string, endDateStr: string) {
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON A.MATNR = M.MATNR
     WHERE A.VDATU BETWEEN '${startStr}' AND '${endStr}'
-      AND (A.MATNR LIKE '%${term}%' OR A.ARKTX LIKE '%${term}%')
+      ${whereCondition}
     GROUP BY A.MATNR, A.ARKTX
     ORDER BY total_sales_amt DESC
-    LIMIT 10
+    LIMIT 300
   `;
+  
   const [rows] = await bigqueryClient.query({ query });
   return rows;
 }
 
-// 3. [공통] 월별 이력 조회 함수 (범용화)
+// 2. [공통] 월별 이력 조회 함수
 async function fetchMonthlyData(matnr: string, umrezBox: number, startQueryDate: Date, endQueryDate: Date) {
   const sDate = format(startQueryDate, 'yyyyMMdd');
   const eDate = format(endQueryDate, 'yyyyMMdd');
@@ -90,7 +69,7 @@ async function fetchMonthlyData(matnr: string, umrezBox: number, startQueryDate:
   return dataMap;
 }
 
-// 4. [보정] 빈 달 채우기 (Gap Filling)
+// 3. [보정] 빈 달 채우기 (Gap Filling)
 function fillMonthlyGaps(dataMap: Map<string, number>, startDate: Date, monthsCount: number) {
   const result = [];
   let current = startOfMonth(startDate);
@@ -110,7 +89,7 @@ export async function getForecastDashboard(searchTerm?: string) {
     
     // 1. 기간 설정
     // (A) 금년 실적: 최근 6개월 (T-6 ~ T-1)
-    // (B) 전년 동월: (T-6 - 1년) ~ (T+5 - 1년) -> 총 12개월치 필요 (실적기간 + 예측기간의 전년도)
+    // (B) 전년 동월: (T-6 - 1년) ~ (T+5 - 1년) -> 총 12개월치 필요
     const historyStart = subMonths(today, 6); // 조회 시작일 (6개월 전)
     const historyEnd = today;                 // 조회 종료일 (오늘)
 
@@ -118,14 +97,10 @@ export async function getForecastDashboard(searchTerm?: string) {
     const lastYearStart = subYears(historyStart, 1);
     const lastYearEnd = subYears(addMonths(today, 6), 1);
 
-    let targetItems = [];
     const todayStr = format(today, 'yyyy-MM-dd');
 
-    if (searchTerm) {
-      targetItems = await searchAllItems(searchTerm, todayStr);
-    } else {
-      targetItems = await getTopSalesItemsByAmount(todayStr);
-    }
+    // ✅ [수정] 전체 검색 로직 사용
+    const targetItems = await searchAllItems(searchTerm || '', todayStr);
 
     if (targetItems.length === 0) return { success: true, data: [] };
 
@@ -140,9 +115,7 @@ export async function getForecastDashboard(searchTerm?: string) {
         ]);
         
         // 데이터 채우기 (Gap Filling)
-        // 금년 실적: 6개월
         const historyFilled = fillMonthlyGaps(historyMap, historyStart, 6);
-        // 전년 실적: 12개월 (차트 전체 구간)
         const lastYearFilled = fillMonthlyGaps(lastYearMap, lastYearStart, 12);
 
         // 엔진 호출
@@ -153,7 +126,8 @@ export async function getForecastDashboard(searchTerm?: string) {
             id: item.MATNR, 
             name: item.ARKTX,
             unit: item.MEINS || 'EA',
-            umrezBox: umrez
+            umrezBox: umrez,
+            totalSales: item.total_sales_amt // 정렬용 매출액
           },
           ...forecast
         };

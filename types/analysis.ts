@@ -51,19 +51,26 @@ export interface IntegratedItem {
 
   inventory: {
     totalStock: number;       
-    qualityStock: number;     // ✅ [추가] 품질 대기 재고 합계
+    qualityStock: number;
     usableStock: number;      
     status: 'healthy' | 'critical' | 'imminent' | 'disposed'; 
     remainingDays: number;    
     riskScore: number;        
     ads: number;              
     recommendedStock: number; 
-    batches: InventoryBatch[]; 
+    batches: InventoryBatch[];
+    // ✅ [핵심 수정] 상태별 수량을 쪼개서 저장하는 필드 추가
+    statusBreakdown: {
+      disposed: number;  // 폐기 대상 수량 (예: 46,400)
+      imminent: number;  // 임박 수량
+      critical: number;  // 긴급 수량
+      healthy: number;   // 양호 수량 (예: 45,310)
+    };
   };
 
   production: {
-    planQty: number;          // 조회 기간(과거) 계획 합계
-    futurePlanQty: number;    // 오늘 이후 입고 예정 합계
+    planQty: number;
+    futurePlanQty: number;
     receivedQty: number;      
     achievementRate: number;  
     lastReceivedDate: string | null;

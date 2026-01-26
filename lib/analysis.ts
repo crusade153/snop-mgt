@@ -11,7 +11,6 @@ const THRESHOLDS = {
   FIXED_ADS_DAYS: 60, 
 };
 
-// 브랜드/카테고리 추론 헬퍼
 function inferBrandInfo(name: string) {
   if (name.includes('The미식') || name.includes('미식')) return { brand: 'The미식', category: '상온' };
   if (name.includes('하림')) return { brand: '하림', category: '냉동' };
@@ -21,9 +20,9 @@ function inferBrandInfo(name: string) {
   return { brand: '기타', category: '기타' };
 }
 
-// 재고 상태 판정 헬퍼
+// ✅ [핵심 로직] 배치별 상태 판정 함수
 function getStockStatus(days: number): 'disposed' | 'imminent' | 'critical' | 'healthy' {
-  if (days <= 0) return 'disposed';                    
+  if (days <= 0) return 'disposed';     // 0일 이하는 폐기
   if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
   if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
   return 'healthy';                                    
@@ -42,7 +41,7 @@ export function analyzeSnopData(
   const today = new Date();
   const todayYmd = format(today, 'yyyyMMdd');
 
-  // 1. 재고 데이터 집계 (배치별 합산 & 품질재고 합산)
+  // 1. 재고 데이터 집계
   const invAggMap = new Map<string, { totalStock: number, qualityStock: number, batches: InventoryBatch[], info: SapInventory }>();
   
   inventoryList.forEach(inv => {
@@ -51,15 +50,13 @@ export function analyzeSnopData(
     }
     const target = invAggMap.get(inv.MATNR)!;
     target.totalStock += Number(inv.CLABS || 0);
-    target.qualityStock += Number(inv.CINSM || 0); // ✅ [추가] 품질 재고 합산
+    target.qualityStock += Number(inv.CINSM || 0);
     
-    // 잔여율(remain_rate) 단위 보정
     let rawRate = Number(inv.remain_rate || 0);
     if (Math.abs(rawRate) <= 10) { 
         rawRate = rawRate * 100; 
     }
 
-    // 배치 정보에는 가용 재고만 포함 (유통기한 관리는 가용재고 기준)
     if (Number(inv.CLABS) > 0) {
       target.batches.push({
         quantity: Number(inv.CLABS || 0),
@@ -72,7 +69,6 @@ export function analyzeSnopData(
   });
 
   const integratedMap = new Map<string, IntegratedItem>();
-  
   type CustomerTemp = CustomerStat & { 
     boughtMap: Map<string, {name:string, qty:number, value:number, unit:string, umrezBox:number}> 
   };
@@ -108,7 +104,6 @@ export function analyzeSnopData(
     let unfulfilledInfo: UnfulfilledOrder | null = null;
     if (unfulfilled > 0) {
         item.totalUnfulfilledQty += unfulfilled;
-        
         let unitPrice = 0;
         if (reqQty > 0) unitPrice = Math.abs(supplyPrice) / reqQty;
         item.totalUnfulfilledValue += unfulfilled * unitPrice;
@@ -139,7 +134,6 @@ export function analyzeSnopData(
         item.unfulfilledOrders.push(unfulfilledInfo);
     }
 
-    // 거래처 집계
     const custId = order.KUNNR || 'UNKNOWN';
     if (!customerMap.has(custId)) {
         customerMap.set(custId, {
@@ -209,35 +203,28 @@ export function analyzeSnopData(
     });
   });
 
-  // 재고만 있는 품목 추가
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
       initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, val.info.MEINS, Number(val.info.UMREZ_BOX || 1));
     }
   });
 
-  // 4. 최종 통합 배열 생성 및 KPI 계산
+  // 4. 최종 통합 및 KPI
   const integratedArray = Array.from(integratedMap.values());
   let totalUnfulfilledValue = 0;
   let criticalDeliveryCount = 0;
   const stockHealth = { disposed: 0, imminent: 0, critical: 0, healthy: 0 };
 
   integratedArray.forEach(item => {
-    // 생산 달성률
     if (item.production.planQty > 0) {
         item.production.achievementRate = (item.production.receivedQty / item.production.planQty) * 100;
     }
-    
-    // 미납 금액 집계
     totalUnfulfilledValue += item.totalUnfulfilledValue;
-    
-    // 긴급 납품 카운트
     if (item.unfulfilledOrders.some(o => o.daysDelayed >= 7)) criticalDeliveryCount++;
-
-    // ADS 계산
     item.inventory.ads = item.totalActualQty / THRESHOLDS.FIXED_ADS_DAYS;
 
-    // 재고 건전성 카운팅
+    // 재고 건전성 카운팅 - 제품 단위 카운트 (One Bad Apple 기준)
+    // 수량은 statusBreakdown에서 확인 가능
     if (item.inventory.totalStock > 0) {
         if (item.inventory.status === 'disposed') stockHealth.disposed++;
         else if (item.inventory.status === 'imminent') stockHealth.imminent++; 
@@ -281,7 +268,7 @@ export function analyzeSnopData(
   };
 }
 
-// 아이템 초기화 헬퍼
+// ✅ [핵심 수정] 아이템 초기화 헬퍼 - 배치별 상태 수량 합산 로직 추가
 function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
@@ -292,6 +279,7 @@ function initializeItem(
 ) {
   const invData = invMap.get(code);
   
+  // 1. 최소 잔여일 계산 (제품 전체의 상태 판정용)
   let minRemaining = 9999;
   if (invData && invData.batches.length > 0) {
     minRemaining = Math.min(...invData.batches.map(b => b.remainDays));
@@ -299,7 +287,7 @@ function initializeItem(
     minRemaining = Number(invData.info.remain_day);
   }
 
-  // 재고가 없으면 status는 healthy (표시 안됨), 있으면 날짜 기준 판정
+  // 2. 제품 전체 상태 판정 (가장 안 좋은 것 기준)
   const hasAnyStock = (invData?.totalStock || 0) > 0 || (invData?.qualityStock || 0) > 0;
   const status = hasAnyStock ? getStockStatus(minRemaining) : 'healthy';
   
@@ -307,6 +295,20 @@ function initializeItem(
   if (status === 'disposed') riskScore = 50;
   else if (status === 'imminent') riskScore = 100; 
   else if (status === 'critical') riskScore = 80;  
+
+  // 3. ✅ [신규] 상태별 수량 집계 (Batch Loop)
+  // 정확한 수량 파악을 위해 배치별로 돌면서 statusBreakdown에 더함
+  const statusBreakdown = { disposed: 0, imminent: 0, critical: 0, healthy: 0 };
+  
+  if (invData && invData.batches.length > 0) {
+    invData.batches.forEach(batch => {
+        const batchStatus = getStockStatus(batch.remainDays);
+        statusBreakdown[batchStatus] += batch.quantity;
+    });
+  } else if (invData && invData.totalStock > 0) {
+    // 배치가 없고 총재고만 있는 경우 (대표 상태로 몰아주기)
+    statusBreakdown[status] = invData.totalStock;
+  }
 
   let brand = '기타', category = '미지정';
   if (invData?.info.PRDHA_1_T) {
@@ -328,10 +330,11 @@ function initializeItem(
     totalReqQty: 0, totalActualQty: 0, totalUnfulfilledQty: 0, totalUnfulfilledValue: 0, totalSalesAmount: 0,
     inventory: {
       totalStock: invData?.totalStock || 0,
-      qualityStock: invData?.qualityStock || 0, // ✅ [추가] 품질재고 할당
+      qualityStock: invData?.qualityStock || 0, 
       usableStock: invData?.totalStock || 0,
       batches: invData?.batches || [],
-      status, 
+      status, // 제품의 대표 상태 (필터링용)
+      statusBreakdown, // ✅ [추가] 상세 수량 내역 (46400 vs 45310 분리)
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore,
       ads: 0,

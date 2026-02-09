@@ -1,20 +1,27 @@
 import { create } from 'zustand';
 
-type UnitMode = 'BASE' | 'BOX'; // 기본단위 vs 박스단위
+type UnitMode = 'BASE' | 'BOX'; 
+// ✅ [변경] 명칭 변경: FBH -> LOGISTICS (물류센터)
+type InventoryViewMode = 'ALL' | 'PLANT' | 'LOGISTICS';
 
 interface UiState {
   unitMode: UnitMode;
+  inventoryViewMode: InventoryViewMode;
+  
   toggleUnitMode: () => void;
   setUnitMode: (mode: UnitMode) => void;
+  setInventoryViewMode: (mode: InventoryViewMode) => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
-  unitMode: 'BASE', // 기본값: 기준 단위 (EA or KG)
+  unitMode: 'BASE', 
+  inventoryViewMode: 'ALL', // 기본값은 통합 보기
   
-  // 버튼 누를 때마다 모드 변경 (토글)
   toggleUnitMode: () => set((state) => ({ 
     unitMode: state.unitMode === 'BASE' ? 'BOX' : 'BASE' 
   })),
 
   setUnitMode: (mode) => set({ unitMode: mode }),
+  
+  setInventoryViewMode: (mode) => set({ inventoryViewMode: mode }),
 }));

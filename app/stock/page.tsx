@@ -8,12 +8,12 @@ import { useUiStore } from '@/store/ui-store';
 import * as XLSX from 'xlsx'; 
 import { format } from 'date-fns';
 
-type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed';
+type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed' | 'no_expiry';
 type ViewMode = 'DAYS' | 'RATE'; 
 
 export default function StockStatusPage() {
   const { data, isLoading } = useDashboardData();
-  const { unitMode } = useUiStore(); 
+  const { unitMode, inventoryViewMode } = useUiStore();
 
   const [activeTab, setActiveTab] = useState<TabType>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('DAYS'); 
@@ -22,25 +22,28 @@ export default function StockStatusPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
 
-  // 필터링 로직
+  const getStockInfo = (item: IntegratedItem) => {
+    let targetStock = 0;
+    let targetBatches: InventoryBatch[] = [];
+
+    if (inventoryViewMode === 'PLANT') {
+        targetStock = item.inventory.plantStock;
+        targetBatches = item.inventory.plantBatches;
+    } else if (inventoryViewMode === 'LOGISTICS') {
+        targetStock = item.inventory.fbhStock;
+        targetBatches = item.inventory.fbhBatches;
+    } else { 
+        targetStock = item.inventory.totalStock;
+        targetBatches = item.inventory.batches;
+    }
+    return { targetStock, targetBatches };
+  };
+
   const filteredData = useMemo(() => {
     if (!data) return [];
     
-    // 1. 재고 있는 것만
-    let items = data.integratedArray.filter((item: IntegratedItem) => 
-      item.inventory.totalStock > 0 || (showHiddenStock && item.inventory.qualityStock > 0)
-    );
-    
-    // 2. 상태 탭 필터 - "해당 상태의 재고가 1개라도 있는 제품"을 보여줌
-    if (activeTab !== 'all') {
-      items = items.filter((item: IntegratedItem) => {
-        // 기존 status 체크가 아닌, 해당 breakdown 수량이 있는지 체크
-        // (예: 정상 제품이라도 폐기 재고가 조금이라도 섞여 있으면 폐기 탭에 노출)
-        return item.inventory.statusBreakdown[activeTab] > 0;
-      });
-    }
-    
-    // 3. 검색어 필터
+    let items = data.integratedArray;
+
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
       items = items.filter((item: IntegratedItem) => 
@@ -49,18 +52,48 @@ export default function StockStatusPage() {
       );
     }
 
-    if (viewMode === 'RATE') {
-        items.sort((a, b) => {
-            const minRateA = a.inventory.batches.length > 0 ? Math.min(...a.inventory.batches.map(bt => bt.remainRate)) : 999;
-            const minRateB = b.inventory.batches.length > 0 ? Math.min(...b.inventory.batches.map(bt => bt.remainRate)) : 999;
-            return minRateA - minRateB;
+    items = items.filter((item: IntegratedItem) => {
+        const { targetStock } = getStockInfo(item);
+        const qualityCheck = (inventoryViewMode === 'PLANT' && showHiddenStock && item.inventory.qualityStock > 0);
+        return targetStock > 0 || qualityCheck;
+    });
+    
+    // ✅ [확인] 탭 필터링 로직: 6번 코드도 no_expiry 탭에 잡히도록 수정
+    if (activeTab !== 'all') {
+      items = items.filter((item: IntegratedItem) => {
+        const { targetBatches } = getStockInfo(item);
+        const isProductNoExpiry = item.code.startsWith('6');
+
+        return targetBatches.some(b => {
+            const isBatchNoExpiry = isProductNoExpiry || b.expirationDate === '-' || b.expirationDate === '';
+            
+            if (activeTab === 'no_expiry') {
+                return isBatchNoExpiry;
+            }
+
+            if (isBatchNoExpiry) return false;
+
+            const days = b.remainDays;
+            let status = 'healthy';
+            if (days <= 0) status = 'disposed';
+            else if (days <= 30) status = 'imminent';
+            else if (days <= 60) status = 'critical';
+            
+            return status === activeTab;
         });
-    } else {
-        items.sort((a: IntegratedItem, b: IntegratedItem) => a.inventory.remainingDays - b.inventory.remainingDays);
+      });
     }
+
+    items.sort((a, b) => {
+        const { targetBatches: bA } = getStockInfo(a);
+        const { targetBatches: bB } = getStockInfo(b);
+        const minA = bA.length > 0 ? Math.min(...bA.map(bt => bt.remainDays)) : 9999;
+        const minB = bB.length > 0 ? Math.min(...bB.map(bt => bt.remainDays)) : 9999;
+        return minA - minB;
+    });
     
     return items;
-  }, [data, activeTab, searchTerm, viewMode, showHiddenStock]);
+  }, [data, activeTab, searchTerm, viewMode, showHiddenStock, inventoryViewMode]);
 
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
@@ -103,123 +136,74 @@ export default function StockStatusPage() {
 
     const excelData = filteredData.map((item, idx) => {
       const umrez = item.umrezBox;
-      const buckets = calculateRateBuckets(item.inventory.batches);
-      const worstBatch = item.inventory.batches.sort((a, b) => a.remainDays - b.remainDays)[0];
+      const { targetStock, targetBatches } = getStockInfo(item);
+      const worstBatch = targetBatches.sort((a, b) => a.remainDays - b.remainDays)[0];
+      
+      const isProductNoExpiry = item.code.startsWith('6');
+      const isNoExpiry = isProductNoExpiry || (worstBatch && (worstBatch.expirationDate === '-' || worstBatch.expirationDate === ''));
+      
+      let statusStr = '양호';
+      if (isNoExpiry) statusStr = '기한없음';
+      else if (worstBatch) {
+          if (worstBatch.remainDays <= 0) statusStr = '폐기';
+          else if (worstBatch.remainDays <= 30) statusStr = '임박';
+          else if (worstBatch.remainDays <= 60) statusStr = '긴급';
+      }
 
       return {
         'No': idx + 1,
-        '상태': item.inventory.status.toUpperCase(),
+        '모드': inventoryViewMode,
+        '상태': statusStr,
         '제품코드': item.code,
         '제품명': item.name,
         '단위기준': unitLabel,
-        [`총 재고(${unitLabel})`]: unitMode === 'BOX' ? (item.inventory.totalStock / umrez).toFixed(1) : item.inventory.totalStock,
-        [`품질대기(${unitLabel})`]: unitMode === 'BOX' ? (item.inventory.qualityStock / umrez).toFixed(1) : item.inventory.qualityStock,
-        '최단 유통기한': worstBatch ? worstBatch.expirationDate : '-',
-        '잔여일수': item.inventory.remainingDays,
+        [`재고(${unitLabel})`]: unitMode === 'BOX' ? (targetStock / umrez).toFixed(1) : targetStock,
+        [`품질대기(${unitLabel})`]: (inventoryViewMode === 'PLANT' && item.inventory.qualityStock > 0) ? (unitMode === 'BOX' ? (item.inventory.qualityStock / umrez).toFixed(1) : item.inventory.qualityStock) : '-',
+        '최단 유통기한': (worstBatch && !isNoExpiry) ? worstBatch.expirationDate : '-',
+        '잔여일수': (worstBatch && !isNoExpiry) ? worstBatch.remainDays : '-',
       };
     });
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "재고현황");
-    XLSX.writeFile(workbook, `재고현황_${unitLabel}_${todayStr}.xlsx`);
+    XLSX.writeFile(workbook, `재고현황_${inventoryViewMode}_${todayStr}.xlsx`);
   };
 
   if (isLoading) return <LoadingSpinner />;
-  if (!data) return <ErrorDisplay />;
+  if (!data) return <div className="p-10 text-center text-red-500">데이터를 불러오지 못했습니다.</div>;
 
   return (
     <div className="space-y-6">
-      <div className="pb-4 border-b border-neutral-200 flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
-        <div>
-            <h1 className="text-[20px] font-bold text-neutral-900 flex items-center gap-2">
-            📦 재고 상세 현황 (Current Stock Status)
-            </h1>
-            <p className="text-[12px] text-neutral-700 mt-1">
-            전체 재고의 유통기한 및 잔여율 집중 모니터링
-            </p>
-        </div>
-        
-        <div className="flex gap-2">
-            <button 
-                onClick={handleExcelDownload}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all bg-green-600 text-white hover:bg-green-700 shadow-sm"
-            >
-                <FileSpreadsheet size={14}/> 엑셀 다운로드
-            </button>
-
-            <div className="w-[1px] h-8 bg-neutral-300 mx-1"></div>
-
-            <button 
-                onClick={() => setShowHiddenStock(!showHiddenStock)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all border ${
-                showHiddenStock 
-                    ? 'bg-purple-50 text-purple-700 border-purple-200' 
-                    : 'bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50'
-                }`}
-            >
-                {showHiddenStock ? <EyeOff size={14}/> : <Eye size={14}/>}
-                {showHiddenStock ? '품질재고 숨기기' : '숨은 재고(품질) 보기'}
-            </button>
-
-            <div className="flex bg-neutral-100 p-1 rounded-lg border border-neutral-200">
-                <button 
-                    onClick={() => setViewMode('DAYS')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'DAYS' ? 'bg-white shadow text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}
-                >
-                    <Calendar size={14}/> 유통기한 기준
-                </button>
-                <button 
-                    onClick={() => setViewMode('RATE')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${viewMode === 'RATE' ? 'bg-white shadow text-blue-700' : 'text-neutral-500 hover:text-neutral-700'}`}
-                >
-                    <Percent size={14}/> 잔여율 구간 기준
-                </button>
-            </div>
-        </div>
-      </div>
-
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
           <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
-          {/* 각 탭의 카운트도 해당 상태 재고가 있는 제품 수로 변경 */}
-          <TabButton label="양호" count={data.integratedArray.filter(i => i.inventory.statusBreakdown.healthy > 0).length} active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
-          <TabButton label="긴급 (60일↓)" count={data.integratedArray.filter(i => i.inventory.statusBreakdown.critical > 0).length} active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
-          <TabButton label="임박 (30일↓)" count={data.integratedArray.filter(i => i.inventory.statusBreakdown.imminent > 0).length} active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
-          <TabButton label="폐기" count={data.integratedArray.filter(i => i.inventory.statusBreakdown.disposed > 0).length} active={activeTab === 'disposed'} onClick={() => { setActiveTab('disposed'); setCurrentPage(1); }} color="text-[#C62828]" />
+          <TabButton label="양호" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
+          <TabButton label="긴급 (60일↓)" active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
+          <TabButton label="임박 (30일↓)" active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
+          <TabButton label="폐기" active={activeTab === 'disposed'} onClick={() => { setActiveTab('disposed'); setCurrentPage(1); }} color="text-[#C62828]" />
+          <TabButton label="기한없음" active={activeTab === 'no_expiry'} onClick={() => { setActiveTab('no_expiry'); setCurrentPage(1); }} color="text-neutral-600" />
         </div>
-
         <div className="relative w-full md:w-64">
-          <input 
-            type="text" 
-            placeholder="제품명 또는 코드 검색..." 
-            value={searchTerm}
-            onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-            className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white"
-          />
+          <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
           <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
         </div>
       </div>
 
-      <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
+      <div className="bg-white rounded shadow border border-neutral-200 overflow-hidden">
         <div className="overflow-x-auto min-h-[500px]">
           <table className="w-full text-sm text-left border-collapse table-fixed">
             <thead className="bg-[#FAFAFA]">
               <tr>
-                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-12 text-center">No</th>
-                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-24 text-center">상태</th>
-                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 w-[25%]">제품명</th>
-                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right w-32">
-                  {/* 헤더 이름 동적 변경 */}
-                  {activeTab === 'all' ? '총 재고 (가용)' : `${activeTab === 'disposed' ? '폐기' : activeTab === 'imminent' ? '임박' : activeTab === 'critical' ? '긴급' : '양호'} 대상 수량`}
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-12 text-center">No</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-24 text-center">상태</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-[25%]">제품명</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right w-32">
+                  {inventoryViewMode === 'ALL' ? '통합 재고' : inventoryViewMode === 'LOGISTICS' ? '물류센터 재고' : '플랜트 재고'}
                 </th>
-                
-                {showHiddenStock && (
-                    <th className="px-4 py-3 border-b border-neutral-200 font-bold text-purple-700 text-right w-28 bg-purple-50">
-                        품질대기
-                    </th>
+                {inventoryViewMode === 'PLANT' && showHiddenStock && (
+                    <th className="px-4 py-3 border-b border-neutral-200 font-bold text-purple-700 text-right w-28 bg-purple-50">품질대기</th>
                 )}
-                
                 {viewMode === 'DAYS' ? (
                     <>
                         <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-center">단위</th>
@@ -240,93 +224,74 @@ export default function StockStatusPage() {
             </thead>
             <tbody className="divide-y divide-neutral-200">
               {paginatedItems.map((item: IntegratedItem, idx: number) => {
-                // ✅ [핵심 수정] 탭에 따라 보여줄 재고 수량 결정
-                let stockToShow = item.inventory.totalStock; // 기본: 전체
-                if (activeTab !== 'all') {
-                    stockToShow = item.inventory.statusBreakdown[activeTab];
-                }
-
-                const displayStock = formatQty(stockToShow, item.umrezBox, item.unit);
-                const qualityStockVal = item.inventory.qualityStock || 0;
+                const { targetStock, targetBatches } = getStockInfo(item);
+                const displayStock = formatQty(targetStock, item.umrezBox, item.unit);
+                const qualityStockVal = (inventoryViewMode === 'PLANT' && showHiddenStock) ? (item.inventory.qualityStock || 0) : 0;
                 const displayQuality = formatQty(qualityStockVal, item.umrezBox, item.unit);
 
-                const worstBatch = item.inventory.batches.sort((a, b) => a.remainDays - b.remainDays)[0];
+                const worstBatch = targetBatches.sort((a, b) => a.remainDays - b.remainDays)[0];
                 const expiryDate = worstBatch ? worstBatch.expirationDate : '-';
                 const remainRate = worstBatch ? worstBatch.remainRate : 0;
-                const buckets = calculateRateBuckets(item.inventory.batches);
+                const remainDays = worstBatch ? worstBatch.remainDays : 0;
+                const buckets = calculateRateBuckets(targetBatches);
                 const unitLabel = displayStock.unit;
+
+                // ✅ 6번 코드 or 유통기한 없음 => 'no_expiry' (기한없음)
+                const isProductNoExpiry = item.code.startsWith('6');
+                const isNoExpiry = isProductNoExpiry || (worstBatch && (worstBatch.expirationDate === '-' || worstBatch.expirationDate === ''));
+                
+                let status = 'healthy';
+                if (isNoExpiry) status = 'no_expiry';
+                else if (worstBatch) {
+                    if (remainDays <= 0) status = 'disposed';
+                    else if (remainDays <= 30) status = 'imminent';
+                    else if (remainDays <= 60) status = 'critical';
+                }
 
                 return (
                   <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
                     <td className="px-4 py-3 text-center text-neutral-400 text-xs">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
-                    <td className="px-4 py-3 text-center"><StatusBadge status={item.inventory.status} /></td>
+                    <td className="px-4 py-3 text-center"><StatusBadge status={status} /></td>
                     <td className="px-4 py-3">
                         <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
                         <div className="text-[11px] text-neutral-400 font-mono">{item.code}</div>
                     </td>
-                    
                     <td className="px-4 py-3 text-right font-bold text-neutral-800 border-r border-neutral-100">
-                      {/* 수량 표시 부분 */}
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-400">{unitLabel}</span>
-                      
-                      {!showHiddenStock && qualityStockVal > 0 && activeTab === 'all' && (
-                        <div className="text-[9px] text-purple-500 mt-0.5 flex justify-end items-center gap-0.5 font-normal">
-                          +품질 {displayQuality.value}
-                        </div>
+                      {!showHiddenStock && qualityStockVal > 0 && inventoryViewMode === 'PLANT' && (
+                        <div className="text-[9px] text-purple-500 mt-0.5 flex justify-end items-center gap-0.5 font-normal">+품질 {displayQuality.value}</div>
                       )}
                     </td>
-
-                    {showHiddenStock && (
-                        <td className="px-4 py-3 text-right font-bold text-purple-700 bg-purple-50/30 border-r border-purple-100">
-                            {qualityStockVal > 0 ? displayQuality.value : '-'}
-                        </td>
+                    {inventoryViewMode === 'PLANT' && showHiddenStock && (
+                        <td className="px-4 py-3 text-right font-bold text-purple-700 bg-purple-50/30 border-r border-purple-100">{qualityStockVal > 0 ? displayQuality.value : '-'}</td>
                     )}
-
                     {viewMode === 'DAYS' ? (
                         <>
                             <td className="px-4 py-3 text-center text-neutral-500 text-xs">{item.unit}</td>
-                            <td className="px-4 py-3 text-center text-neutral-600 font-mono text-xs">{expiryDate}</td>
-                            <td className={`px-4 py-3 text-right font-bold ${item.inventory.status !== 'healthy' ? 'text-[#C62828]' : 'text-neutral-600'}`}>
-                                {item.inventory.remainingDays}일
+                            <td className="px-4 py-3 text-center text-neutral-600 font-mono text-xs">{isNoExpiry ? '-' : expiryDate}</td>
+                            <td className={`px-4 py-3 text-right font-bold ${status==='disposed'?'text-[#C62828]':status==='no_expiry'?'text-neutral-400':'text-neutral-600'}`}>
+                                {isNoExpiry ? '-' : (worstBatch ? `${remainDays}일` : '-')}
                             </td>
                             <td className="px-4 py-3 text-right">
-                                <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${remainRate < 30 ? 'bg-[#FFEBEE] text-[#C62828]' : 'bg-[#E3F2FD] text-[#1565C0]'}`}>{remainRate.toFixed(1)}%</span>
+                                {isNoExpiry ? <span className="text-neutral-400">-</span> : (worstBatch ? <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${remainRate < 30 ? 'bg-[#FFEBEE] text-[#C62828]' : 'bg-[#E3F2FD] text-[#1565C0]'}`}>{remainRate.toFixed(1)}%</span> : '-')}
                             </td>
                         </>
                     ) : (
                         <>
-                            <td className="px-2 py-3 text-right text-[#C62828] font-bold bg-red-50/30">
-                                {buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}
-                            </td>
-                            <td className="px-2 py-3 text-right text-[#E65100] font-medium bg-orange-50/30">
-                                {buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}
-                            </td>
-                            <td className="px-2 py-3 text-right text-[#F57F17] font-medium bg-yellow-50/30">
-                                {buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}
-                            </td>
-                            <td className="px-2 py-3 text-right text-[#1565C0] font-medium bg-blue-50/30">
-                                {buckets.r75_85 > 0 ? formatQty(buckets.r75_85, item.umrezBox, item.unit).value : '-'}
-                            </td>
-                            <td className="px-2 py-3 text-right text-[#2E7D32] font-medium bg-green-50/30">
-                                {buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).value : '-'}
-                            </td>
+                            <td className="px-2 py-3 text-right text-[#C62828] font-bold bg-red-50/30">{buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}</td>
+                            <td className="px-2 py-3 text-right text-[#E65100] font-medium bg-orange-50/30">{buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}</td>
+                            <td className="px-2 py-3 text-right text-[#F57F17] font-medium bg-yellow-50/30">{buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}</td>
+                            <td className="px-2 py-3 text-right text-[#1565C0] font-medium bg-blue-50/30">{buckets.r75_85 > 0 ? formatQty(buckets.r75_85, item.umrezBox, item.unit).value : '-'}</td>
+                            <td className="px-2 py-3 text-right text-[#2E7D32] font-medium bg-green-50/30">{buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).value : '-'}</td>
                         </>
                     )}
                   </tr>
                 );
               })}
-              {paginatedItems.length === 0 && (<tr><td colSpan={viewMode === 'DAYS' ? (showHiddenStock ? 9 : 8) : (showHiddenStock ? 10 : 9)} className="p-10 text-center text-neutral-400">검색된 재고가 없습니다.</td></tr>)}
+              {paginatedItems.length === 0 && (<tr><td colSpan={10} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>)}
             </tbody>
           </table>
         </div>
-
-        {totalPages > 1 && (
-          <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
-            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30"><ChevronLeft size={20} /></button>
-            <span className="text-sm font-bold text-neutral-600">{currentPage} / {totalPages}</span>
-            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30"><ChevronRight size={20} /></button>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -336,12 +301,18 @@ function TabButton({ label, count, active, onClick, color }: any) {
   return (
     <button onClick={onClick} className={`flex items-center gap-2 px-3 py-2 rounded-md text-xs font-bold transition-all whitespace-nowrap ${active ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}>
       <span className={active && color ? color : ''}>{label}</span>
-      <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${active ? 'bg-neutral-100' : 'bg-neutral-200'}`}>{count}</span>
+      {count !== undefined && <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${active ? 'bg-neutral-100' : 'bg-neutral-200'}`}>{count}</span>}
     </button>
   );
 }
 function StatusBadge({ status }: { status: string }) {
-  const config: any = { healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' }, critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' }, disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' }, };
+  const config: any = { 
+      healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' }, 
+      critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, 
+      imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' }, 
+      disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
+      no_expiry: { bg: '#F5F5F5', text: '#757575', label: '기한없음' }
+  };
   const c = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };
   return (<span className="px-2 py-1 rounded text-[11px] font-bold" style={{ backgroundColor: c.bg, color: c.text }}>{c.label}</span>);
 }

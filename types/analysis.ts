@@ -1,12 +1,13 @@
 // types/analysis.ts
-import { SapOrder, SapInventory, SapProduction } from './sap';
+import { SapOrder, SapInventory, SapProduction, FbhInventory } from './sap';
 
 export interface InventoryBatch {
   quantity: number;       
   expirationDate: string; 
   remainDays: number;     
   remainRate: number;     
-  location: string;       
+  location: string;
+  source: 'PLANT' | 'FBH';
 }
 
 export interface UnfulfilledOrder {
@@ -52,19 +53,30 @@ export interface IntegratedItem {
   inventory: {
     totalStock: number;       
     qualityStock: number;
-    usableStock: number;      
-    status: 'healthy' | 'critical' | 'imminent' | 'disposed'; 
+    
+    // ✅ [복구] 가용 재고 필드 추가 (빌드 에러 해결)
+    usableStock: number;
+
+    plantStock: number; 
+    fbhStock: number;   
+
+    batches: InventoryBatch[]; 
+    
+    plantBatches: InventoryBatch[];
+    fbhBatches: InventoryBatch[];
+    
+    status: 'healthy' | 'critical' | 'imminent' | 'disposed' | 'no_expiry'; 
     remainingDays: number;    
     riskScore: number;        
     ads: number;              
     recommendedStock: number; 
-    batches: InventoryBatch[];
-    // ✅ [핵심 수정] 상태별 수량을 쪼개서 저장하는 필드 추가
+    
     statusBreakdown: {
-      disposed: number;  // 폐기 대상 수량 (예: 46,400)
-      imminent: number;  // 임박 수량
-      critical: number;  // 긴급 수량
-      healthy: number;   // 양호 수량 (예: 45,310)
+      disposed: number;  
+      imminent: number;  
+      critical: number;  
+      healthy: number;
+      no_expiry: number;
     };
   };
 
@@ -121,6 +133,7 @@ export interface DashboardAnalysis {
     imminent: number;
     critical: number;
     healthy: number;  
+    no_expiry: number;
   };
   salesAnalysis: {
     topProducts: { name: string; value: number }[];   

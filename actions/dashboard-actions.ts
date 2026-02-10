@@ -5,12 +5,16 @@ import { analyzeSnopData } from '@/lib/analysis';
 import { SapOrder, SapInventory, SapProduction, FbhInventory } from '@/types/sap';
 import { unstable_cache } from 'next/cache';
 import { gzipSync, gunzipSync } from 'zlib';
-import { addMonths, format } from 'date-fns'; 
+import { addMonths, format, subDays } from 'date-fns'; 
 
 // 1. [내부 함수] 실제 BigQuery 조회
 async function fetchRawData(sDate: string, eDate: string) {
   
   const futureEnd = format(addMonths(new Date(), 6), 'yyyyMMdd');
+  // ADS 90일 계산을 위해 조회 시작일을 90일 전으로 강제 확장
+  const extendedStartDate = format(subDays(new Date(), 90), 'yyyyMMdd');
+  // 사용자가 요청한 날짜와 90일 전 중 더 빠른 날짜를 선택 (데이터 누락 방지)
+  const queryStartDate = sDate < extendedStartDate ? sDate : extendedStartDate;
 
   // 1. 납품(주문) 데이터
   const orderQuery = `
@@ -29,7 +33,7 @@ async function fetchRawData(sDate: string, eDate: string) {
       IFNULL(M.UMREZ_BOX, 1) as UMREZ_BOX
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON A.MATNR = M.MATNR
-    WHERE A.VDATU BETWEEN '${sDate}' AND '${eDate}'
+    WHERE A.VDATU BETWEEN '${queryStartDate}' AND '${eDate}'
   `;
   
   // 2. 생산 계획
@@ -48,10 +52,10 @@ async function fetchRawData(sDate: string, eDate: string) {
       IFNULL(M.UMREZ_BOX, 1) as UMREZ_BOX
     FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\` AS P
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON P.MATNR = M.MATNR
-    WHERE P.GSTRP BETWEEN '${sDate}' AND '${futureEnd}'
+    WHERE P.GSTRP BETWEEN '${queryStartDate}' AND '${futureEnd}'
   `;
 
-  // 3. 사내 플랜트 재고
+  // 3. 사내 플랜트 재고 (테이블 변경 적용: V_MM_MCHB -> V_MM_MCHB_ALL)
   const inventoryQuery = `
     SELECT 
       MATNR, MATNR_T, MEINS, LGOBE, VFDAT, 
@@ -60,11 +64,11 @@ async function fetchRawData(sDate: string, eDate: string) {
       IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
       remain_day, remain_rate, 
       PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
-    FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
+    FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB_ALL\`
     WHERE CLABS > 0 OR CINSM > 0 
   `;
 
-  // ✅ [수정 완료] 4. FBH 외부 창고 재고 (정확한 테이블 주소 적용)
+  // 4. FBH 외부 창고 재고
   const fbhQuery = `
     SELECT 
       SKU_CD, 
@@ -75,26 +79,23 @@ async function fetchRawData(sDate: string, eDate: string) {
       MEINS, 
       IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
       REMAINING_DAY
-    FROM \`harimfood-361004.harim_sap_bi_user.V_WMV_CST_INVNLIST\` -- 올바른 뷰 이름
+    FROM \`harimfood-361004.harim_sap_bi_user.V_WMV_CST_INVNLIST\`
     WHERE AVLB_QTY > 0
   `;
 
   try {
-    // 1. 기본 데이터 병렬 조회
     const [orderRes, prodRes, invRes] = await Promise.all([
       bigqueryClient.query({ query: orderQuery }),
       bigqueryClient.query({ query: productionQuery }),
       bigqueryClient.query({ query: inventoryQuery })
     ]);
 
-    // 2. FBH 데이터 안전 조회
     let fbhRows: FbhInventory[] = [];
     try {
       const [fbhRes] = await bigqueryClient.query({ query: fbhQuery });
       fbhRows = fbhRes as FbhInventory[];
     } catch (fbhError) {
-      // 쿼리 에러가 발생해도 전체 앱이 죽지 않도록 경고만 남기고 빈 배열 처리
-      console.warn("⚠️ FBH 재고 조회 실패 (주소 또는 권한 확인 필요):", fbhError);
+      console.warn("⚠️ FBH 재고 조회 실패:", fbhError);
       fbhRows = []; 
     }
 
@@ -112,8 +113,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 
 // 2. [캐싱 대상] 분석 결과 생성 및 압축
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 캐시 키 업데이트 (v3.2 - 주소 수정 반영)
-    const cacheKey = `dashboard-analysis-v3.2-${sDate}-${eDate}`;
+    // 캐시 키 업데이트 (테이블 변경 반영 v4.0)
+    const cacheKey = `dashboard-analysis-v4.0-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

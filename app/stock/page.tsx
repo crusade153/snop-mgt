@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Search, Calendar, ChevronLeft, ChevronRight, Percent, Eye, EyeOff, FileSpreadsheet } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
 import * as XLSX from 'xlsx'; 
@@ -44,6 +44,7 @@ export default function StockStatusPage() {
     
     let items = data.integratedArray;
 
+    // 검색어 필터
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
       items = items.filter((item: IntegratedItem) => 
@@ -52,13 +53,14 @@ export default function StockStatusPage() {
       );
     }
 
+    // 재고 0 제외 필터 (품질재고 체크 포함)
     items = items.filter((item: IntegratedItem) => {
         const { targetStock } = getStockInfo(item);
         const qualityCheck = (inventoryViewMode === 'PLANT' && showHiddenStock && item.inventory.qualityStock > 0);
         return targetStock > 0 || qualityCheck;
     });
     
-    // ✅ [확인] 탭 필터링 로직: 6번 코드도 no_expiry 탭에 잡히도록 수정
+    // 탭 필터링 로직
     if (activeTab !== 'all') {
       items = items.filter((item: IntegratedItem) => {
         const { targetBatches } = getStockInfo(item);
@@ -84,6 +86,7 @@ export default function StockStatusPage() {
       });
     }
 
+    // 유통기한 임박 순 정렬
     items.sort((a, b) => {
         const { targetBatches: bA } = getStockInfo(a);
         const { targetBatches: bB } = getStockInfo(b);
@@ -95,12 +98,20 @@ export default function StockStatusPage() {
     return items;
   }, [data, activeTab, searchTerm, viewMode, showHiddenStock, inventoryViewMode]);
 
+  // 페이지네이션 로직 수정 (확실한 슬라이싱)
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
     return filteredData.slice(startIdx, startIdx + itemsPerPage);
   }, [filteredData, currentPage]);
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    // 테이블 상단으로 스크롤 이동
+    const tableTop = document.getElementById('stock-table-top');
+    if (tableTop) tableTop.scrollIntoView({ behavior: 'smooth' });
+  };
 
   const formatQty = (val: number, conversion: number, baseUnit: string) => {
     if (unitMode === 'BOX') {
@@ -126,56 +137,12 @@ export default function StockStatusPage() {
     return buckets;
   };
 
-  const handleExcelDownload = () => {
-    if (filteredData.length === 0) {
-      alert("다운로드할 데이터가 없습니다.");
-      return;
-    }
-    const todayStr = format(new Date(), 'yyyyMMdd_HHmmss');
-    const unitLabel = unitMode === 'BOX' ? 'BOX' : 'EA/KG';
-
-    const excelData = filteredData.map((item, idx) => {
-      const umrez = item.umrezBox;
-      const { targetStock, targetBatches } = getStockInfo(item);
-      const worstBatch = targetBatches.sort((a, b) => a.remainDays - b.remainDays)[0];
-      
-      const isProductNoExpiry = item.code.startsWith('6');
-      const isNoExpiry = isProductNoExpiry || (worstBatch && (worstBatch.expirationDate === '-' || worstBatch.expirationDate === ''));
-      
-      let statusStr = '양호';
-      if (isNoExpiry) statusStr = '기한없음';
-      else if (worstBatch) {
-          if (worstBatch.remainDays <= 0) statusStr = '폐기';
-          else if (worstBatch.remainDays <= 30) statusStr = '임박';
-          else if (worstBatch.remainDays <= 60) statusStr = '긴급';
-      }
-
-      return {
-        'No': idx + 1,
-        '모드': inventoryViewMode,
-        '상태': statusStr,
-        '제품코드': item.code,
-        '제품명': item.name,
-        '단위기준': unitLabel,
-        [`재고(${unitLabel})`]: unitMode === 'BOX' ? (targetStock / umrez).toFixed(1) : targetStock,
-        [`품질대기(${unitLabel})`]: (inventoryViewMode === 'PLANT' && item.inventory.qualityStock > 0) ? (unitMode === 'BOX' ? (item.inventory.qualityStock / umrez).toFixed(1) : item.inventory.qualityStock) : '-',
-        '최단 유통기한': (worstBatch && !isNoExpiry) ? worstBatch.expirationDate : '-',
-        '잔여일수': (worstBatch && !isNoExpiry) ? worstBatch.remainDays : '-',
-      };
-    });
-
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "재고현황");
-    XLSX.writeFile(workbook, `재고현황_${inventoryViewMode}_${todayStr}.xlsx`);
-  };
-
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <div className="p-10 text-center text-red-500">데이터를 불러오지 못했습니다.</div>;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+      <div id="stock-table-top" className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
           <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
           <TabButton label="양호" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
@@ -236,7 +203,6 @@ export default function StockStatusPage() {
                 const buckets = calculateRateBuckets(targetBatches);
                 const unitLabel = displayStock.unit;
 
-                // ✅ 6번 코드 or 유통기한 없음 => 'no_expiry' (기한없음)
                 const isProductNoExpiry = item.code.startsWith('6');
                 const isNoExpiry = isProductNoExpiry || (worstBatch && (worstBatch.expirationDate === '-' || worstBatch.expirationDate === ''));
                 
@@ -292,6 +258,29 @@ export default function StockStatusPage() {
             </tbody>
           </table>
         </div>
+
+        {/* 페이지네이션 컨트롤 */}
+        {totalPages > 1 && (
+          <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
+            <button 
+              onClick={() => handlePageChange(Math.max(1, currentPage - 1))} 
+              disabled={currentPage === 1} 
+              className="p-1.5 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <span className="text-sm font-bold text-neutral-600">
+              {currentPage} / {totalPages}
+            </span>
+            <button 
+              onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))} 
+              disabled={currentPage === totalPages} 
+              className="p-1.5 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -317,4 +306,3 @@ function StatusBadge({ status }: { status: string }) {
   return (<span className="px-2 py-1 rounded text-[11px] font-bold" style={{ backgroundColor: c.bg, color: c.text }}>{c.label}</span>);
 }
 function LoadingSpinner() { return <div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>; }
-function ErrorDisplay() { return <div className="p-10 text-center text-[#E53935]">데이터 로드 실패</div>; }

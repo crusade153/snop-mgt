@@ -47,7 +47,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
 
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <KpiCard title="제품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
+        {/* 요청사항 반영: 납품 매출 */}
+        <KpiCard title="납품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
         <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
         <KpiCard 
           title="미납 손실액" 

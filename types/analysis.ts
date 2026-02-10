@@ -53,8 +53,6 @@ export interface IntegratedItem {
   inventory: {
     totalStock: number;       
     qualityStock: number;
-    
-    // ✅ [복구] 가용 재고 필드 추가 (빌드 에러 해결)
     usableStock: number;
 
     plantStock: number; 
@@ -68,7 +66,12 @@ export interface IntegratedItem {
     status: 'healthy' | 'critical' | 'imminent' | 'disposed' | 'no_expiry'; 
     remainingDays: number;    
     riskScore: number;        
-    ads: number;              
+    
+    ads: number; // 기존 호환용 (기본 60일)
+    ads30: number; // 최근 30일 기준 일평균 판매량
+    ads60: number; // 최근 60일 기준 일평균 판매량
+    ads90: number; // 최근 90일 기준 일평균 판매량
+
     recommendedStock: number; 
     
     statusBreakdown: {

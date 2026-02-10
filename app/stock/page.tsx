@@ -5,8 +5,6 @@ import { useDashboardData } from '@/hooks/use-dashboard';
 import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
-import * as XLSX from 'xlsx'; 
-import { format } from 'date-fns';
 
 type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed' | 'no_expiry';
 type ViewMode = 'DAYS' | 'RATE'; 
@@ -44,7 +42,7 @@ export default function StockStatusPage() {
     
     let items = data.integratedArray;
 
-    // 검색어 필터
+    // 1. 검색어 필터
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
       items = items.filter((item: IntegratedItem) => 
@@ -53,40 +51,58 @@ export default function StockStatusPage() {
       );
     }
 
-    // 재고 0 제외 필터 (품질재고 체크 포함)
+    // 2. 재고 0 제외 필터 (품질재고 체크 포함)
     items = items.filter((item: IntegratedItem) => {
         const { targetStock } = getStockInfo(item);
         const qualityCheck = (inventoryViewMode === 'PLANT' && showHiddenStock && item.inventory.qualityStock > 0);
         return targetStock > 0 || qualityCheck;
     });
     
-    // 탭 필터링 로직
+    // 3. 탭 필터링 로직 (✅ 수정됨: 제품의 최악 배치를 기준으로 엄격하게 필터링)
     if (activeTab !== 'all') {
       items = items.filter((item: IntegratedItem) => {
         const { targetBatches } = getStockInfo(item);
         const isProductNoExpiry = item.code.startsWith('6');
 
-        return targetBatches.some(b => {
-            const isBatchNoExpiry = isProductNoExpiry || b.expirationDate === '-' || b.expirationDate === '';
-            
-            if (activeTab === 'no_expiry') {
-                return isBatchNoExpiry;
-            }
+        // 배치가 없으면 건너뜀
+        if (targetBatches.length === 0) return false;
 
-            if (isBatchNoExpiry) return false;
+        // 제품 내 배치 중 잔여일이 가장 적은(최악의) 배치를 찾음
+        const worstBatch = targetBatches.reduce((prev, curr) => 
+            prev.remainDays < curr.remainDays ? prev : curr
+        );
 
-            const days = b.remainDays;
-            let status = 'healthy';
-            if (days <= 0) status = 'disposed';
-            else if (days <= 30) status = 'imminent';
-            else if (days <= 60) status = 'critical';
-            
-            return status === activeTab;
-        });
+        const isBatchNoExpiry = isProductNoExpiry || worstBatch.expirationDate === '-' || worstBatch.expirationDate === '';
+        
+        // 기한없음 탭
+        if (activeTab === 'no_expiry') {
+            return isBatchNoExpiry;
+        }
+
+        // 기한 없음이 아닌 경우에만 날짜 계산
+        if (isBatchNoExpiry) return false;
+
+        const days = worstBatch.remainDays;
+
+        // ✅ 구간별 정확한 필터링 로직 적용 (최악의 배치 기준)
+        if (activeTab === 'disposed') {
+            return days <= 0; // 폐기: 0일 이하
+        } 
+        else if (activeTab === 'imminent') {
+            return days >= 1 && days <= 30; // 임박: 1일 ~ 30일
+        } 
+        else if (activeTab === 'critical') {
+            return days >= 31 && days <= 60; // 긴급: 31일 ~ 60일
+        } 
+        else if (activeTab === 'healthy') {
+            return days >= 61; // 양호: 61일 이상
+        }
+        
+        return false;
       });
     }
 
-    // 유통기한 임박 순 정렬
+    // 4. 유통기한 임박 순 정렬
     items.sort((a, b) => {
         const { targetBatches: bA } = getStockInfo(a);
         const { targetBatches: bB } = getStockInfo(b);
@@ -98,7 +114,7 @@ export default function StockStatusPage() {
     return items;
   }, [data, activeTab, searchTerm, viewMode, showHiddenStock, inventoryViewMode]);
 
-  // 페이지네이션 로직 수정 (확실한 슬라이싱)
+  // 페이지네이션 로직
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
     return filteredData.slice(startIdx, startIdx + itemsPerPage);
@@ -108,7 +124,6 @@ export default function StockStatusPage() {
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
-    // 테이블 상단으로 스크롤 이동
     const tableTop = document.getElementById('stock-table-top');
     if (tableTop) tableTop.scrollIntoView({ behavior: 'smooth' });
   };
@@ -145,9 +160,9 @@ export default function StockStatusPage() {
       <div id="stock-table-top" className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
           <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
-          <TabButton label="양호" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
-          <TabButton label="긴급 (60일↓)" active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
-          <TabButton label="임박 (30일↓)" active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
+          <TabButton label="양호 (61일↑)" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
+          <TabButton label="긴급 (31~60일)" active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
+          <TabButton label="임박 (1~30일)" active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
           <TabButton label="폐기" active={activeTab === 'disposed'} onClick={() => { setActiveTab('disposed'); setCurrentPage(1); }} color="text-[#C62828]" />
           <TabButton label="기한없음" active={activeTab === 'no_expiry'} onClick={() => { setActiveTab('no_expiry'); setCurrentPage(1); }} color="text-neutral-600" />
         </div>
@@ -209,6 +224,7 @@ export default function StockStatusPage() {
                 let status = 'healthy';
                 if (isNoExpiry) status = 'no_expiry';
                 else if (worstBatch) {
+                    // ✅ 테이블 뱃지도 필터 로직과 동일하게 적용
                     if (remainDays <= 0) status = 'disposed';
                     else if (remainDays <= 30) status = 'imminent';
                     else if (remainDays <= 60) status = 'critical';
@@ -259,7 +275,6 @@ export default function StockStatusPage() {
           </table>
         </div>
 
-        {/* 페이지네이션 컨트롤 */}
         {totalPages > 1 && (
           <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
             <button 

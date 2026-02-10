@@ -4,16 +4,15 @@ import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query'; 
 import { getDashboardData } from '@/actions/dashboard-actions'; 
 import { 
-  Search, CheckCircle, AlertTriangle, XCircle, ShieldAlert,
-  ChevronLeft, ChevronRight, Layers, Eye, EyeOff,
-  ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, Square
+  Search, Eye, EyeOff, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, BarChart3,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { IntegratedItem, DashboardAnalysis, ProductionRow, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
 import { useDateStore } from '@/store/date-store';
 
-// 필터 타입 정의
+// 필터 타입 (로직 유지를 위해 타입 선언은 남김)
 type FilterStatus = 'ALL' | 'GOOD' | 'SHORTAGE' | 'EXCESS' | 'WASTE';
 
 // 테이블 표출용 데이터 인터페이스
@@ -35,10 +34,6 @@ interface SimulatedItem extends IntegratedItem {
         over85: number;
     };
     targetDatePlan: number;
-    
-    // 로직 계산용 (화면 표시 X)
-    simStatus: 'shortage' | 'excess' | 'good';
-    isRisk: boolean;
   }
 }
 
@@ -50,12 +45,10 @@ export default function InventoryPage() {
   const { unitMode, inventoryViewMode } = useUiStore(); 
   const { endDate: storeEndDate } = useDateStore();
 
-  // 데이터 조회 기간 설정 (서버 로직에 맞춤)
   const today = new Date();
   const queryEndDate = format(subDays(today, 1), 'yyyy-MM-dd');
   const queryStartDate = format(subDays(today, 90), 'yyyy-MM-dd');
 
-  // React Query 데이터 페칭
   const { data: rawData, isLoading } = useQuery<DashboardAnalysis>({
     queryKey: ['inventory-analysis', queryStartDate, queryEndDate], 
     queryFn: async () => {
@@ -69,7 +62,6 @@ export default function InventoryPage() {
 
   const data = rawData;
 
-  // 상태 관리
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [showHiddenStock, setShowHiddenStock] = useState(false);
   const [includeQualityInSim, setIncludeQualityInSim] = useState(false);
@@ -79,7 +71,6 @@ export default function InventoryPage() {
 
   const itemsPerPage = 15;
 
-  // 정렬 핸들러
   const handleSort = (key: SortKey) => {
     setSortConfig(current => ({
       key,
@@ -87,7 +78,6 @@ export default function InventoryPage() {
     }));
   };
 
-  // 단위 변환 함수
   const formatQty = (val: number | undefined | null, conversion: number, baseUnit: string, fixed?: number) => {
     const safeVal = val ?? 0;
     const maxDecimals = fixed !== undefined ? fixed : (unitMode === 'BOX' ? 1 : undefined);
@@ -105,9 +95,8 @@ export default function InventoryPage() {
     };
   };
 
-  // 데이터 가공 및 필터링
   const simulation = useMemo(() => {
-    if (!data) return { all: [], kpi: { good: 0, shortage: 0, excess: 0, totalWaste: 0, wasteCount: 0 } };
+    if (!data) return { all: [], adsSummary: { totalAds30: 0, totalAds60: 0, totalAds90: 0 } };
 
     const targetDate = storeEndDate;
     const productionMap = new Map<string, number>();
@@ -120,7 +109,6 @@ export default function InventoryPage() {
         }
     });
 
-    // 검색 필터
     let items = data.integratedArray.filter((item: IntegratedItem) => {
       let hasStock = false;
       if (inventoryViewMode === 'PLANT') hasStock = item.inventory.plantStock > 0 || item.inventory.qualityStock > 0;
@@ -133,14 +121,19 @@ export default function InventoryPage() {
       return hasStock && matchesSearch;
     });
 
-    // 아이템 가공
+    let totalAds30 = 0;
+    let totalAds60 = 0;
+    let totalAds90 = 0;
+
     const simulatedItems: SimulatedItem[] = items.map((item: IntegratedItem) => {
-      // ADS 정보
       const ads30 = item.inventory.ads30 || 0;
       const ads60 = item.inventory.ads60 || 0;
       const ads90 = item.inventory.ads90 || 0;
       
-      // 배치 및 재고 선택
+      totalAds30 += ads30;
+      totalAds60 += ads60;
+      totalAds90 += ads90;
+      
       let targetBatches: InventoryBatch[] = [];
       let totalViewStock = 0;
 
@@ -155,7 +148,6 @@ export default function InventoryPage() {
           totalViewStock = item.inventory.totalStock;
       }
 
-      // 가용 재고 계산 (잔여율 30% 이상 기준 고정)
       const minShelfRate = 30;
       let usableStock = targetBatches
         .filter(b => b.remainRate >= minShelfRate) 
@@ -167,18 +159,9 @@ export default function InventoryPage() {
 
       const wasteStock = totalViewStock - usableStock;
       
-      // 상태 판별 (단순 KPI 집계용, 60일 기준)
-      const targetDays = 30; 
-      const stockDays = ads60 > 0 ? usableStock / ads60 : 999;
-      
-      let simStatus: 'shortage' | 'excess' | 'good' = 'good';
-      if (stockDays < targetDays) simStatus = 'shortage';
-      else if (stockDays > targetDays * 2) simStatus = 'excess';
-
+      // ✅ 부족/과잉 판단 로직 제거, 단순 계획 수량 매핑
       const targetDatePlan = productionMap.get(item.code) || 0;
-      const isRisk = simStatus === 'shortage' && targetDatePlan === 0;
 
-      // 구간별 집계
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
       targetBatches.forEach(b => {
           const r = b.remainRate;
@@ -195,34 +178,17 @@ export default function InventoryPage() {
             ads30, ads60, ads90,
             usableStock, wasteStock, buckets,
             qualityStock: (inventoryViewMode !== 'LOGISTICS') ? item.inventory.qualityStock : 0,
-            targetDatePlan,
-            simStatus, isRisk
+            targetDatePlan // 계획 수량만 전달
         }
       };
     });
 
-    const kpi = {
-      shortage: simulatedItems.filter(i => i.sim.simStatus === 'shortage').length,
-      excess: simulatedItems.filter(i => i.sim.simStatus === 'excess').length,
-      good: simulatedItems.filter(i => i.sim.simStatus === 'good').length,
-      totalWaste: simulatedItems.reduce((acc, item) => acc + item.sim.wasteStock, 0),
-      wasteCount: simulatedItems.filter(i => i.sim.wasteStock > 0).length 
-    };
-
-    return { all: simulatedItems, kpi };
+    return { all: simulatedItems, adsSummary: { totalAds30, totalAds60, totalAds90 } };
   }, [data, searchTerm, includeQualityInSim, storeEndDate, inventoryViewMode]); 
 
-  // 페이징 및 정렬 처리
   const filteredAndPaginated = useMemo(() => {
     let list = simulation.all || [];
 
-    // KPI 필터링 적용
-    if (filterStatus === 'GOOD') list = list.filter(i => i.sim.simStatus === 'good');
-    else if (filterStatus === 'SHORTAGE') list = list.filter(i => i.sim.simStatus === 'shortage');
-    else if (filterStatus === 'EXCESS') list = list.filter(i => i.sim.simStatus === 'excess');
-    else if (filterStatus === 'WASTE') list = list.filter(i => i.sim.wasteStock > 0);
-
-    // 정렬
     list.sort((a, b) => {
       let valA: any = 0;
       let valB: any = 0;
@@ -234,13 +200,11 @@ export default function InventoryPage() {
         case 'ads60': valA = a.sim.ads60; valB = b.sim.ads60; break;
         case 'ads90': valA = a.sim.ads90; valB = b.sim.ads90; break;
         case 'future': valA = a.sim.targetDatePlan; valB = b.sim.targetDatePlan; break;
-        // 구간별 정렬
         case 'bucket_under50': valA = a.sim.buckets.under50; valB = b.sim.buckets.under50; break;
         case 'bucket_50_70': valA = a.sim.buckets.r50_70; valB = b.sim.buckets.r50_70; break;
         case 'bucket_70_75': valA = a.sim.buckets.r70_75; valB = b.sim.buckets.r70_75; break;
         case 'bucket_75_85': valA = a.sim.buckets.r75_85; valB = b.sim.buckets.r75_85; break;
         case 'bucket_over85': valA = a.sim.buckets.over85; valB = b.sim.buckets.over85; break;
-        // 기본값
         default: valA = 0; valB = 0; 
       }
 
@@ -256,12 +220,6 @@ export default function InventoryPage() {
 
     return { items, totalPages, totalCount };
   }, [simulation.all, filterStatus, currentPage, sortConfig]);
-
-  const handleFilterClick = (status: FilterStatus) => {
-    if (filterStatus === status) setFilterStatus('ALL'); 
-    else setFilterStatus(status);
-    setCurrentPage(1);
-  };
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
@@ -325,12 +283,11 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* Analysis Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <KpiSummaryBox title="적정 (Good)" value={simulation.kpi.good} color="green" icon={CheckCircle} active={filterStatus === 'GOOD'} onClick={() => handleFilterClick('GOOD')} />
-        <KpiSummaryBox title="부족 예상 (Short)" value={simulation.kpi.shortage} sub="재고 < 30일" color="red" icon={AlertTriangle} active={filterStatus === 'SHORTAGE'} onClick={() => handleFilterClick('SHORTAGE')} />
-        <KpiSummaryBox title="과잉 예상 (Excess)" value={simulation.kpi.excess} sub="재고 > 60일" color="orange" icon={XCircle} active={filterStatus === 'EXCESS'} onClick={() => handleFilterClick('EXCESS')} />
-        <KpiSummaryBox title="가용불가(30%미만)" value={simulation.kpi.wasteCount} sub={`${formatQty(simulation.kpi.totalWaste, 1, '').value}량`} color="gray" icon={ShieldAlert} active={filterStatus === 'WASTE'} onClick={() => handleFilterClick('WASTE')} />
+      {/* ADS Summary Report */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <AdsReportBox label="최근 30일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds30} unitMode={unitMode} />
+        <AdsReportBox label="최근 60일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds60} unitMode={unitMode} />
+        <AdsReportBox label="최근 90일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds90} unitMode={unitMode} />
       </div>
 
       {/* Main Table */}
@@ -338,7 +295,6 @@ export default function InventoryPage() {
         <div className="p-4 bg-[#FAFAFA] border-b border-neutral-200 font-bold text-neutral-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <span>📋 재고 및 ADS 상세 현황</span>
-            {filterStatus !== 'ALL' && <span className="text-[11px] px-2 py-0.5 rounded bg-neutral-800 text-white flex items-center gap-1"><Layers size={10} /> {filterStatus} 필터</span>}
           </div>
           <span className="text-[11px] font-normal text-neutral-500">단위: {unitMode === 'BOX' ? 'BOX (환산)' : '기준 (EA/KG)'}</span>
         </div>
@@ -349,17 +305,16 @@ export default function InventoryPage() {
               <tr>
                 <SortableHeader label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort} width="22%" />
                 
-                {/* 요청하신 변경 컬럼: ADS 3종 세트 */}
                 <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" />
                 <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" />
                 <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" />
 
                 <SortableHeader label="생산계획(당일)" sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" />
-                <SortableHeader label="총 재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
                 
                 {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
-                    <SortableHeader label="품질대기" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
+                    <SortableHeader label="품질재고" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
                 )}
+                <SortableHeader label="가용재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
                 
                 <SortableHeader label="~50%" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
                 <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" />
@@ -375,19 +330,17 @@ export default function InventoryPage() {
                 const buckets = item.sim.buckets;
                 const dQuality = formatQty(item.sim.qualityStock, item.umrezBox, item.unit);
 
-                // 3가지 ADS 표시 포맷팅
                 const dAds30 = formatQty(item.sim.ads30, item.umrezBox, item.unit, 0);
                 const dAds60 = formatQty(item.sim.ads60, item.umrezBox, item.unit, 0);
                 const dAds90 = formatQty(item.sim.ads90, item.umrezBox, item.unit, 0);
 
                 return (
-                  <tr key={item.code} className={`hover:bg-[#F9F9F9] transition-colors h-[48px] ${item.sim.isRisk ? 'bg-[#FFF8F8]' : ''}`}>
+                  <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
                     <td className="px-4 py-3">
                       <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
                       <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
                     </td>
                     
-                    {/* ADS 3종 세트 값 출력 */}
                     <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/20">{dAds30.value}</td>
                     <td className="px-2 py-3 text-right text-neutral-800 font-medium bg-blue-50/40">{dAds60.value}</td>
                     <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/60">{dAds90.value}</td>
@@ -396,15 +349,17 @@ export default function InventoryPage() {
                       {item.sim.targetDatePlan > 0 ? (
                         <span className="px-2 py-1 rounded bg-[#E3F2FD] text-[#1565C0] text-[11px] font-bold">{dPlan.value}</span>
                       ) : (
-                        item.sim.isRisk ? <span className="px-2 py-1 rounded bg-[#FFEBEE] text-[#C62828] text-[11px] font-bold">⚠️ 미반영</span> : <span className="text-neutral-300 text-[11px]">-</span>
+                        <span className="text-neutral-300 text-[11px]">-</span>
                       )}
                     </td>
-                    <td className="px-2 py-3 text-right font-bold text-neutral-800">{dTotal.value}</td>
+
                     {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
                         <td className="px-2 py-3 text-right font-bold text-purple-700 bg-purple-50/30">
                             {item.inventory.qualityStock > 0 ? dQuality.value : '-'}
                         </td>
                     )}
+                    <td className="px-2 py-3 text-right font-bold text-neutral-800">{dTotal.value}</td>
+                    
                     <td className="px-2 py-3 text-right text-[#C62828] bg-red-50/30 font-medium">{buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}</td>
                     <td className="px-2 py-3 text-right text-[#E65100] bg-orange-50/30 font-medium">{buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}</td>
                     <td className="px-2 py-3 text-right text-[#F57F17] bg-yellow-50/50 font-medium">{buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}</td>
@@ -442,12 +397,17 @@ function SortableHeader({ label, sortKey, currentSort, onSort, align = 'left', w
   );
 }
 
-function KpiSummaryBox({ title, value, sub, color, icon: Icon, active, onClick }: any) {
-  const styles: any = { blue: { base: "text-[#1565C0] bg-[#E3F2FD] border-[#BBDEFB]", active: "ring-2 ring-[#1565C0] ring-offset-2" }, green: { base: "text-[#2E7D32] bg-[#E8F5E9] border-[#C8E6C9]", active: "ring-2 ring-[#2E7D32] ring-offset-2 bg-[#C8E6C9]" }, red: { base: "text-[#C62828] bg-[#FFEBEE] border-[#FFCDD2]", active: "ring-2 ring-[#C62828] ring-offset-2 bg-[#FFCDD2]" }, orange: { base: "text-[#EF6C00] bg-[#FFF3E0] border-[#FFE0B2]", active: "ring-2 ring-[#EF6C00] ring-offset-2 bg-[#FFE0B2]" }, gray: { base: "text-[#616161] bg-[#F5F5F5] border-[#E0E0E0]", active: "ring-2 ring-[#616161] ring-offset-2 bg-[#E0E0E0]" }, };
-  const s = styles[color] || styles.gray;
+function AdsReportBox({ label, value, unitMode }: any) {
+  const displayVal = unitMode === 'BOX' ? value.toLocaleString(undefined, { maximumFractionDigits: 1 }) : Math.round(value).toLocaleString();
+  const unit = unitMode === 'BOX' ? 'BOX' : 'EA/KG';
+
   return (
-    <div onClick={onClick} className={`p-4 rounded border flex items-center justify-between shadow-sm cursor-pointer transition-all hover:-translate-y-1 ${s.base} ${active ? s.active : 'hover:opacity-90'}`}>
-      <div><div className="text-[12px] font-bold opacity-80 uppercase mb-1">{title}</div><div className="text-2xl font-bold flex items-end gap-2">{value} {sub && <span className="text-[11px] font-medium opacity-80 pb-1">{sub}</span>}</div></div><Icon size={24} className="opacity-80" />
+    <div className="p-4 rounded border flex items-center justify-between shadow-sm bg-white border-neutral-200">
+      <div>
+        <div className="text-[12px] font-bold opacity-80 uppercase mb-1 text-neutral-500">{label}</div>
+        <div className="text-2xl font-bold text-neutral-900">{displayVal} <span className="text-sm font-normal text-neutral-400">{unit}</span></div>
+      </div>
+      <BarChart3 size={24} className="opacity-20 text-neutral-500" />
     </div>
   );
 }

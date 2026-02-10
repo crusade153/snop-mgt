@@ -17,14 +17,18 @@ function inferBrandInfo(name: string) {
   return { brand: '기타', category: '기타' };
 }
 
-// 상태 판별 함수
+// ✅ [수정] 요청하신 구간에 맞춰 상태 판별 로직 재정의
+// 폐기: 0일 이하
+// 임박: 1일 ~ 30일
+// 긴급: 31일 ~ 60일
+// 양호: 61일 이상
 function getStockStatus(days: number, isNoExpiry: boolean): 'disposed' | 'imminent' | 'critical' | 'healthy' | 'no_expiry' {
   if (isNoExpiry) return 'no_expiry';
   
   if (days <= 0) return 'disposed';     
-  if (days <= THRESHOLDS.IMMINENT_DAYS) return 'imminent'; 
-  if (days <= THRESHOLDS.CRITICAL_DAYS) return 'critical'; 
-  return 'healthy';                                    
+  if (days <= 30) return 'imminent';    // 1 ~ 30
+  if (days <= 60) return 'critical';    // 31 ~ 60
+  return 'healthy';                     // 61 이상
 }
 
 function calculateFbhRate(prdtDateStr: string, validDateStr: string, remainDays: number): number {
@@ -297,10 +301,8 @@ export function analyzeSnopData(
     }
   });
 
-  // ✅ [핵심 수정] KPI 재계산 - 반복문 밖에서 최종 집계 (누락/오류 방지)
   const totalUnfulfilledValue = integratedArray.reduce((acc, item) => acc + item.totalUnfulfilledValue, 0);
   
-  // 긴급 납품 건수 (7일 이상 지연된 건수 총합)
   const criticalDeliveryCount = integratedArray.reduce((acc, item) => {
       const lateCount = item.unfulfilledOrders.filter(o => o.daysDelayed >= 7).length;
       return acc + lateCount;
@@ -327,8 +329,8 @@ export function analyzeSnopData(
       productSales, 
       merchandiseSales, 
       overallFulfillmentRate: '0.0', 
-      totalUnfulfilledValue, // ✅ 최종 계산된 합계 반환
-      criticalDeliveryCount  // ✅ 최종 계산된 건수 반환
+      totalUnfulfilledValue, 
+      criticalDeliveryCount  
     },
     stockHealth,
     salesAnalysis: {

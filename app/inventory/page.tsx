@@ -12,7 +12,7 @@ import { IntegratedItem, DashboardAnalysis, ProductionRow, InventoryBatch } from
 import { useUiStore } from '@/store/ui-store'; 
 import { useDateStore } from '@/store/date-store';
 
-// 필터 타입 (로직 유지를 위해 타입 선언은 남김)
+// 필터 타입
 type FilterStatus = 'ALL' | 'GOOD' | 'SHORTAGE' | 'EXCESS' | 'WASTE';
 
 // 테이블 표출용 데이터 인터페이스
@@ -65,7 +65,6 @@ export default function InventoryPage() {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [showHiddenStock, setShowHiddenStock] = useState(false);
   const [includeQualityInSim, setIncludeQualityInSim] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('ALL');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ key: 'totalStock', direction: 'desc' });
 
@@ -101,7 +100,6 @@ export default function InventoryPage() {
     const targetDate = storeEndDate;
     const productionMap = new Map<string, number>();
     
-    // 생산 계획 매핑
     data.productionList.forEach((row: ProductionRow) => {
         if (row.date === targetDate) {
             const current = productionMap.get(row.code) || 0;
@@ -158,18 +156,21 @@ export default function InventoryPage() {
       }
 
       const wasteStock = totalViewStock - usableStock;
-      
-      // ✅ 부족/과잉 판단 로직 제거, 단순 계획 수량 매핑
       const targetDatePlan = productionMap.get(item.code) || 0;
 
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
       targetBatches.forEach(b => {
           const r = b.remainRate;
-          if (r < 50) buckets.under50 += b.quantity;
-          else if (r < 70) buckets.r50_70 += b.quantity;
-          else if (r < 75) buckets.r70_75 += b.quantity;
-          else if (r < 85) buckets.r75_85 += b.quantity;
-          else buckets.over85 += b.quantity;
+          const days = b.remainDays; // 잔여일 변수 추가
+
+          // ✅ 로직 수정: 잔여일이 0일 초과인 '유효 재고' 중에서만 구간 집계
+          if (days > 0) {
+            if (r < 50) buckets.under50 += b.quantity;
+            else if (r < 70) buckets.r50_70 += b.quantity;
+            else if (r < 75) buckets.r70_75 += b.quantity;
+            else if (r < 85) buckets.r75_85 += b.quantity;
+            else buckets.over85 += b.quantity;
+          }
       });
 
       return {
@@ -178,7 +179,7 @@ export default function InventoryPage() {
             ads30, ads60, ads90,
             usableStock, wasteStock, buckets,
             qualityStock: (inventoryViewMode !== 'LOGISTICS') ? item.inventory.qualityStock : 0,
-            targetDatePlan // 계획 수량만 전달
+            targetDatePlan
         }
       };
     });
@@ -219,14 +220,13 @@ export default function InventoryPage() {
     const items = list.slice(startIdx, startIdx + itemsPerPage);
 
     return { items, totalPages, totalCount };
-  }, [simulation.all, filterStatus, currentPage, sortConfig]);
+  }, [simulation.all, currentPage, sortConfig]);
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
-      {/* Header & Controls */}
       <div className="pb-4 border-b border-neutral-200 flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
         <div>
           <h1 className="text-[20px] font-bold text-neutral-900 flex items-center gap-2">
@@ -283,14 +283,12 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* ADS Summary Report */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <AdsReportBox label="최근 30일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds30} unitMode={unitMode} />
         <AdsReportBox label="최근 60일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds60} unitMode={unitMode} />
         <AdsReportBox label="최근 90일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds90} unitMode={unitMode} />
       </div>
 
-      {/* Main Table */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
         <div className="p-4 bg-[#FAFAFA] border-b border-neutral-200 font-bold text-neutral-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
@@ -304,19 +302,15 @@ export default function InventoryPage() {
             <thead className="bg-[#FAFAFA]">
               <tr>
                 <SortableHeader label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort} width="22%" />
-                
                 <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" />
                 <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" />
                 <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" />
-
                 <SortableHeader label="생산계획(당일)" sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" />
-                
                 {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
                     <SortableHeader label="품질재고" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
                 )}
                 <SortableHeader label="가용재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
-                
-                <SortableHeader label="~50%" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
+                <SortableHeader label="~50% (유효)" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
                 <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" />
                 <SortableHeader label="70~75%" sortKey="bucket_70_75" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#F57F17] bg-yellow-50/50" />
                 <SortableHeader label="75~85%" sortKey="bucket_75_85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#1565C0] bg-blue-50/30" />
@@ -329,7 +323,6 @@ export default function InventoryPage() {
                 const dPlan = formatQty(item.sim.targetDatePlan, item.umrezBox, item.unit);
                 const buckets = item.sim.buckets;
                 const dQuality = formatQty(item.sim.qualityStock, item.umrezBox, item.unit);
-
                 const dAds30 = formatQty(item.sim.ads30, item.umrezBox, item.unit, 0);
                 const dAds60 = formatQty(item.sim.ads60, item.umrezBox, item.unit, 0);
                 const dAds90 = formatQty(item.sim.ads90, item.umrezBox, item.unit, 0);
@@ -340,11 +333,9 @@ export default function InventoryPage() {
                       <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
                       <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
                     </td>
-                    
                     <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/20">{dAds30.value}</td>
                     <td className="px-2 py-3 text-right text-neutral-800 font-medium bg-blue-50/40">{dAds60.value}</td>
                     <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/60">{dAds90.value}</td>
-
                     <td className="px-2 py-3 text-center">
                       {item.sim.targetDatePlan > 0 ? (
                         <span className="px-2 py-1 rounded bg-[#E3F2FD] text-[#1565C0] text-[11px] font-bold">{dPlan.value}</span>
@@ -352,14 +343,12 @@ export default function InventoryPage() {
                         <span className="text-neutral-300 text-[11px]">-</span>
                       )}
                     </td>
-
                     {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
                         <td className="px-2 py-3 text-right font-bold text-purple-700 bg-purple-50/30">
                             {item.inventory.qualityStock > 0 ? dQuality.value : '-'}
                         </td>
                     )}
                     <td className="px-2 py-3 text-right font-bold text-neutral-800">{dTotal.value}</td>
-                    
                     <td className="px-2 py-3 text-right text-[#C62828] bg-red-50/30 font-medium">{buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}</td>
                     <td className="px-2 py-3 text-right text-[#E65100] bg-orange-50/30 font-medium">{buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}</td>
                     <td className="px-2 py-3 text-right text-[#F57F17] bg-yellow-50/50 font-medium">{buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}</td>

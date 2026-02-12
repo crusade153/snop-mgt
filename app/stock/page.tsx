@@ -42,7 +42,6 @@ export default function StockStatusPage() {
     
     let items = data.integratedArray;
 
-    // 1. 검색어 필터
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
       items = items.filter((item: IntegratedItem) => 
@@ -51,58 +50,50 @@ export default function StockStatusPage() {
       );
     }
 
-    // 2. 재고 0 제외 필터 (품질재고 체크 포함)
     items = items.filter((item: IntegratedItem) => {
         const { targetStock } = getStockInfo(item);
         const qualityCheck = (inventoryViewMode === 'PLANT' && showHiddenStock && item.inventory.qualityStock > 0);
         return targetStock > 0 || qualityCheck;
     });
     
-    // 3. 탭 필터링 로직 (✅ 수정됨: 제품의 최악 배치를 기준으로 엄격하게 필터링)
     if (activeTab !== 'all') {
       items = items.filter((item: IntegratedItem) => {
         const { targetBatches } = getStockInfo(item);
         const isProductNoExpiry = item.code.startsWith('6');
 
-        // 배치가 없으면 건너뜀
         if (targetBatches.length === 0) return false;
 
-        // 제품 내 배치 중 잔여일이 가장 적은(최악의) 배치를 찾음
         const worstBatch = targetBatches.reduce((prev, curr) => 
             prev.remainDays < curr.remainDays ? prev : curr
         );
 
         const isBatchNoExpiry = isProductNoExpiry || worstBatch.expirationDate === '-' || worstBatch.expirationDate === '';
         
-        // 기한없음 탭
         if (activeTab === 'no_expiry') {
             return isBatchNoExpiry;
         }
 
-        // 기한 없음이 아닌 경우에만 날짜 계산
         if (isBatchNoExpiry) return false;
 
         const days = worstBatch.remainDays;
 
-        // ✅ 구간별 정확한 필터링 로직 적용 (최악의 배치 기준)
         if (activeTab === 'disposed') {
-            return days <= 0; // 폐기: 0일 이하
+            return days <= 0;
         } 
         else if (activeTab === 'imminent') {
-            return days >= 1 && days <= 30; // 임박: 1일 ~ 30일
+            return days >= 1 && days <= 30;
         } 
         else if (activeTab === 'critical') {
-            return days >= 31 && days <= 60; // 긴급: 31일 ~ 60일
+            return days >= 31 && days <= 60;
         } 
         else if (activeTab === 'healthy') {
-            return days >= 61; // 양호: 61일 이상
+            return days >= 61;
         }
         
         return false;
       });
     }
 
-    // 4. 유통기한 임박 순 정렬
     items.sort((a, b) => {
         const { targetBatches: bA } = getStockInfo(a);
         const { targetBatches: bB } = getStockInfo(b);
@@ -112,9 +103,8 @@ export default function StockStatusPage() {
     });
     
     return items;
-  }, [data, activeTab, searchTerm, viewMode, showHiddenStock, inventoryViewMode]);
+  }, [data, activeTab, searchTerm, showHiddenStock, inventoryViewMode]);
 
-  // 페이지네이션 로직
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
     return filteredData.slice(startIdx, startIdx + itemsPerPage);
@@ -143,11 +133,16 @@ export default function StockStatusPage() {
     const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
     batches.forEach(b => {
         const r = b.remainRate;
-        if (r < 50) buckets.under50 += b.quantity;
-        else if (r < 70) buckets.r50_70 += b.quantity;
-        else if (r < 75) buckets.r70_75 += b.quantity;
-        else if (r < 85) buckets.r75_85 += b.quantity;
-        else buckets.over85 += b.quantity;
+        const days = b.remainDays; // 잔여일 변수 추가
+
+        // ✅ 로직 수정: 잔여일이 0일 초과인 '유효 재고' 중에서만 구간 집계
+        if (days > 0) {
+          if (r < 50) buckets.under50 += b.quantity;
+          else if (r < 70) buckets.r50_70 += b.quantity;
+          else if (r < 75) buckets.r70_75 += b.quantity;
+          else if (r < 85) buckets.r75_85 += b.quantity;
+          else buckets.over85 += b.quantity;
+        }
     });
     return buckets;
   };
@@ -195,7 +190,7 @@ export default function StockStatusPage() {
                     </>
                 ) : (
                     <>
-                        <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#C62828] text-right bg-red-50/50">50% 미만</th>
+                        <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#C62828] text-right bg-red-50/50">~50% (유효)</th>
                         <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#E65100] text-right bg-orange-50/50">50~70%</th>
                         <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#F57F17] text-right bg-yellow-50/50">70~75%</th>
                         <th className="px-2 py-3 border-b border-neutral-200 font-bold text-[#1565C0] text-right bg-blue-50/50">75~85%</th>
@@ -224,7 +219,6 @@ export default function StockStatusPage() {
                 let status = 'healthy';
                 if (isNoExpiry) status = 'no_expiry';
                 else if (worstBatch) {
-                    // ✅ 테이블 뱃지도 필터 로직과 동일하게 적용
                     if (remainDays <= 0) status = 'disposed';
                     else if (remainDays <= 30) status = 'imminent';
                     else if (remainDays <= 60) status = 'critical';
@@ -240,9 +234,6 @@ export default function StockStatusPage() {
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-neutral-800 border-r border-neutral-100">
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-400">{unitLabel}</span>
-                      {!showHiddenStock && qualityStockVal > 0 && inventoryViewMode === 'PLANT' && (
-                        <div className="text-[9px] text-purple-500 mt-0.5 flex justify-end items-center gap-0.5 font-normal">+품질 {displayQuality.value}</div>
-                      )}
                     </td>
                     {inventoryViewMode === 'PLANT' && showHiddenStock && (
                         <td className="px-4 py-3 text-right font-bold text-purple-700 bg-purple-50/30 border-r border-purple-100">{qualityStockVal > 0 ? displayQuality.value : '-'}</td>

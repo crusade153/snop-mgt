@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getDashboardData } from '@/actions/dashboard-actions'; 
 import { 
   Search, Eye, EyeOff, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, BarChart3,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Clock
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { IntegratedItem, DashboardAnalysis, ProductionRow, InventoryBatch } from '@/types/analysis';
@@ -26,6 +26,9 @@ interface SimulatedItem extends IntegratedItem {
     wasteStock: number;
     qualityStock: number;
     
+    // ✅ [추가] 회전일수 (가용재고 / ADS90)
+    turnoverDays: number; 
+
     buckets: { 
         under50: number;
         r50_70: number;
@@ -37,8 +40,8 @@ interface SimulatedItem extends IntegratedItem {
   }
 }
 
-// 정렬 키
-type SortKey = 'name' | 'totalStock' | 'qualityStock' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
+// 정렬 키 (turnoverDays 추가됨)
+type SortKey = 'name' | 'totalStock' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
 type SortDirection = 'asc' | 'desc';
 
 export default function InventoryPage() {
@@ -158,12 +161,15 @@ export default function InventoryPage() {
       const wasteStock = totalViewStock - usableStock;
       const targetDatePlan = productionMap.get(item.code) || 0;
 
+      // ✅ [추가] 회전일수 계산 (가용재고 / ADS90)
+      // ADS가 0인 경우 Infinity가 되므로 정렬을 위해 99999로 처리하거나 0으로 처리 (여기선 0으로 처리하고 표출시 예외처리)
+      const turnoverDays = ads90 > 0 ? usableStock / ads90 : (usableStock > 0 ? 99999 : 0);
+
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
       targetBatches.forEach(b => {
           const r = b.remainRate;
-          const days = b.remainDays; // 잔여일 변수 추가
+          const days = b.remainDays; 
 
-          // ✅ 로직 수정: 잔여일이 0일 초과인 '유효 재고' 중에서만 구간 집계
           if (days > 0) {
             if (r < 50) buckets.under50 += b.quantity;
             else if (r < 70) buckets.r50_70 += b.quantity;
@@ -179,6 +185,7 @@ export default function InventoryPage() {
             ads30, ads60, ads90,
             usableStock, wasteStock, buckets,
             qualityStock: (inventoryViewMode !== 'LOGISTICS') ? item.inventory.qualityStock : 0,
+            turnoverDays, // 추가된 필드
             targetDatePlan
         }
       };
@@ -197,6 +204,10 @@ export default function InventoryPage() {
       switch (sortConfig.key) {
         case 'name': valA = a.name; valB = b.name; break;
         case 'totalStock': valA = a.sim.usableStock + a.sim.wasteStock; valB = b.sim.usableStock + b.sim.wasteStock; break;
+        // ✅ [수정] 버그 해결: 품질재고 정렬 케이스 추가
+        case 'qualityStock': valA = a.sim.qualityStock; valB = b.sim.qualityStock; break;
+        // ✅ [추가] 회전일 정렬 케이스 추가
+        case 'turnoverDays': valA = a.sim.turnoverDays; valB = b.sim.turnoverDays; break;
         case 'ads30': valA = a.sim.ads30; valB = b.sim.ads30; break;
         case 'ads60': valA = a.sim.ads60; valB = b.sim.ads60; break;
         case 'ads90': valA = a.sim.ads90; valB = b.sim.ads90; break;
@@ -306,10 +317,16 @@ export default function InventoryPage() {
                 <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" />
                 <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" />
                 <SortableHeader label="생산계획(당일)" sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" />
+                
                 {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
                     <SortableHeader label="품질재고" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
                 )}
+                
                 <SortableHeader label="가용재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
+                
+                {/* ✅ [추가] 회전일 컬럼 */}
+                <SortableHeader label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" className="text-red-700 bg-red-50/10" />
+
                 <SortableHeader label="~50% (유효)" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
                 <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" />
                 <SortableHeader label="70~75%" sortKey="bucket_70_75" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#F57F17] bg-yellow-50/50" />
@@ -326,6 +343,15 @@ export default function InventoryPage() {
                 const dAds30 = formatQty(item.sim.ads30, item.umrezBox, item.unit, 0);
                 const dAds60 = formatQty(item.sim.ads60, item.umrezBox, item.unit, 0);
                 const dAds90 = formatQty(item.sim.ads90, item.umrezBox, item.unit, 0);
+
+                // ✅ [로직] 회전일수 표기 (ADS90 기준)
+                // item.sim.turnoverDays는 이미 계산되어 있음
+                let displayTurnover = "-";
+                if (item.sim.ads90 > 0 && item.sim.turnoverDays < 90000) {
+                    const days = Math.round(item.sim.turnoverDays);
+                    const months = (item.sim.turnoverDays / 30).toFixed(1);
+                    displayTurnover = `${days}일 (${months}개월)`;
+                }
 
                 return (
                   <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
@@ -349,6 +375,12 @@ export default function InventoryPage() {
                         </td>
                     )}
                     <td className="px-2 py-3 text-right font-bold text-neutral-800">{dTotal.value}</td>
+                    
+                    {/* ✅ [추가] 회전일 컬럼 (데이터 표시) */}
+                    <td className="px-2 py-3 text-right text-red-700 font-bold bg-red-50/10 text-xs">
+                        {displayTurnover}
+                    </td>
+
                     <td className="px-2 py-3 text-right text-[#C62828] bg-red-50/30 font-medium">{buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}</td>
                     <td className="px-2 py-3 text-right text-[#E65100] bg-orange-50/30 font-medium">{buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}</td>
                     <td className="px-2 py-3 text-right text-[#F57F17] bg-yellow-50/50 font-medium">{buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}</td>
@@ -357,7 +389,7 @@ export default function InventoryPage() {
                   </tr>
                 );
               })}
-              {filteredAndPaginated.items.length === 0 && <tr><td colSpan={14} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>}
+              {filteredAndPaginated.items.length === 0 && <tr><td colSpan={15} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>}
             </tbody>
           </table>
         </div>

@@ -9,7 +9,9 @@ export interface SapOrder {
   POSNR: string;        // 품목 번호
   AUART: string;        // 주문 유형
   BEZEI_TVAKT?: string; // 주문 유형 설명
+  LGORT?: string;       // 🚨 저장 위치 코드 (추가)
   LGOBE?: string;       // 저장 위치 명
+  WERKS?: string;       // 🚨 플랜트 (추가)
   KUNNR: string;        // 판매처 번호
   NAME1: string;        // 판매처 명
   KUNNR_WE?: string;    // 납품처 번호

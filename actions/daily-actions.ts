@@ -11,13 +11,11 @@ export interface DailyAlertItem {
   productName: string;
   message: string;
   action: string;
-  // 단위 변환을 위한 원본 데이터 전달
   qty: number;
   umrez: number;
   unit: string;
-  // ✅ [수정] 메시지 내 숫자 동적 변환을 위한 추가 필드
-  val1?: number; // (예: 수요량, ADS)
-  val2?: number; // (예: 공급량, 잔여일)
+  val1?: number; 
+  val2?: number; 
 }
 
 export interface DailySummary {
@@ -38,10 +36,10 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
   const spikeLookbackStr = format(subDays(today, 8), 'yyyyMMdd');
 
   try {
-    // 1. 주문/배송 데이터 (SD) - 기준 단위(EA)로 환산하여 조회
+    // 1. 주문/배송 데이터 (SD) 
     const sdQuery = `
       SELECT 
-        A.MATNR, A.ARKTX, A.VDATU, A.KUNNR, A.NAME1,
+        A.MATNR, A.ARKTX, A.VDATU, A.KUNNR, A.NAME1, A.WERKS, A.LGORT,
         SUM(
           CASE 
             WHEN A.VRKME = 'BOX' THEN A.KWMENG * IFNULL(M.UMREZ_BOX, 1) 
@@ -59,10 +57,10 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
       LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON A.MATNR = M.MATNR
       WHERE A.VDATU BETWEEN '${adsLookbackStr}' AND '${weekFutureStr}'
-      GROUP BY A.MATNR, A.ARKTX, A.VDATU, A.KUNNR, A.NAME1
+      GROUP BY A.MATNR, A.ARKTX, A.VDATU, A.KUNNR, A.NAME1, A.WERKS, A.LGORT
     `;
 
-    // 2. 생산 계획 데이터 (PP) - 기준 단위(EA)로 환산
+    // 2. 생산 계획 데이터 (PP)
     const ppQuery = `
       SELECT 
         P.MATNR, P.GSTRP,
@@ -80,7 +78,7 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       GROUP BY P.MATNR, P.GSTRP
     `;
 
-    // 3. 재고 데이터 (MM) - CLABS는 이미 기준 단위
+    // 3. 재고 데이터 (MM)
     const mmQuery = `
       SELECT 
         MATNR, MATNR_T, VFDAT, 
@@ -90,6 +88,7 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
         MAX(MEINS) as MEINS
       FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
       WHERE CLABS > 0
+        AND LGORT NOT IN ('2141', '2143', '2240', '2243')
       GROUP BY MATNR, MATNR_T, VFDAT
     `;
 
@@ -102,9 +101,6 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
     const alerts: DailyAlertItem[] = [];
     const scannedProducts = new Set<string>(); 
 
-    // --------------------------------------------------------------------------
-    // Data Aggregation
-    // --------------------------------------------------------------------------
     interface ProductSalesInfo {
       name: string;
       yesterday: number;
@@ -141,9 +137,6 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       val.ads60 = val.sixtyDaySum / 60; 
     });
 
-    // --------------------------------------------------------------------------
-    // [분석 1] 어제 주문 급증 (Yesterday Spike)
-    // --------------------------------------------------------------------------
     salesMap.forEach((val, code) => {
       const weekAvg = val.weekSum / 7; 
       if (val.yesterday > 30 && val.yesterday > weekAvg * 2.0) {
@@ -162,12 +155,8 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       }
     });
 
-    // --------------------------------------------------------------------------
-    // [분석 2] 7일 내 결품 예상 (Shortage) - ✅ 확정된 납품 요청 기준
-    // --------------------------------------------------------------------------
     const shortageMap = new Map<string, { stock: number, supply: number, demand: number, name: string, umrez: number, unit: string }>();
     
-    // 1. 현재 재고
     mmRows.forEach((row: any) => {
       if(row.MATNR) scannedProducts.add(row.MATNR);
       if (!shortageMap.has(row.MATNR)) {
@@ -179,7 +168,6 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       shortageMap.get(row.MATNR)!.stock += Number(row.current_stock);
     });
     
-    // 2. 향후 7일 생산 계획 (입고 예정)
     ppRows.forEach((row: any) => {
       if (!shortageMap.has(row.MATNR)) {
         shortageMap.set(row.MATNR, { 
@@ -190,9 +178,7 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       shortageMap.get(row.MATNR)!.supply += Number(row.qty_plan);
     });
     
-    // 3. 향후 7일 확정 납품 요청 (출고 예정)
     sdRows.forEach((row: any) => {
-      // 오늘 ~ 7일 후 사이의 납품 요청만 집계 (VDATU 기준)
       if (row.VDATU >= todayStr && row.VDATU <= weekFutureStr) {
         if (!shortageMap.has(row.MATNR)) {
           shortageMap.set(row.MATNR, { 
@@ -201,17 +187,14 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
           });
         }
         shortageMap.get(row.MATNR)!.demand += Number(row.qty_req);
-        // 이름이 없는 경우 보완
         if (!shortageMap.get(row.MATNR)!.name) shortageMap.get(row.MATNR)!.name = row.ARKTX;
       }
     });
 
     shortageMap.forEach((val, code) => {
-      // 잔고 = 현재재고 + 입고예정 - 확정된납품요청
       const balance = val.stock + val.supply - val.demand;
       
       if (balance < 0) {
-        // 단위 포맷팅 함수 (내부용)
         const fmt = (n: number) => Math.round(n).toLocaleString();
         
         alerts.push({
@@ -221,20 +204,16 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
           productCode: code,
           productName: val.name,
           message: `향후 7일간 확정된 납품 요청(${fmt(val.demand)}) 대비 재고(${fmt(val.stock + val.supply)}) 부족`,
-          // ✅ [수정] 동적 메시지 생성을 위한 원본 데이터 전달
           val1: val.demand, 
           val2: val.stock + val.supply, 
           action: '생산 우선순위 상향 또는 분할 출고 협의',
-          qty: balance, // 부족분 (음수)
+          qty: balance, 
           umrez: val.umrez,
           unit: val.unit
         });
       }
     });
 
-    // --------------------------------------------------------------------------
-    // [분석 3] 소진 불가 위험 (Burn-down Risk)
-    // --------------------------------------------------------------------------
     const freshnessRiskMap = new Map<string, { code:string, name: string, overStock: number, totalStock: number, ads: number, minDays: number, umrez: number, unit: string }>();
 
     mmRows.forEach((row: any) => {
@@ -281,7 +260,6 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
           productCode: val.code,
           productName: val.name,
           message: `판매 속도(${val.ads.toFixed(1)}/일) 대비 유통기한 부족 (잔여 ${val.minDays}일)`,
-          // ✅ [수정] ADS 및 잔여일 데이터 전달
           val1: val.ads,
           val2: val.minDays,
           action: '소비기한 내 소진 불가. 긴급 프로모션 필요',
@@ -305,32 +283,36 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       }
     });
 
-    // --------------------------------------------------------------------------
-    // [분석 4] 어제 미납 발생 (Yesterday Miss)
-    // --------------------------------------------------------------------------
     sdRows.forEach((row: any) => {
       if (row.VDATU === yesterdayStr) {
-        const miss = Number(row.qty_req) - Number(row.qty_done);
-        if (miss > 0) {
-           alerts.push({
-            id: `miss-${row.MATNR}-${row.KUNNR}`,
-            type: 'MISS',
-            level: 'WARNING',
-            productCode: row.MATNR,
-            productName: row.ARKTX,
-            message: `어제 출고 예정분 미납 발생 (${row.NAME1})`,
-            action: '미납 사유 파악 및 금일 긴급 배차',
-            qty: miss,
-            umrez: Number(row.UMREZ_BOX || 1),
-            unit: row.MEINS || 'EA'
-          });
+        
+        // 🚨 특정 플랜트/창고 미납 제외 로직 추가
+        const isExcludedFromMiss = 
+          row.WERKS === '1031' || 
+          ['2141', '2143', '2240', '2243'].includes(row.LGORT || '');
+
+        if (!isExcludedFromMiss) {
+          const miss = Number(row.qty_req) - Number(row.qty_done);
+          if (miss > 0) {
+             alerts.push({
+              id: `miss-${row.MATNR}-${row.KUNNR}-${row.WERKS || 'X'}-${row.LGORT || 'X'}`,
+              type: 'MISS',
+              level: 'WARNING',
+              productCode: row.MATNR,
+              productName: row.ARKTX,
+              message: `어제 출고 예정분 미납 발생 (${row.NAME1})`,
+              action: '미납 사유 파악 및 금일 긴급 배차',
+              qty: miss,
+              umrez: Number(row.UMREZ_BOX || 1),
+              unit: row.MEINS || 'EA'
+            });
+          }
         }
       }
     });
 
     alerts.sort((a, b) => (a.level === 'CRITICAL' ? -1 : 1));
 
-    // 요약 정보
     const topOrders = Array.from(salesMap.values())
       .filter(item => item.yesterday > 0)
       .sort((a, b) => b.yesterday - a.yesterday)

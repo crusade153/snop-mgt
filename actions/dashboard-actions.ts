@@ -7,20 +7,17 @@ import { unstable_cache } from 'next/cache';
 import { gzipSync, gunzipSync } from 'zlib';
 import { addMonths, format, subDays } from 'date-fns'; 
 
-// 1. [내부 함수] 실제 BigQuery 조회
 async function fetchRawData(sDate: string, eDate: string) {
   
   const futureEnd = format(addMonths(new Date(), 6), 'yyyyMMdd');
-  // ADS 90일 계산을 위해 조회 시작일을 90일 전으로 강제 확장
   const extendedStartDate = format(subDays(new Date(), 90), 'yyyyMMdd');
-  // 사용자가 요청한 날짜와 90일 전 중 더 빠른 날짜를 선택 (데이터 누락 방지)
   const queryStartDate = sDate < extendedStartDate ? sDate : extendedStartDate;
 
   // 1. 납품(주문) 데이터
   const orderQuery = `
     SELECT 
       A.VBELN, A.POSNR, A.MATNR, A.ARKTX, 
-      A.NETWR, A.WAERK, A.VDATU, A.NAME1, A.KUNNR,
+      A.NETWR, A.WAERK, A.VDATU, A.NAME1, A.KUNNR, A.WERKS, A.LGORT,
       CASE 
         WHEN A.VRKME = 'BOX' AND M.MEINS <> 'BOX' THEN A.KWMENG * IFNULL(M.UMREZ_BOX, 1)
         ELSE A.KWMENG 
@@ -55,17 +52,19 @@ async function fetchRawData(sDate: string, eDate: string) {
     WHERE P.GSTRP BETWEEN '${queryStartDate}' AND '${futureEnd}'
   `;
 
-  // 3. 사내 플랜트 재고 (테이블 변경 적용: V_MM_MCHB -> V_MM_MCHB_ALL)
+  // 3. 사내 플랜트 재고 
+  // 🚨 매출이월/이관 창고 제외 추가
   const inventoryQuery = `
     SELECT 
-      MATNR, MATNR_T, MEINS, LGOBE, VFDAT, 
+      MATNR, MATNR_T, MEINS, LGOBE, VFDAT, LGORT,
       CLABS, 
       IFNULL(CINSM, 0) as CINSM, 
       IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
       remain_day, remain_rate, 
       PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB_ALL\`
-    WHERE CLABS > 0 OR CINSM > 0 
+    WHERE (CLABS > 0 OR CINSM > 0)
+      AND LGORT NOT IN ('2141', '2143', '2240', '2243')
   `;
 
   // 4. FBH 외부 창고 재고
@@ -111,10 +110,8 @@ async function fetchRawData(sDate: string, eDate: string) {
   }
 }
 
-// 2. [캐싱 대상] 분석 결과 생성 및 압축
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 캐시 키 업데이트 (테이블 변경 반영 v4.0)
-    const cacheKey = `dashboard-analysis-v4.0-${sDate}-${eDate}`;
+    const cacheKey = `dashboard-analysis-v4.1-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

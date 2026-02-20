@@ -35,18 +35,18 @@ export async function executeInventorySimulation(matnr: string, params: Simulati
     const today = new Date();
     const todayStr = format(today, 'yyyyMMdd'); 
     
-    // 조회 범위 설정
     const startOfMonthStr = format(startOfMonth(today), 'yyyyMMdd');
     const futureStr = format(addMonths(today, 6), 'yyyyMMdd'); 
 
-    // (1) 재고 배치 조회 (V_MM_MCHB는 이미 기준 단위임)
+    // (1) 재고 배치 조회 - 🚨 매출이월/이관 창고 제외
     const stockQuery = `
       SELECT CLABS, VFDAT 
       FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
       WHERE MATNR = '${matnr}' AND CLABS > 0
+        AND LGORT NOT IN ('2141', '2143', '2240', '2243')
     `;
 
-    // (2) 생산 계획 조회 - ✅ 기준 단위(EA) 환산 적용
+    // (2) 생산 계획 조회
     const prodQuery = `
       SELECT 
         P.GSTRP, 
@@ -68,8 +68,7 @@ export async function executeInventorySimulation(matnr: string, params: Simulati
       GROUP BY P.GSTRP
     `;
 
-    // (3) 기존 주문 조회 (기수요) - ✅ 기준 단위(EA) 환산 적용
-    // VRKME(판매단위)가 BOX인 경우 UMREZ_BOX를 곱함
+    // (3) 기존 주문 조회 (기수요)
     const orderQuery = `
       SELECT 
         A.VDATU, 
@@ -94,18 +93,16 @@ export async function executeInventorySimulation(matnr: string, params: Simulati
     const fmtDate = (d: string) => d ? `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}` : '';
 
     const validProduction: any[] = [];
-    const missedProduction: any[] = []; // 실적 미마감 리스트
+    const missedProduction: any[] = []; 
 
     prodRows.forEach((row: any) => {
         const planDateStr = row.GSTRP; 
         const planQty = Number(row.PSMNG || 0);
         const actualQty = Number(row.LMNGA || 0);
         
-        // 과거 데이터 처리
         const isPast = planDateStr < todayStr;
 
         if (isPast) {
-            // 과거인데 실적이 0이면 -> 미마감 리스트 (ATP 제외)
             if (actualQty === 0 && planQty > 0) {
                 missedProduction.push({
                     date: fmtDate(planDateStr),
@@ -113,7 +110,6 @@ export async function executeInventorySimulation(matnr: string, params: Simulati
                 });
             }
         } else {
-            // 미래 데이터 -> ATP 투입
             validProduction.push({ GSTRP: fmtDate(planDateStr), PSMNG: planQty });
         }
     });
@@ -121,7 +117,6 @@ export async function executeInventorySimulation(matnr: string, params: Simulati
     const formattedStocks = stockRows.map((r: any) => ({ ...r, VFDAT: r.VFDAT })); 
     const formattedOrders = orderRows.map((r: any) => ({ VDATU: fmtDate(r.VDATU), KWMENG: Number(r.KWMENG) }));
 
-    // 엔진 호출
     const result = runDailySimulation(formattedStocks, validProduction, formattedOrders, params);
 
     return { success: true, data: { ...result, missedProduction } };

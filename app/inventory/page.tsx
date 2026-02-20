@@ -5,17 +5,16 @@ import { useQuery } from '@tanstack/react-query';
 import { getDashboardData } from '@/actions/dashboard-actions'; 
 import { 
   Search, Eye, EyeOff, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, BarChart3,
-  ChevronLeft, ChevronRight, Clock
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { IntegratedItem, DashboardAnalysis, ProductionRow, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
 import { useDateStore } from '@/store/date-store';
 
-// 필터 타입
-type FilterStatus = 'ALL' | 'GOOD' | 'SHORTAGE' | 'EXCESS' | 'WASTE';
+type SortKey = 'name' | 'usableStock' | 'wasteStock' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
+type SortDirection = 'asc' | 'desc';
 
-// 테이블 표출용 데이터 인터페이스
 interface SimulatedItem extends IntegratedItem {
   sim: {
     ads30: number;
@@ -25,8 +24,6 @@ interface SimulatedItem extends IntegratedItem {
     usableStock: number; 
     wasteStock: number;
     qualityStock: number;
-    
-    // ✅ [추가] 회전일수 (가용재고 / ADS90)
     turnoverDays: number; 
 
     buckets: { 
@@ -39,10 +36,6 @@ interface SimulatedItem extends IntegratedItem {
     targetDatePlan: number;
   }
 }
-
-// 정렬 키 (turnoverDays 추가됨)
-type SortKey = 'name' | 'totalStock' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
-type SortDirection = 'asc' | 'desc';
 
 export default function InventoryPage() {
   const { unitMode, inventoryViewMode } = useUiStore(); 
@@ -69,7 +62,7 @@ export default function InventoryPage() {
   const [showHiddenStock, setShowHiddenStock] = useState(false);
   const [includeQualityInSim, setIncludeQualityInSim] = useState(false);
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ key: 'totalStock', direction: 'desc' });
+  const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ key: 'usableStock', direction: 'desc' });
 
   const itemsPerPage = 15;
 
@@ -136,33 +129,35 @@ export default function InventoryPage() {
       totalAds90 += ads90;
       
       let targetBatches: InventoryBatch[] = [];
-      let totalViewStock = 0;
 
       if (inventoryViewMode === 'PLANT') {
           targetBatches = item.inventory.plantBatches;
-          totalViewStock = item.inventory.plantStock;
       } else if (inventoryViewMode === 'LOGISTICS') {
           targetBatches = item.inventory.fbhBatches;
-          totalViewStock = item.inventory.fbhStock;
       } else {
           targetBatches = item.inventory.batches;
-          totalViewStock = item.inventory.totalStock;
       }
 
-      const minShelfRate = 30;
-      let usableStock = targetBatches
-        .filter(b => b.remainRate >= minShelfRate) 
-        .reduce((sum, b) => sum + b.quantity, 0);
+      // ✅ [핵심 로직 수정] 가용재고와 폐기재고 분리 로직 (잔여일수 기준)
+      let usableStock = 0;
+      let wasteStock = 0;
+
+      targetBatches.forEach(b => {
+          // 기한이 없는 품목은 항상 가용재고로 분류
+          const isNoExpiry = item.code.startsWith('6') || b.expirationDate === '-' || b.expirationDate === '';
+          
+          if (!isNoExpiry && b.remainDays <= 0) {
+              wasteStock += b.quantity; // 폐기 재고
+          } else {
+              usableStock += b.quantity; // 가용 재고
+          }
+      });
 
       if (includeQualityInSim && inventoryViewMode !== 'LOGISTICS') {
         usableStock += item.inventory.qualityStock;
       }
 
-      const wasteStock = totalViewStock - usableStock;
       const targetDatePlan = productionMap.get(item.code) || 0;
-
-      // ✅ [추가] 회전일수 계산 (가용재고 / ADS90)
-      // ADS가 0인 경우 Infinity가 되므로 정렬을 위해 99999로 처리하거나 0으로 처리 (여기선 0으로 처리하고 표출시 예외처리)
       const turnoverDays = ads90 > 0 ? usableStock / ads90 : (usableStock > 0 ? 99999 : 0);
 
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
@@ -170,6 +165,7 @@ export default function InventoryPage() {
           const r = b.remainRate;
           const days = b.remainDays; 
 
+          // 폐기가 아닌 유효 재고만 % 구간에 집계
           if (days > 0) {
             if (r < 50) buckets.under50 += b.quantity;
             else if (r < 70) buckets.r50_70 += b.quantity;
@@ -185,7 +181,7 @@ export default function InventoryPage() {
             ads30, ads60, ads90,
             usableStock, wasteStock, buckets,
             qualityStock: (inventoryViewMode !== 'LOGISTICS') ? item.inventory.qualityStock : 0,
-            turnoverDays, // 추가된 필드
+            turnoverDays,
             targetDatePlan
         }
       };
@@ -203,10 +199,9 @@ export default function InventoryPage() {
 
       switch (sortConfig.key) {
         case 'name': valA = a.name; valB = b.name; break;
-        case 'totalStock': valA = a.sim.usableStock + a.sim.wasteStock; valB = b.sim.usableStock + b.sim.wasteStock; break;
-        // ✅ [수정] 버그 해결: 품질재고 정렬 케이스 추가
+        case 'usableStock': valA = a.sim.usableStock; valB = b.sim.usableStock; break;
+        case 'wasteStock': valA = a.sim.wasteStock; valB = b.sim.wasteStock; break;
         case 'qualityStock': valA = a.sim.qualityStock; valB = b.sim.qualityStock; break;
-        // ✅ [추가] 회전일 정렬 케이스 추가
         case 'turnoverDays': valA = a.sim.turnoverDays; valB = b.sim.turnoverDays; break;
         case 'ads30': valA = a.sim.ads30; valB = b.sim.ads30; break;
         case 'ads60': valA = a.sim.ads60; valB = b.sim.ads60; break;
@@ -312,7 +307,7 @@ export default function InventoryPage() {
           <table className="w-full text-sm text-left border-collapse">
             <thead className="bg-[#FAFAFA]">
               <tr>
-                <SortableHeader label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort} width="22%" />
+                <SortableHeader label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort} width="20%" />
                 <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" />
                 <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" />
                 <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" />
@@ -322,9 +317,10 @@ export default function InventoryPage() {
                     <SortableHeader label="품질재고" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
                 )}
                 
-                <SortableHeader label="가용재고" sortKey="totalStock" currentSort={sortConfig} onSort={handleSort} align="right" />
+                {/* ✅ [신설] 가용재고 및 폐기재고 컬럼 분리 */}
+                <SortableHeader label="가용재고" sortKey="usableStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-green-50/30 text-green-800" />
+                <SortableHeader label="폐기재고" sortKey="wasteStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-red-50/50 text-[#C62828]" />
                 
-                {/* ✅ [추가] 회전일 컬럼 */}
                 <SortableHeader label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" className="text-red-700 bg-red-50/10" />
 
                 <SortableHeader label="~50% (유효)" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
@@ -336,7 +332,8 @@ export default function InventoryPage() {
             </thead>
             <tbody className="divide-y divide-neutral-200">
               {filteredAndPaginated.items.map((item: SimulatedItem) => {
-                const dTotal = formatQty(item.sim.usableStock + item.sim.wasteStock, item.umrezBox, item.unit);
+                const dUsable = formatQty(item.sim.usableStock, item.umrezBox, item.unit);
+                const dWaste = formatQty(item.sim.wasteStock, item.umrezBox, item.unit);
                 const dPlan = formatQty(item.sim.targetDatePlan, item.umrezBox, item.unit);
                 const buckets = item.sim.buckets;
                 const dQuality = formatQty(item.sim.qualityStock, item.umrezBox, item.unit);
@@ -344,8 +341,6 @@ export default function InventoryPage() {
                 const dAds60 = formatQty(item.sim.ads60, item.umrezBox, item.unit, 0);
                 const dAds90 = formatQty(item.sim.ads90, item.umrezBox, item.unit, 0);
 
-                // ✅ [로직] 회전일수 표기 (ADS90 기준)
-                // item.sim.turnoverDays는 이미 계산되어 있음
                 let displayTurnover = "-";
                 if (item.sim.ads90 > 0 && item.sim.turnoverDays < 90000) {
                     const days = Math.round(item.sim.turnoverDays);
@@ -374,9 +369,11 @@ export default function InventoryPage() {
                             {item.inventory.qualityStock > 0 ? dQuality.value : '-'}
                         </td>
                     )}
-                    <td className="px-2 py-3 text-right font-bold text-neutral-800">{dTotal.value}</td>
                     
-                    {/* ✅ [추가] 회전일 컬럼 (데이터 표시) */}
+                    {/* ✅ [신설] 분리된 가용재고 및 폐기재고 매핑 */}
+                    <td className="px-2 py-3 text-right font-bold text-green-800 bg-green-50/10">{dUsable.value}</td>
+                    <td className="px-2 py-3 text-right font-bold text-[#C62828] bg-red-50/30">{item.sim.wasteStock > 0 ? dWaste.value : '-'}</td>
+                    
                     <td className="px-2 py-3 text-right text-red-700 font-bold bg-red-50/10 text-xs">
                         {displayTurnover}
                     </td>

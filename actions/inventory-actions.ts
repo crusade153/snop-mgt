@@ -14,6 +14,7 @@ export async function getInventoryStatus(): Promise<SapInventory[]> {
       remain_day, remain_rate, UMREZ_BOX
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
     WHERE CLABS > 0
+      AND LGORT NOT IN ('2141', '2143', '2240', '2243')
     ORDER BY CLABS DESC
     LIMIT 50
   `;

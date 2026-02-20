@@ -7,32 +7,35 @@ import { addDays, addWeeks, format, startOfWeek, endOfWeek, getISOWeek, parseISO
 
 interface SnopOption {
   mode: 'WEEK' | 'DAY';
-  weekCount?: number;   // 주간 모드일 때 (예: 4, 8, 12)
-  startDate?: string;   // 일별 모드일 때 (YYYY-MM-DD)
-  endDate?: string;     // 일별 모드일 때 (YYYY-MM-DD)
+  weekCount?: number;   
+  startDate?: string;   
+  endDate?: string;     
 }
 
 export async function getSnopPlan(matnr: string, option: SnopOption) {
   const today = new Date();
   
-  // 1. 조회 기간 계산
   let start: Date, end: Date;
   
   if (option.mode === 'WEEK') {
     start = startOfWeek(today, { weekStartsOn: 1 });
-    // weekCount가 없으면 기본 4주
     end = endOfWeek(addWeeks(today, (option.weekCount || 4) - 1), { weekStartsOn: 1 });
   } else {
     start = option.startDate ? parseISO(option.startDate) : today;
-    end = option.endDate ? parseISO(option.endDate) : addDays(today, 6); // 기본 7일
+    end = option.endDate ? parseISO(option.endDate) : addDays(today, 6); 
   }
 
   const dbStart = format(start, 'yyyyMMdd');
   const dbEnd = format(end, 'yyyyMMdd');
 
   try {
-    // 2. DB 조회 (동일)
-    const stockQuery = `SELECT SUM(CLABS) as total FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\` WHERE MATNR = '${matnr}'`;
+    // 🚨 재고 쿼리 창고 필터 적용
+    const stockQuery = `
+      SELECT SUM(CLABS) as total 
+      FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\` 
+      WHERE MATNR = '${matnr}'
+        AND LGORT NOT IN ('2141', '2143', '2240', '2243')
+    `;
     const orderQuery = `SELECT * FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` WHERE MATNR = '${matnr}' AND VDATU BETWEEN '${dbStart}' AND '${dbEnd}'`;
     const prodQuery = `SELECT * FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\` WHERE MATNR = '${matnr}' AND GSTRP BETWEEN '${dbStart}' AND '${dbEnd}'`;
 
@@ -42,10 +45,8 @@ export async function getSnopPlan(matnr: string, option: SnopOption) {
       bigqueryClient.query({ query: prodQuery }).then(r => r[0]),
     ]);
 
-    // 3. 데이터 집계
     const aggregatedMap = aggregateData(orderRows as SapOrder[], prodRows as SapProduction[], option.mode);
 
-    // 4. 빈 기간 채우기 (Gap Filling)
     const resultList = [];
     
     if (option.mode === 'WEEK') {

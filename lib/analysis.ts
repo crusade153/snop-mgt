@@ -17,11 +17,6 @@ function inferBrandInfo(name: string) {
   return { brand: '기타', category: '기타' };
 }
 
-// ✅ [수정] 요청하신 구간에 맞춰 상태 판별 로직 재정의
-// 폐기: 0일 이하
-// 임박: 1일 ~ 30일
-// 긴급: 31일 ~ 60일
-// 양호: 61일 이상
 function getStockStatus(days: number, isNoExpiry: boolean): 'disposed' | 'imminent' | 'critical' | 'healthy' | 'no_expiry' {
   if (isNoExpiry) return 'no_expiry';
   
@@ -146,7 +141,16 @@ export function analyzeSnopData(
     
     // 조회 기간(필터) 내의 데이터만 KPI 및 미납 집계에 사용
     if (order.VDATU >= filterStart && order.VDATU <= filterEnd) {
-      const unfulfilled = Math.max(0, reqQty - actualQty);
+      
+      // 🚨 [핵심 수정] 1031 플랜트, 2141/2143/2240/2243 창고는 미납 산정에서 제외
+      const isExcludedFromUnfulfilled = 
+        order.WERKS === '1031' || 
+        ['2141', '2143', '2240', '2243'].includes(order.LGORT || '');
+
+      let unfulfilled = Math.max(0, reqQty - actualQty);
+      if (isExcludedFromUnfulfilled) {
+        unfulfilled = 0; // 강제로 미납 0 처리
+      }
 
       item.totalReqQty += reqQty;
       item.totalActualQty += actualQty;
@@ -158,11 +162,9 @@ export function analyzeSnopData(
       if (unfulfilled > 0) {
           item.totalUnfulfilledQty += unfulfilled;
           
-          // 단가 계산 (주문액 / 주문수량)
           let unitPrice = reqQty > 0 ? Math.abs(supplyPrice) / reqQty : 0;
           const missedVal = unfulfilled * unitPrice;
           
-          // 아이템별 미납금액 누적
           item.totalUnfulfilledValue += missedVal;
 
           let cause = '재고 부족';

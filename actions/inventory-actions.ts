@@ -15,6 +15,7 @@ export async function getInventoryStatus(): Promise<SapInventory[]> {
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
     WHERE CLABS > 0
       AND LGORT NOT IN ('2141', '2143', '2240', '2243')
+      AND WERKS != '1031'  -- 플랜트 정보(WERKS)가 1031인 데이터 제외
     ORDER BY CLABS DESC
     LIMIT 50
   `;

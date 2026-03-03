@@ -37,10 +37,11 @@ export default function StockStatusPage() {
   };
 
   // 배치별 상태를 계산하여 버킷(구간)별 수량을 집계
-  const calculateStatusBuckets = (batches: InventoryBatch[], isProductNoExpiry: boolean) => {
+  const calculateStatusBuckets = (batches: InventoryBatch[]) => {
     const buckets = { healthy: 0, critical: 0, imminent: 0, disposed: 0, no_expiry: 0 };
     batches.forEach(b => {
-        const isBatchNoExpiry = isProductNoExpiry || b.expirationDate === '-' || b.expirationDate === '';
+        // 🚨 서버에서 넘어온 실제 날짜 유무만으로 상태를 판별합니다. (6번대 강제 예외 제거)
+        const isBatchNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
         if (isBatchNoExpiry) buckets.no_expiry += b.quantity;
         else if (b.remainDays <= 0) buckets.disposed += b.quantity;
         else if (b.remainDays <= 30) buckets.imminent += b.quantity;
@@ -77,8 +78,8 @@ export default function StockStatusPage() {
         const { targetBatches } = getStockInfo(item);
         if (targetBatches.length === 0) return false;
         
-        const isProductNoExpiry = item.code.startsWith('6');
-        const buckets = calculateStatusBuckets(targetBatches, isProductNoExpiry);
+        // 🚨 프론트엔드의 6번대 하드코딩 완전 제거
+        const buckets = calculateStatusBuckets(targetBatches);
 
         if (activeTab === 'no_expiry') return buckets.no_expiry > 0;
         if (activeTab === 'disposed') return buckets.disposed > 0;
@@ -126,7 +127,6 @@ export default function StockStatusPage() {
     return { value: val.toLocaleString(), unit: baseUnit };
   };
 
-  // 테이블 헤더 동적 타이틀 (선택한 탭에 따라 재고 컬럼명 변경)
   const getStockColumnTitle = () => {
     const prefix = inventoryViewMode === 'ALL' ? '통합 ' : inventoryViewMode === 'LOGISTICS' ? '물류 ' : '플랜트 ';
     if (activeTab === 'all') return `총 ${prefix}재고`;
@@ -144,7 +144,6 @@ export default function StockStatusPage() {
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       <div id="stock-table-top" className="flex flex-col md:flex-row justify-between items-center gap-4">
-        {/* 상태 탭 네비게이션 */}
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
           <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
           <TabButton label="양호 (61일↑)" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
@@ -154,7 +153,6 @@ export default function StockStatusPage() {
           <TabButton label="기한없음" active={activeTab === 'no_expiry'} onClick={() => { setActiveTab('no_expiry'); setCurrentPage(1); }} color="text-neutral-600" />
         </div>
         
-        {/* 검색바 */}
         <div className="relative w-full md:w-64">
           <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
           <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
@@ -170,12 +168,9 @@ export default function StockStatusPage() {
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 w-24 text-center">상태</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 w-[25%]">제품명</th>
                 <th className="px-2 py-3 border-b font-bold text-neutral-700 text-center w-16">단위</th>
-                
-                {/* 🚨 동적 컬럼 타이틀 */}
                 <th className="px-4 py-3 border-b font-bold text-neutral-800 text-right w-36 bg-blue-50/40">
                   {getStockColumnTitle()}
                 </th>
-                
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center border-l border-neutral-200">소비기한 (최단)</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">잔여일수</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">잔여율</th>
@@ -184,11 +179,10 @@ export default function StockStatusPage() {
             <tbody className="divide-y divide-neutral-200">
               {paginatedItems.map((item: IntegratedItem, idx: number) => {
                 const { targetStock, targetBatches } = getStockInfo(item);
-                const isProductNoExpiry = item.code.startsWith('6');
                 
-                const statusBuckets = calculateStatusBuckets(targetBatches, isProductNoExpiry);
+                // 🚨 프론트엔드의 6번대 하드코딩 완전 제거 (isProductNoExpiry = false로 대체)
+                const statusBuckets = calculateStatusBuckets(targetBatches);
 
-                // 🚨 1. 표시할 재고 수량 계산 (탭에 따라 다르게)
                 let displayStockValue = targetStock;
                 if (activeTab === 'healthy') displayStockValue = statusBuckets.healthy;
                 else if (activeTab === 'critical') displayStockValue = statusBuckets.critical;
@@ -196,21 +190,20 @@ export default function StockStatusPage() {
                 else if (activeTab === 'disposed') displayStockValue = statusBuckets.disposed;
                 else if (activeTab === 'no_expiry') displayStockValue = statusBuckets.no_expiry;
 
-                // 🚨 2. 배지 상태 및 보여줄 날짜 데이터 필터링
                 let badgeStatus = 'healthy';
                 let batchesForDateCalc = targetBatches;
 
                 if (activeTab === 'all') {
                     // 전체일 때는 가장 안좋은 상태 표시
-                    if (isProductNoExpiry) badgeStatus = 'no_expiry';
-                    else if (statusBuckets.disposed > 0) badgeStatus = 'disposed';
+                    if (statusBuckets.disposed > 0) badgeStatus = 'disposed';
                     else if (statusBuckets.imminent > 0) badgeStatus = 'imminent';
                     else if (statusBuckets.critical > 0) badgeStatus = 'critical';
+                    else if (statusBuckets.no_expiry > 0 && targetStock === statusBuckets.no_expiry) badgeStatus = 'no_expiry';
                 } else {
-                    // 특정 탭일 때는 해당 탭 상태 표시 및 해당 구간의 배치만 필터링해서 날짜 찾기
                     badgeStatus = activeTab;
                     batchesForDateCalc = targetBatches.filter(b => {
-                        const isBatchNoExpiry = isProductNoExpiry || b.expirationDate === '-' || b.expirationDate === '';
+                        // 🚨 6번대 강제 예외 걷어내기
+                        const isBatchNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
                         if (activeTab === 'no_expiry') return isBatchNoExpiry;
                         if (isBatchNoExpiry) return false;
                         if (activeTab === 'disposed') return b.remainDays <= 0;
@@ -221,16 +214,15 @@ export default function StockStatusPage() {
                     });
                 }
 
-                // 화면에 표시할 수량 포맷팅
                 const displayStock = formatQty(displayStockValue, item.umrezBox, item.unit);
 
-                // 화면에 표시할 최단 소비기한 (필터링된 배치 내에서)
+                // 화면에 표시할 최단 소비기한
                 const worstBatch = batchesForDateCalc.sort((a, b) => a.remainDays - b.remainDays)[0];
-                const showNoDate = isProductNoExpiry || activeTab === 'no_expiry' || (worstBatch && (worstBatch.expirationDate === '-' || worstBatch.expirationDate === ''));
+                const showNoDate = !worstBatch || (!worstBatch.expirationDate || worstBatch.expirationDate === '-' || worstBatch.expirationDate === '' || worstBatch.expirationDate === '기한없음');
 
-                const expiryDateStr = showNoDate ? '-' : (worstBatch ? worstBatch.expirationDate : '-');
-                const remainDaysStr = showNoDate ? '-' : (worstBatch ? `${worstBatch.remainDays}일` : '-');
-                const remainRateNum = showNoDate ? null : (worstBatch ? worstBatch.remainRate : null);
+                const expiryDateStr = showNoDate ? '-' : worstBatch.expirationDate;
+                const remainDaysStr = showNoDate ? '-' : `${worstBatch.remainDays}일`;
+                const remainRateNum = showNoDate ? null : worstBatch.remainRate;
 
                 return (
                   <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[52px]">
@@ -247,7 +239,6 @@ export default function StockStatusPage() {
                     
                     <td className="px-2 py-3 text-center text-neutral-500 text-xs">{item.unit}</td>
                     
-                    {/* 🚨 필터링된 재고 수량 표시 */}
                     <td className="px-4 py-3 text-right font-bold text-neutral-900 text-base bg-blue-50/20">
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-500 ml-1">{displayStock.unit}</span>
                     </td>
@@ -277,23 +268,9 @@ export default function StockStatusPage() {
 
         {totalPages > 1 && (
           <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
-            <button 
-              onClick={() => handlePageChange(Math.max(1, currentPage - 1))} 
-              disabled={currentPage === 1} 
-              className="p-1.5 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronLeft size={20} />
-            </button>
-            <span className="text-sm font-bold text-neutral-600">
-              {currentPage} / {totalPages}
-            </span>
-            <button 
-              onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))} 
-              disabled={currentPage === totalPages} 
-              className="p-1.5 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronRight size={20} />
-            </button>
+            <button onClick={() => handlePageChange(Math.max(1, currentPage - 1))} disabled={currentPage === 1} className="p-1.5 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><ChevronLeft size={20} /></button>
+            <span className="text-sm font-bold text-neutral-600">{currentPage} / {totalPages}</span>
+            <button onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))} disabled={currentPage === totalPages} className="p-1.5 rounded hover:bg-neutral-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><ChevronRight size={20} /></button>
           </div>
         )}
       </div>

@@ -53,10 +53,11 @@ async function fetchRawData(sDate: string, eDate: string) {
   `;
 
   // 3. 사내 플랜트 재고 
-  // 🚨 매출이월/이관 창고 제외 추가
+  // 🚨 날짜 처리의 근본 해결: 2026-06-16 형태의 문자열에서 하이픈(-)을 제거하고 정확히 앞 8자리(YYYYMMDD)만 추출
   const inventoryQuery = `
     SELECT 
-      MATNR, MATNR_T, MEINS, LGOBE, VFDAT, LGORT,
+      MATNR, MATNR_T, MEINS, LGOBE, LGORT,
+      IFNULL(SUBSTR(REPLACE(CAST(VFDAT AS STRING), '-', ''), 1, 8), '') AS VFDAT,
       CLABS, 
       IFNULL(CINSM, 0) as CINSM, 
       IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
@@ -64,16 +65,17 @@ async function fetchRawData(sDate: string, eDate: string) {
       PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB_ALL\`
     WHERE (CLABS > 0 OR CINSM > 0)
-      AND LGORT NOT IN ('2141', '2143', '2240', '2243')
+      AND LGORT NOT IN ('2141', '2143', '2240', '2243', '3000', '3300', '9000', '9100')
   `;
 
   // 4. FBH 외부 창고 재고
+  // 🚨 FBH 날짜 처리 역시 하이픈 제거 후 YYYYMMDD 8자리로 포맷팅 적용
   const fbhQuery = `
     SELECT 
       SKU_CD, 
       MATNR_T, 
-      PRDT_DATE_NEW, 
-      VALID_DATETIME_NEW, 
+      IFNULL(SUBSTR(REPLACE(CAST(PRDT_DATE_NEW AS STRING), '-', ''), 1, 8), '') AS PRDT_DATE_NEW, 
+      IFNULL(SUBSTR(REPLACE(CAST(VALID_DATETIME_NEW AS STRING), '-', ''), 1, 8), '') AS VALID_DATETIME_NEW, 
       AVLB_QTY, 
       MEINS, 
       IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
@@ -111,7 +113,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 }
 
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    const cacheKey = `dashboard-analysis-v4.1-${sDate}-${eDate}`;
+    // 🚨 포맷 문제 해결을 강제 반영하기 위해 캐시 버전을 v5.3으로 상향
+    const cacheKey = `dashboard-analysis-v5.3-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

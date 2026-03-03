@@ -8,6 +8,49 @@ const THRESHOLDS = {
   FIXED_ADS_DAYS: 60, 
 };
 
+// 🚨 [완벽 조치] 어떤 형태의 날짜(Date 객체, BigQuery 객체, 문자열)가 들어와도 무조건 YYYYMMDD로 변환하는 방탄 함수
+function safeExtractDateStr(val: any): string {
+  if (!val) return '';
+
+  try {
+    // 1. 이미 자바스크립트 Date 객체로 넘어온 경우 (이번 오류의 핵심 원인)
+    if (val instanceof Date) {
+      if (isNaN(val.getTime())) return '';
+      const y = val.getFullYear();
+      const m = String(val.getMonth() + 1).padStart(2, '0');
+      const d = String(val.getDate()).padStart(2, '0');
+      return `${y}${m}${d}`;
+    }
+
+    // 2. BigQueryDate 객체인 경우 ({ value: "2026-06-16" })
+    let str = '';
+    if (typeof val === 'object' && val !== null && 'value' in val) {
+      str = String(val.value);
+    } else {
+      str = String(val);
+    }
+
+    // 3. 문자열에서 정규식으로 YYYY-MM-DD 또는 YYYYMMDD 정확히 추출
+    const match = str.match(/(20\d{2})[-./]?(\d{2})[-./]?(\d{2})/);
+    if (match) {
+      return `${match[1]}${match[2]}${match[3]}`;
+    }
+
+    // 4. 영문 Date 문자열 포맷(Tue Jun 16 2026...)으로 변환되었을 경우를 대비한 최후의 파싱
+    const parsedDate = new Date(str);
+    if (!isNaN(parsedDate.getTime())) {
+      const y = parsedDate.getFullYear();
+      const m = String(parsedDate.getMonth() + 1).padStart(2, '0');
+      const d = String(parsedDate.getDate()).padStart(2, '0');
+      return `${y}${m}${d}`;
+    }
+  } catch (e) {
+    return '';
+  }
+
+  return '';
+}
+
 function inferBrandInfo(name: string) {
   if (name.includes('The미식') || name.includes('미식')) return { brand: 'The미식', category: '상온' };
   if (name.includes('하림')) return { brand: '하림', category: '냉동' };
@@ -19,7 +62,6 @@ function inferBrandInfo(name: string) {
 
 function getStockStatus(days: number, isNoExpiry: boolean): 'disposed' | 'imminent' | 'critical' | 'healthy' | 'no_expiry' {
   if (isNoExpiry) return 'no_expiry';
-  
   if (days <= 0) return 'disposed';     
   if (days <= 30) return 'imminent';    // 1 ~ 30
   if (days <= 60) return 'critical';    // 31 ~ 60
@@ -27,11 +69,14 @@ function getStockStatus(days: number, isNoExpiry: boolean): 'disposed' | 'immine
 }
 
 function calculateFbhRate(prdtDateStr: string, validDateStr: string, remainDays: number): number {
-  if (!prdtDateStr || !validDateStr) return 0;
   try {
-    const fmt = (d: string) => d.length === 8 ? `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}` : d;
-    const pDate = parseISO(fmt(prdtDateStr));
-    const vDate = parseISO(fmt(validDateStr));
+    const pStr = safeExtractDateStr(prdtDateStr);
+    const vStr = safeExtractDateStr(validDateStr);
+    if (pStr.length !== 8 || vStr.length !== 8) return 0;
+
+    const pDate = parseISO(`${pStr.slice(0,4)}-${pStr.slice(4,6)}-${pStr.slice(6,8)}`);
+    const vDate = parseISO(`${vStr.slice(0,4)}-${vStr.slice(4,6)}-${vStr.slice(6,8)}`);
+    
     const shelfLife = differenceInCalendarDays(vDate, pDate);
     if (shelfLife <= 0) return 0;
     return (remainDays / shelfLife) * 100;
@@ -54,12 +99,10 @@ export function analyzeSnopData(
   const today = new Date();
   const todayYmd = format(today, 'yyyyMMdd');
 
-  // ADS 계산을 위한 기준 날짜 (YYYYMMDD 문자열)
   const date30DaysAgo = format(subDays(today, 30), 'yyyyMMdd');
   const date60DaysAgo = format(subDays(today, 60), 'yyyyMMdd');
   const date90DaysAgo = format(subDays(today, 90), 'yyyyMMdd');
 
-  // 1. Plant 재고 데이터 집계
   const invAggMap = new Map<string, { totalStock: number, qualityStock: number, batches: InventoryBatch[], info: SapInventory }>();
   
   inventoryList.forEach(inv => {
@@ -74,10 +117,29 @@ export function analyzeSnopData(
     if (Math.abs(rawRate) <= 10) rawRate = rawRate * 100; 
 
     if (Number(inv.CLABS) > 0) {
+      let expDate = safeExtractDateStr(inv.VFDAT);
+      let calcRemainDays = 9999;
+      
+      if (expDate && expDate.length === 8) {
+          try {
+              const dStr = `${expDate.slice(0,4)}-${expDate.slice(4,6)}-${expDate.slice(6,8)}`;
+              const parsedDate = parseISO(dStr);
+              if (!isNaN(parsedDate.getTime())) {
+                  calcRemainDays = differenceInCalendarDays(parsedDate, today);
+              } else {
+                  expDate = '기한없음';
+              }
+          } catch(e) {
+              expDate = '기한없음';
+          }
+      } else {
+          expDate = '기한없음';
+      }
+
       target.batches.push({
         quantity: Number(inv.CLABS || 0),
-        expirationDate: inv.VFDAT || '',
-        remainDays: Number(inv.remain_day || 0),
+        expirationDate: expDate,
+        remainDays: calcRemainDays,
         remainRate: rawRate, 
         location: inv.LGOBE || 'Plant',
         source: 'PLANT'
@@ -85,7 +147,6 @@ export function analyzeSnopData(
     }
   });
 
-  // 1.5 FBH 재고 데이터 집계
   const fbhAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: FbhInventory }>();
 
   fbhList.forEach(fbh => {
@@ -96,19 +157,32 @@ export function analyzeSnopData(
     const qty = Number(fbh.AVLB_QTY || 0);
     target.totalStock += qty;
 
-    const isCode6 = fbh.SKU_CD.startsWith('6');
-    const isNoDate = !fbh.VALID_DATETIME_NEW || fbh.VALID_DATETIME_NEW.trim() === '';
-    const isNoExpiry = isCode6 || isNoDate;
+    let expDate = safeExtractDateStr(fbh.VALID_DATETIME_NEW);
+    let calcRemainDays = 9999;
 
-    const rate = isNoExpiry ? 100 : calculateFbhRate(fbh.PRDT_DATE_NEW, fbh.VALID_DATETIME_NEW, fbh.REMAINING_DAY);
-    const remainDays = isNoExpiry ? 9999 : Number(fbh.REMAINING_DAY || 0); 
-    const expDate = isNoExpiry ? '-' : (fbh.VALID_DATETIME_NEW || '');
+    if (expDate && expDate.length === 8) {
+        try {
+            const dStr = `${expDate.slice(0,4)}-${expDate.slice(4,6)}-${expDate.slice(6,8)}`;
+            const parsedDate = parseISO(dStr);
+            if (!isNaN(parsedDate.getTime())) {
+                calcRemainDays = differenceInCalendarDays(parsedDate, today);
+            } else {
+                expDate = '기한없음';
+            }
+        } catch(e) {
+            expDate = '기한없음';
+        }
+    } else {
+        expDate = '기한없음';
+    }
+
+    const rate = expDate === '기한없음' ? 100 : calculateFbhRate(fbh.PRDT_DATE_NEW, fbh.VALID_DATETIME_NEW, calcRemainDays);
 
     if (qty > 0) {
       target.batches.push({
         quantity: qty,
         expirationDate: expDate, 
-        remainDays: remainDays,
+        remainDays: calcRemainDays,
         remainRate: rate,
         location: 'FBH',
         source: 'FBH'
@@ -119,11 +193,8 @@ export function analyzeSnopData(
   const integratedMap = new Map<string, IntegratedItem>();
   const customerMap = new Map<string, CustomerStat & { boughtMap: Map<string, any> }>();
 
-  // KPI 집계 변수 (초기값 0)
   let productSales = 0;
   let merchandiseSales = 0;
-
-  // 2. 주문 데이터 처리 및 ADS 계산용 임시 저장소
   const salesHistory = new Map<string, { d30: number, d60: number, d90: number }>();
 
   orders.forEach(order => {
@@ -139,17 +210,14 @@ export function analyzeSnopData(
     const reqQty = Number(order.KWMENG || 0);
     const actualQty = Number(order.LFIMG_LIPS || 0);
     
-    // 조회 기간(필터) 내의 데이터만 KPI 및 미납 집계에 사용
     if (order.VDATU >= filterStart && order.VDATU <= filterEnd) {
-      
-      // 🚨 [핵심 수정] 1031 플랜트, 2141/2143/2240/2243 창고는 미납 산정에서 제외
       const isExcludedFromUnfulfilled = 
         order.WERKS === '1031' || 
         ['2141', '2143', '2240', '2243'].includes(order.LGORT || '');
 
       let unfulfilled = Math.max(0, reqQty - actualQty);
       if (isExcludedFromUnfulfilled) {
-        unfulfilled = 0; // 강제로 미납 0 처리
+        unfulfilled = 0; 
       }
 
       item.totalReqQty += reqQty;
@@ -164,16 +232,16 @@ export function analyzeSnopData(
           
           let unitPrice = reqQty > 0 ? Math.abs(supplyPrice) / reqQty : 0;
           const missedVal = unfulfilled * unitPrice;
-          
           item.totalUnfulfilledValue += missedVal;
 
           let cause = '재고 부족';
           if (item.inventory.totalStock > 0) cause = '당일 재고 부족'; 
 
           let daysDelayed = 0;
-          if (order.VDATU && order.VDATU.length === 8) {
+          const orderDateStr = safeExtractDateStr(order.VDATU);
+          if (orderDateStr && orderDateStr.length === 8) {
               try {
-                  const dStr = `${order.VDATU.slice(0, 4)}-${order.VDATU.slice(4, 6)}-${order.VDATU.slice(6, 8)}`;
+                  const dStr = `${orderDateStr.slice(0, 4)}-${orderDateStr.slice(4, 6)}-${orderDateStr.slice(6, 8)}`;
                   daysDelayed = differenceInCalendarDays(today, parseISO(dStr));
               } catch(e) {}
           }
@@ -190,7 +258,6 @@ export function analyzeSnopData(
           });
       }
       
-      // 거래처 집계 (필터 기간 내)
       const custId = order.KUNNR || 'UNKNOWN';
       if (!customerMap.has(custId)) {
           customerMap.set(custId, {
@@ -223,12 +290,11 @@ export function analyzeSnopData(
       }
     }
 
-    // ADS 계산용 판매량 집계
     if (!salesHistory.has(code)) {
       salesHistory.set(code, { d30: 0, d60: 0, d90: 0 });
     }
     const sales = salesHistory.get(code)!;
-    const vDate = order.VDATU;
+    const vDate = safeExtractDateStr(order.VDATU);
     const qtyForAds = Number(order.LFIMG_LIPS || 0);
 
     if (vDate >= date30DaysAgo) sales.d30 += qtyForAds;
@@ -236,7 +302,6 @@ export function analyzeSnopData(
     if (vDate >= date90DaysAgo) sales.d90 += qtyForAds;
   });
 
-  // 3. 생산 데이터 처리
   const processedProductionList: ProductionRow[] = [];
   productionList.forEach(prod => {
     const code = prod.MATNR;
@@ -244,7 +309,7 @@ export function analyzeSnopData(
         initializeItem(integratedMap, code, prod.MAKTX, invAggMap, fbhAggMap, prod.MEINS || 'EA', Number(prod.UMREZ_BOX || 1));
     }
     const item = integratedMap.get(code)!;
-    const dateStr = prod.GSTRP; 
+    const dateStr = safeExtractDateStr(prod.GSTRP); 
 
     if (dateStr && dateStr >= filterStart && dateStr <= filterEnd) {
       item.production.planQty += Number(prod.PSMNG || 0);
@@ -274,7 +339,6 @@ export function analyzeSnopData(
     });
   });
 
-  // 4. 재고만 있는 아이템 추가
   invAggMap.forEach((val, key) => {
     if (!integratedMap.has(key)) {
       initializeItem(integratedMap, key, val.info.MATNR_T, invAggMap, fbhAggMap, val.info.MEINS, Number(val.info.UMREZ_BOX || 1));
@@ -292,7 +356,6 @@ export function analyzeSnopData(
 
   integratedArray.forEach(item => {
     const history = salesHistory.get(item.code) || { d30: 0, d60: 0, d90: 0 };
-    
     item.inventory.ads30 = history.d30 / 30;
     item.inventory.ads60 = history.d60 / 60;
     item.inventory.ads90 = history.d90 / 90;
@@ -369,25 +432,27 @@ function initializeItem(
   const allBatches = [...plantBatches, ...fbhBatches];
   
   let minRemaining = 9999;
-  
-  const isProductNoExpiry = code.startsWith('6');
+  let finalStatus: 'healthy' | 'imminent' | 'critical' | 'disposed' | 'no_expiry' = 'healthy';
 
   if (allBatches.length > 0) {
-    minRemaining = Math.min(...allBatches.map(b => b.remainDays));
+    const expiryBatches = allBatches.filter(b => b.expirationDate && b.expirationDate.length === 8 && b.expirationDate !== '기한없음');
+    
+    if (expiryBatches.length > 0) {
+        minRemaining = Math.min(...expiryBatches.map(b => b.remainDays));
+        finalStatus = getStockStatus(minRemaining, false);
+    } else {
+        finalStatus = 'no_expiry';
+    }
+
     allBatches.forEach(b => {
-      const isBatchNoExpiry = isProductNoExpiry || b.expirationDate === '-' || b.expirationDate === '';
-      const s = getStockStatus(b.remainDays, isBatchNoExpiry);
+      const isNoExp = !b.expirationDate || b.expirationDate === '기한없음';
+      const s = getStockStatus(b.remainDays, isNoExp);
       statusBreakdown[s] += b.quantity;
     });
   } else if (totalStock > 0) {
-    if (isProductNoExpiry) statusBreakdown['no_expiry'] = totalStock;
-    else statusBreakdown['healthy'] = totalStock;
+    finalStatus = 'no_expiry';
+    statusBreakdown['no_expiry'] = totalStock;
   }
-
-  const worstBatch = allBatches.sort((a, b) => a.remainDays - b.remainDays)[0];
-  const isWorstNoExpiry = isProductNoExpiry || (worstBatch && (worstBatch.expirationDate === '-' || worstBatch.expirationDate === ''));
-  
-  const status = totalStock > 0 ? getStockStatus(minRemaining, isWorstNoExpiry || false) : 'healthy';
 
   let brand = '기타', category = '미지정', family = '기타';
   if (plantData?.info.PRDHA_1_T) {
@@ -419,7 +484,7 @@ function initializeItem(
       plantBatches,
       fbhBatches,
       batches: allBatches, 
-      status,
+      status: finalStatus,
       statusBreakdown,
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore: 0,

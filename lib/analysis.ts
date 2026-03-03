@@ -211,9 +211,12 @@ export function analyzeSnopData(
     const actualQty = Number(order.LFIMG_LIPS || 0);
     
     if (order.VDATU >= filterStart && order.VDATU <= filterEnd) {
+      // 🚨 [수정됨] VDATU를 포맷팅하여 오늘(todayYmd)과 비교. 오늘 이후의 주문건은 미납(Unfulfilled) 계산에서 제외합니다.
+      const orderVdatuStr = safeExtractDateStr(order.VDATU);
       const isExcludedFromUnfulfilled = 
         order.WERKS === '1031' || 
-        ['2141', '2143', '2240', '2243'].includes(order.LGORT || '');
+        ['2141', '2143', '2240', '2243'].includes(order.LGORT || '') ||
+        orderVdatuStr >= todayYmd;
 
       let unfulfilled = Math.max(0, reqQty - actualQty);
       if (isExcludedFromUnfulfilled) {
@@ -238,7 +241,7 @@ export function analyzeSnopData(
           if (item.inventory.totalStock > 0) cause = '당일 재고 부족'; 
 
           let daysDelayed = 0;
-          const orderDateStr = safeExtractDateStr(order.VDATU);
+          const orderDateStr = orderVdatuStr; // 이미 위에서 구한 값을 재활용
           if (orderDateStr && orderDateStr.length === 8) {
               try {
                   const dStr = `${orderDateStr.slice(0, 4)}-${orderDateStr.slice(4, 6)}-${orderDateStr.slice(6, 8)}`;

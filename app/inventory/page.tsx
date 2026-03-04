@@ -1,3 +1,4 @@
+// app/inventory/page.tsx
 'use client'
 
 import { useState, useMemo } from 'react';
@@ -5,12 +6,13 @@ import { useQuery } from '@tanstack/react-query';
 import { getDashboardData } from '@/actions/dashboard-actions'; 
 import { 
   Search, Eye, EyeOff, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, BarChart3,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Download // Download 아이콘 추가
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { IntegratedItem, DashboardAnalysis, ProductionRow, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
 import { useDateStore } from '@/store/date-store';
+import * as XLSX from 'xlsx'; // xlsx 라이브러리 추가
 
 type SortKey = 'name' | 'usableStock' | 'wasteStock' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
 type SortDirection = 'asc' | 'desc';
@@ -81,12 +83,14 @@ export default function InventoryPage() {
       const boxes = safeVal / (conversion > 0 ? conversion : 1);
       return { 
         value: boxes.toLocaleString(undefined, { maximumFractionDigits: maxDecimals }), 
-        unit: 'BOX' 
+        unit: 'BOX',
+        rawValue: Number(boxes.toFixed(maxDecimals || 0)) // 엑셀용 원시 숫자 추가
       };
     }
     return { 
       value: safeVal.toLocaleString(undefined, { maximumFractionDigits: maxDecimals }), 
-      unit: baseUnit 
+      unit: baseUnit,
+      rawValue: safeVal // 엑셀용 원시 숫자 추가
     };
   };
 
@@ -190,8 +194,9 @@ export default function InventoryPage() {
     return { all: simulatedItems, adsSummary: { totalAds30, totalAds60, totalAds90 } };
   }, [data, searchTerm, includeQualityInSim, storeEndDate, inventoryViewMode]); 
 
-  const filteredAndPaginated = useMemo(() => {
-    let list = simulation.all || [];
+  // 페이지네이션 적용 전, 전체 정렬된 리스트
+  const sortedFullList = useMemo(() => {
+    let list = [...simulation.all]; // 배열 복사
 
     list.sort((a, b) => {
       let valA: any = 0;
@@ -220,13 +225,72 @@ export default function InventoryPage() {
       return 0;
     });
 
-    const totalCount = list.length;
+    return list;
+  }, [simulation.all, sortConfig]);
+
+  const filteredAndPaginated = useMemo(() => {
+    const totalCount = sortedFullList.length;
     const totalPages = Math.ceil(totalCount / itemsPerPage);
     const startIdx = (currentPage - 1) * itemsPerPage;
-    const items = list.slice(startIdx, startIdx + itemsPerPage);
+    const items = sortedFullList.slice(startIdx, startIdx + itemsPerPage);
 
     return { items, totalPages, totalCount };
-  }, [simulation.all, currentPage, sortConfig]);
+  }, [sortedFullList, currentPage]);
+
+  // 엑셀 다운로드 핸들러
+  const handleDownloadExcel = () => {
+    // 1. 엑셀 데이터 헤더 정의
+    const excelData = sortedFullList.map(item => {
+      const dUsable = formatQty(item.sim.usableStock, item.umrezBox, item.unit);
+      const dWaste = formatQty(item.sim.wasteStock, item.umrezBox, item.unit);
+      const dPlan = formatQty(item.sim.targetDatePlan, item.umrezBox, item.unit);
+      const buckets = item.sim.buckets;
+      const dQuality = formatQty(item.sim.qualityStock, item.umrezBox, item.unit);
+      const dAds30 = formatQty(item.sim.ads30, item.umrezBox, item.unit, 0);
+      const dAds60 = formatQty(item.sim.ads60, item.umrezBox, item.unit, 0);
+      const dAds90 = formatQty(item.sim.ads90, item.umrezBox, item.unit, 0);
+
+      let displayTurnover = "-";
+      if (item.sim.ads90 > 0 && item.sim.turnoverDays < 90000) {
+          const days = Math.round(item.sim.turnoverDays);
+          displayTurnover = `${days}`; // 엑셀에서는 숫자만 출력
+      }
+
+      const rowData: any = {
+        '제품명': item.name,
+        '코드': item.code,
+        'ADS(30)': dAds30.rawValue,
+        'ADS(60)': dAds60.rawValue,
+        'ADS(90)': dAds90.rawValue,
+        '생산계획(당일)': item.sim.targetDatePlan > 0 ? dPlan.rawValue : 0,
+      };
+
+      if (showHiddenStock && inventoryViewMode !== 'LOGISTICS') {
+        rowData['품질재고'] = item.inventory.qualityStock > 0 ? dQuality.rawValue : 0;
+      }
+
+      rowData['가용재고'] = dUsable.rawValue;
+      rowData['폐기재고'] = item.sim.wasteStock > 0 ? dWaste.rawValue : 0;
+      rowData['회전일(90)'] = displayTurnover !== "-" ? Number(displayTurnover) : null;
+      rowData['~50% (유효)'] = buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).rawValue : 0;
+      rowData['50~70%'] = buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).rawValue : 0;
+      rowData['70~75%'] = buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).rawValue : 0;
+      rowData['75~85%'] = buckets.r75_85 > 0 ? formatQty(buckets.r75_85, item.umrezBox, item.unit).rawValue : 0;
+      rowData['85%~'] = buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).rawValue : 0;
+      
+      return rowData;
+    });
+
+    // 2. 워크시트 생성
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+    // 3. 워크북 생성 및 추가
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "재고분석");
+
+    // 4. 파일 다운로드
+    XLSX.writeFile(workbook, `재고분석리포트_${format(new Date(), 'yyyyMMdd_HHmm')}.xlsx`);
+  };
 
   if (isLoading) return <LoadingSpinner />;
   if (!data) return <ErrorDisplay />;
@@ -248,6 +312,13 @@ export default function InventoryPage() {
         
         <div className="flex flex-col md:flex-row gap-3 items-end md:items-center">
             <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDownloadExcel}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-all border bg-white text-green-700 border-green-200 hover:bg-green-50"
+                >
+                  <Download size={14} />
+                  엑셀 다운로드
+                </button>
                 {inventoryViewMode !== 'LOGISTICS' && (
                     <button 
                         onClick={() => setShowHiddenStock(!showHiddenStock)}

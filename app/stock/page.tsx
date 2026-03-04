@@ -1,10 +1,13 @@
+// app/stock/page.tsx
 'use client'
 
 import { useState, useMemo } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store'; 
+import * as XLSX from 'xlsx';
+import { format } from 'date-fns';
 
 type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed' | 'no_expiry';
 
@@ -121,10 +124,11 @@ export default function StockStatusPage() {
       const boxes = val / (conversion > 0 ? conversion : 1);
       return { 
         value: boxes.toLocaleString(undefined, { maximumFractionDigits: 1 }), 
-        unit: 'BOX' 
+        unit: 'BOX',
+        rawValue: Number(boxes.toFixed(1))
       };
     }
-    return { value: val.toLocaleString(), unit: baseUnit };
+    return { value: val.toLocaleString(), unit: baseUnit, rawValue: val };
   };
 
   const getStockColumnTitle = () => {
@@ -136,6 +140,81 @@ export default function StockStatusPage() {
     if (activeTab === 'disposed') return `폐기 대상 재고`;
     if (activeTab === 'no_expiry') return `기한없음 재고`;
     return '재고 수량';
+  };
+
+  // 상태 라벨 가져오기
+  const getStatusLabel = (status: string) => {
+    const config: any = { 
+        healthy: '양호', 
+        critical: '긴급', 
+        imminent: '임박', 
+        disposed: '폐기',
+        no_expiry: '기한없음'
+    };
+    return config[status] || status;
+  };
+
+  // 엑셀 다운로드 핸들러
+  const handleDownloadExcel = () => {
+    const excelData = filteredData.map((item, idx) => {
+      const { targetStock, targetBatches } = getStockInfo(item);
+      const statusBuckets = calculateStatusBuckets(targetBatches);
+
+      let displayStockValue = targetStock;
+      if (activeTab === 'healthy') displayStockValue = statusBuckets.healthy;
+      else if (activeTab === 'critical') displayStockValue = statusBuckets.critical;
+      else if (activeTab === 'imminent') displayStockValue = statusBuckets.imminent;
+      else if (activeTab === 'disposed') displayStockValue = statusBuckets.disposed;
+      else if (activeTab === 'no_expiry') displayStockValue = statusBuckets.no_expiry;
+
+      let badgeStatus = 'healthy';
+      let batchesForDateCalc = targetBatches;
+
+      if (activeTab === 'all') {
+          if (statusBuckets.disposed > 0) badgeStatus = 'disposed';
+          else if (statusBuckets.imminent > 0) badgeStatus = 'imminent';
+          else if (statusBuckets.critical > 0) badgeStatus = 'critical';
+          else if (statusBuckets.no_expiry > 0 && targetStock === statusBuckets.no_expiry) badgeStatus = 'no_expiry';
+      } else {
+          badgeStatus = activeTab;
+          batchesForDateCalc = targetBatches.filter(b => {
+              const isBatchNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
+              if (activeTab === 'no_expiry') return isBatchNoExpiry;
+              if (isBatchNoExpiry) return false;
+              if (activeTab === 'disposed') return b.remainDays <= 0;
+              if (activeTab === 'imminent') return b.remainDays > 0 && b.remainDays <= 30;
+              if (activeTab === 'critical') return b.remainDays > 30 && b.remainDays <= 60;
+              if (activeTab === 'healthy') return b.remainDays > 60;
+              return false;
+          });
+      }
+
+      const displayStock = formatQty(displayStockValue, item.umrezBox, item.unit);
+      const worstBatch = batchesForDateCalc.sort((a, b) => a.remainDays - b.remainDays)[0];
+      const showNoDate = !worstBatch || (!worstBatch.expirationDate || worstBatch.expirationDate === '-' || worstBatch.expirationDate === '' || worstBatch.expirationDate === '기한없음');
+
+      const expiryDateStr = showNoDate ? '-' : worstBatch.expirationDate;
+      const remainDaysStr = showNoDate ? '-' : worstBatch.remainDays;
+      const remainRateNum = showNoDate ? null : worstBatch.remainRate;
+
+      return {
+        'No': idx + 1,
+        '상태': getStatusLabel(badgeStatus),
+        '제품명': item.name,
+        '코드': item.code,
+        '단위': item.unit,
+        [getStockColumnTitle()]: displayStock.rawValue,
+        '소비기한 (최단)': expiryDateStr,
+        '잔여일수': remainDaysStr !== '-' ? Number(remainDaysStr) : null,
+        '잔여율(%)': remainRateNum !== null ? Number(remainRateNum.toFixed(1)) : null,
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "재고현황");
+    
+    XLSX.writeFile(workbook, `재고현황리포트_${format(new Date(), 'yyyyMMdd_HHmm')}.xlsx`);
   };
 
   if (isLoading) return <LoadingSpinner />;
@@ -153,9 +232,18 @@ export default function StockStatusPage() {
           <TabButton label="기한없음" active={activeTab === 'no_expiry'} onClick={() => { setActiveTab('no_expiry'); setCurrentPage(1); }} color="text-neutral-600" />
         </div>
         
-        <div className="relative w-full md:w-64">
-          <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
-          <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <button
+            onClick={handleDownloadExcel}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-all border bg-white text-green-700 border-green-200 hover:bg-green-50"
+          >
+            <Download size={14} />
+            엑셀 다운로드
+          </button>
+          <div className="relative w-full md:w-64">
+            <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
+            <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
+          </div>
         </div>
       </div>
 

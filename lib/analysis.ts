@@ -215,7 +215,7 @@ export function analyzeSnopData(
       const orderVdatuStr = safeExtractDateStr(order.VDATU);
       const isExcludedFromUnfulfilled = 
         order.WERKS === '1031' || 
-        ['2141', '2143', '2240', '2243'].includes(order.LGORT || '') ||
+        ['1110','2141', '2143', '2240', '2243'].includes(order.LGORT || '') ||
         orderVdatuStr >= todayYmd;
 
       let unfulfilled = Math.max(0, reqQty - actualQty);

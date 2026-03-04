@@ -14,8 +14,9 @@ export async function getInventoryStatus(): Promise<SapInventory[]> {
       remain_day, remain_rate, UMREZ_BOX
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\`
     WHERE CLABS > 0
-      AND LGORT NOT IN ('2141', '2143', '2240', '2243')
+      AND LGORT NOT IN ('1110', '2141', '2143', '2240', '2243')
       AND WERKS != '1031'  -- 플랜트 정보(WERKS)가 1031인 데이터 제외
+      AND MATNR BETWEEN '50000000' AND '69999999'
     ORDER BY CLABS DESC
     LIMIT 50
   `;

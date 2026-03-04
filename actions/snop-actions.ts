@@ -29,15 +29,15 @@ export async function getSnopPlan(matnr: string, option: SnopOption) {
   const dbEnd = format(end, 'yyyyMMdd');
 
   try {
-    // 🚨 재고 쿼리 창고 필터 적용
     const stockQuery = `
       SELECT SUM(CLABS) as total 
       FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB\` 
       WHERE MATNR = '${matnr}'
-        AND LGORT NOT IN ('2141', '2143', '2240', '2243')
+        AND MATNR BETWEEN '50000000' AND '69999999'
+        AND LGORT NOT IN ('1110', '2141', '2143', '2240', '2243')
     `;
-    const orderQuery = `SELECT * FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` WHERE MATNR = '${matnr}' AND VDATU BETWEEN '${dbStart}' AND '${dbEnd}'`;
-    const prodQuery = `SELECT * FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\` WHERE MATNR = '${matnr}' AND GSTRP BETWEEN '${dbStart}' AND '${dbEnd}'`;
+    const orderQuery = `SELECT * FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` WHERE MATNR = '${matnr}' AND MATNR BETWEEN '50000000' AND '69999999' AND VDATU BETWEEN '${dbStart}' AND '${dbEnd}'`;
+    const prodQuery = `SELECT * FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\` WHERE MATNR = '${matnr}' AND MATNR BETWEEN '50000000' AND '69999999' AND GSTRP BETWEEN '${dbStart}' AND '${dbEnd}'`;
 
     const [stockRows, orderRows, prodRows] = await Promise.all([
       bigqueryClient.query({ query: stockQuery }).then(r => r[0]),

@@ -14,6 +14,7 @@ export async function getLatestOrders(): Promise<SapOrder[]> {
       NETWR, WAERK,
       VDATU, AUDAT_VBAK
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\`
+    WHERE MATNR BETWEEN '50000000' AND '69999999'
     ORDER BY VDATU DESC
     LIMIT 50
   `;

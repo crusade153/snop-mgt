@@ -31,6 +31,7 @@ async function fetchRawData(sDate: string, eDate: string) {
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON A.MATNR = M.MATNR
     WHERE A.VDATU BETWEEN '${queryStartDate}' AND '${eDate}'
+      AND A.MATNR BETWEEN '50000000' AND '69999999'
   `;
   
   // 2. 생산 계획
@@ -50,10 +51,10 @@ async function fetchRawData(sDate: string, eDate: string) {
     FROM \`harimfood-361004.harim_sap_bi.PP_ZASPPR1110\` AS P
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON P.MATNR = M.MATNR
     WHERE P.GSTRP BETWEEN '${queryStartDate}' AND '${futureEnd}'
+      AND P.MATNR BETWEEN '50000000' AND '69999999'
   `;
 
   // 3. 사내 플랜트 재고 
-  // 🚨 날짜 처리의 근본 해결: 2026-06-16 형태의 문자열에서 하이픈(-)을 제거하고 정확히 앞 8자리(YYYYMMDD)만 추출
   const inventoryQuery = `
     SELECT 
       MATNR, MATNR_T, MEINS, LGOBE, LGORT,
@@ -65,11 +66,11 @@ async function fetchRawData(sDate: string, eDate: string) {
       PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
     FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB_ALL\`
     WHERE (CLABS > 0 OR CINSM > 0)
-      AND LGORT NOT IN ('2141', '2143', '2240', '2243', '3000', '3300', '9000', '9100')
+      AND LGORT NOT IN ('1110', '2141', '2143', '2240', '2243', '3000', '3300', '9000', '9100')
+      AND MATNR BETWEEN '50000000' AND '69999999'
   `;
 
   // 4. FBH 외부 창고 재고
-  // 🚨 FBH 날짜 처리 역시 하이픈 제거 후 YYYYMMDD 8자리로 포맷팅 적용
   const fbhQuery = `
     SELECT 
       SKU_CD, 
@@ -82,6 +83,7 @@ async function fetchRawData(sDate: string, eDate: string) {
       REMAINING_DAY
     FROM \`harimfood-361004.harim_sap_bi_user.V_WMV_CST_INVNLIST\`
     WHERE AVLB_QTY > 0
+      AND SKU_CD BETWEEN '50000000' AND '69999999'
   `;
 
   try {
@@ -113,8 +115,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 }
 
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 🚨 포맷 문제 해결을 강제 반영하기 위해 캐시 버전을 v5.3으로 상향
-    const cacheKey = `dashboard-analysis-v5.3-${sDate}-${eDate}`;
+    // 🚨 캐시 무효화를 위해 버전 v5.5로 상향
+    const cacheKey = `dashboard-analysis-v5.5-${sDate}-${eDate}`;
     
     return await unstable_cache(
       async () => {

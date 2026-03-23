@@ -11,6 +11,16 @@ import { format } from 'date-fns';
 
 type TabType = 'all' | 'healthy' | 'critical' | 'imminent' | 'disposed' | 'no_expiry';
 
+// 🚨 제품 단위가 아닌 '배치(소비기한)' 단위의 데이터 타입 정의
+interface BatchRow extends IntegratedItem {
+  batchQty: number;
+  expirationDateStr: string;
+  remainDaysNum: number | '-';
+  remainRateNum: number | null;
+  status: string;
+  isQuality: boolean;
+}
+
 export default function StockStatusPage() {
   const { data, isLoading } = useDashboardData();
   const { unitMode, inventoryViewMode } = useUiStore();
@@ -21,90 +31,93 @@ export default function StockStatusPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
 
-  // 창고 뷰 모드에 따른 재고 타겟 설정
-  const getStockInfo = (item: IntegratedItem) => {
-    let targetStock = 0;
-    let targetBatches: InventoryBatch[] = [];
-
-    if (inventoryViewMode === 'PLANT') {
-        targetStock = item.inventory.plantStock;
-        targetBatches = item.inventory.plantBatches;
-    } else if (inventoryViewMode === 'LOGISTICS') {
-        targetStock = item.inventory.fbhStock;
-        targetBatches = item.inventory.fbhBatches;
-    } else { 
-        targetStock = item.inventory.totalStock;
-        targetBatches = item.inventory.batches;
-    }
-    return { targetStock, targetBatches };
-  };
-
-  // 배치별 상태를 계산하여 버킷(구간)별 수량을 집계
-  const calculateStatusBuckets = (batches: InventoryBatch[]) => {
-    const buckets = { healthy: 0, critical: 0, imminent: 0, disposed: 0, no_expiry: 0 };
-    batches.forEach(b => {
-        // 🚨 서버에서 넘어온 실제 날짜 유무만으로 상태를 판별합니다. (6번대 강제 예외 제거)
-        const isBatchNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
-        if (isBatchNoExpiry) buckets.no_expiry += b.quantity;
-        else if (b.remainDays <= 0) buckets.disposed += b.quantity;
-        else if (b.remainDays <= 30) buckets.imminent += b.quantity;
-        else if (b.remainDays <= 60) buckets.critical += b.quantity;
-        else buckets.healthy += b.quantity;
-    });
-    return buckets;
-  };
-
-  const filteredData = useMemo(() => {
+  // 1. 데이터를 소비기한(배치)별로 각각의 행으로 분리(Flatten)
+  const flattenedData = useMemo(() => {
     if (!data) return [];
-    
-    let items = data.integratedArray;
+    const rows: BatchRow[] = [];
 
-    // 1. 텍스트 검색 필터
+    data.integratedArray.forEach((item: IntegratedItem) => {
+        let targetBatches: InventoryBatch[] = [];
+        let qualityStock = 0;
+
+        // 뷰 모드에 따른 대상 데이터 선택
+        if (inventoryViewMode === 'PLANT') {
+            targetBatches = item.inventory.plantBatches || [];
+            qualityStock = item.inventory.qualityStock || 0;
+        } else if (inventoryViewMode === 'LOGISTICS') {
+            targetBatches = item.inventory.fbhBatches || [];
+        } else { 
+            targetBatches = item.inventory.batches || [];
+        }
+
+        // 배치 단위별로 개별 Row 생성
+        targetBatches.forEach(b => {
+            if (b.quantity <= 0) return;
+
+            const isNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
+            let status = 'healthy';
+            
+            if (isNoExpiry) status = 'no_expiry';
+            else if (b.remainDays <= 0) status = 'disposed';
+            else if (b.remainDays <= 30) status = 'imminent';
+            else if (b.remainDays <= 60) status = 'critical';
+
+            rows.push({
+                ...item,
+                batchQty: b.quantity,
+                expirationDateStr: isNoExpiry ? '-' : b.expirationDate,
+                remainDaysNum: isNoExpiry ? '-' : b.remainDays,
+                remainRateNum: isNoExpiry ? null : b.remainRate,
+                status: status,
+                isQuality: false
+            });
+        });
+
+        // 품질대기 재고 옵션이 켜져있을 경우 별도의 행으로 추가
+        if (inventoryViewMode === 'PLANT' && showHiddenStock && qualityStock > 0) {
+            rows.push({
+                ...item,
+                batchQty: qualityStock,
+                expirationDateStr: '-',
+                remainDaysNum: '-',
+                remainRateNum: null,
+                status: 'quality_hold',
+                isQuality: true
+            });
+        }
+    });
+
+    return rows;
+  }, [data, inventoryViewMode, showHiddenStock]);
+
+  // 2. 검색, 탭 필터링 및 정렬 적용
+  const filteredData = useMemo(() => {
+    let items = flattenedData;
+
+    // 텍스트 검색 필터
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
-      items = items.filter((item: IntegratedItem) => 
-        item.name.toLowerCase().includes(lower) || 
-        item.code.includes(lower)
+      items = items.filter((row: BatchRow) => 
+        row.name.toLowerCase().includes(lower) || 
+        row.code.includes(lower)
       );
     }
 
-    // 2. 재고가 있는 품목만 표시
-    items = items.filter((item: IntegratedItem) => {
-        const { targetStock } = getStockInfo(item);
-        const qualityCheck = (inventoryViewMode === 'PLANT' && showHiddenStock && item.inventory.qualityStock > 0);
-        return targetStock > 0 || qualityCheck;
-    });
-    
-    // 3. 탭 클릭 시 해당 구간의 재고가 "존재하는" 품목만 남김
+    // 탭 클릭 필터
     if (activeTab !== 'all') {
-      items = items.filter((item: IntegratedItem) => {
-        const { targetBatches } = getStockInfo(item);
-        if (targetBatches.length === 0) return false;
-        
-        // 🚨 프론트엔드의 6번대 하드코딩 완전 제거
-        const buckets = calculateStatusBuckets(targetBatches);
-
-        if (activeTab === 'no_expiry') return buckets.no_expiry > 0;
-        if (activeTab === 'disposed') return buckets.disposed > 0;
-        if (activeTab === 'imminent') return buckets.imminent > 0;
-        if (activeTab === 'critical') return buckets.critical > 0;
-        if (activeTab === 'healthy') return buckets.healthy > 0;
-        
-        return false;
-      });
+      items = items.filter((row: BatchRow) => row.status === activeTab);
     }
 
-    // 4. 정렬: 가장 안 좋은 소비기한(최단 잔여일)을 가진 순서대로 정렬
+    // 정렬: 가장 안 좋은 소비기한(최단 잔여일)을 가진 순서대로 정렬 후 제품코드 정렬
     items.sort((a, b) => {
-        const { targetBatches: bA } = getStockInfo(a);
-        const { targetBatches: bB } = getStockInfo(b);
-        const minA = bA.length > 0 ? Math.min(...bA.map(bt => bt.remainDays)) : 9999;
-        const minB = bB.length > 0 ? Math.min(...bB.map(bt => bt.remainDays)) : 9999;
-        return minA - minB;
+        const aDays = a.remainDaysNum === '-' ? 99999 : a.remainDaysNum;
+        const bDays = b.remainDaysNum === '-' ? 99999 : b.remainDaysNum;
+        if (aDays !== bDays) return aDays - bDays;
+        return a.code.localeCompare(b.code);
     });
     
     return items;
-  }, [data, activeTab, searchTerm, showHiddenStock, inventoryViewMode]);
+  }, [flattenedData, activeTab, searchTerm]);
 
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
@@ -133,7 +146,7 @@ export default function StockStatusPage() {
 
   const getStockColumnTitle = () => {
     const prefix = inventoryViewMode === 'ALL' ? '통합 ' : inventoryViewMode === 'LOGISTICS' ? '물류 ' : '플랜트 ';
-    if (activeTab === 'all') return `총 ${prefix}재고`;
+    if (activeTab === 'all') return `${prefix}재고`;
     if (activeTab === 'healthy') return `양호 재고 (61일↑)`;
     if (activeTab === 'critical') return `긴급 재고 (31~60일)`;
     if (activeTab === 'imminent') return `임박 재고 (1~30일)`;
@@ -149,64 +162,27 @@ export default function StockStatusPage() {
         critical: '긴급', 
         imminent: '임박', 
         disposed: '폐기',
-        no_expiry: '기한없음'
+        no_expiry: '기한없음',
+        quality_hold: '품질대기'
     };
     return config[status] || status;
   };
 
-  // 엑셀 다운로드 핸들러
+  // 엑셀 다운로드 핸들러 (배치 단위로 그대로 출력)
   const handleDownloadExcel = () => {
-    const excelData = filteredData.map((item, idx) => {
-      const { targetStock, targetBatches } = getStockInfo(item);
-      const statusBuckets = calculateStatusBuckets(targetBatches);
-
-      let displayStockValue = targetStock;
-      if (activeTab === 'healthy') displayStockValue = statusBuckets.healthy;
-      else if (activeTab === 'critical') displayStockValue = statusBuckets.critical;
-      else if (activeTab === 'imminent') displayStockValue = statusBuckets.imminent;
-      else if (activeTab === 'disposed') displayStockValue = statusBuckets.disposed;
-      else if (activeTab === 'no_expiry') displayStockValue = statusBuckets.no_expiry;
-
-      let badgeStatus = 'healthy';
-      let batchesForDateCalc = targetBatches;
-
-      if (activeTab === 'all') {
-          if (statusBuckets.disposed > 0) badgeStatus = 'disposed';
-          else if (statusBuckets.imminent > 0) badgeStatus = 'imminent';
-          else if (statusBuckets.critical > 0) badgeStatus = 'critical';
-          else if (statusBuckets.no_expiry > 0 && targetStock === statusBuckets.no_expiry) badgeStatus = 'no_expiry';
-      } else {
-          badgeStatus = activeTab;
-          batchesForDateCalc = targetBatches.filter(b => {
-              const isBatchNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
-              if (activeTab === 'no_expiry') return isBatchNoExpiry;
-              if (isBatchNoExpiry) return false;
-              if (activeTab === 'disposed') return b.remainDays <= 0;
-              if (activeTab === 'imminent') return b.remainDays > 0 && b.remainDays <= 30;
-              if (activeTab === 'critical') return b.remainDays > 30 && b.remainDays <= 60;
-              if (activeTab === 'healthy') return b.remainDays > 60;
-              return false;
-          });
-      }
-
-      const displayStock = formatQty(displayStockValue, item.umrezBox, item.unit);
-      const worstBatch = batchesForDateCalc.sort((a, b) => a.remainDays - b.remainDays)[0];
-      const showNoDate = !worstBatch || (!worstBatch.expirationDate || worstBatch.expirationDate === '-' || worstBatch.expirationDate === '' || worstBatch.expirationDate === '기한없음');
-
-      const expiryDateStr = showNoDate ? '-' : worstBatch.expirationDate;
-      const remainDaysStr = showNoDate ? '-' : worstBatch.remainDays;
-      const remainRateNum = showNoDate ? null : worstBatch.remainRate;
+    const excelData = filteredData.map((row, idx) => {
+      const displayStock = formatQty(row.batchQty, row.umrezBox, row.unit);
 
       return {
         'No': idx + 1,
-        '상태': getStatusLabel(badgeStatus),
-        '제품명': item.name,
-        '코드': item.code,
-        '단위': item.unit,
+        '상태': getStatusLabel(row.status),
+        '제품명': row.name,
+        '코드': row.code,
+        '단위': row.unit,
         [getStockColumnTitle()]: displayStock.rawValue,
-        '소비기한 (최단)': expiryDateStr,
-        '잔여일수': remainDaysStr !== '-' ? Number(remainDaysStr) : null,
-        '잔여율(%)': remainRateNum !== null ? Number(remainRateNum.toFixed(1)) : null,
+        '소비기한': row.expirationDateStr,
+        '잔여일수': row.remainDaysNum !== '-' ? Number(row.remainDaysNum) : null,
+        '잔여율(%)': row.remainRateNum !== null ? Number(row.remainRateNum.toFixed(1)) : null,
       };
     });
 
@@ -224,7 +200,7 @@ export default function StockStatusPage() {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       <div id="stock-table-top" className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
-          <TabButton label="전체" count={filteredData.length} active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
+          <TabButton label="전체" active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
           <TabButton label="양호 (61일↑)" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
           <TabButton label="긴급 (31~60일)" active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
           <TabButton label="임박 (1~30일)" active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
@@ -259,90 +235,48 @@ export default function StockStatusPage() {
                 <th className="px-4 py-3 border-b font-bold text-neutral-800 text-right w-36 bg-blue-50/40">
                   {getStockColumnTitle()}
                 </th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center border-l border-neutral-200">소비기한 (최단)</th>
+                {/* 🚨 소비기한 (최단) 텍스트를 실제 해당 배치의 소비기한을 뜻하도록 수정 */}
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center border-l border-neutral-200">소비기한</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">잔여일수</th>
                 <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">잔여율</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {paginatedItems.map((item: IntegratedItem, idx: number) => {
-                const { targetStock, targetBatches } = getStockInfo(item);
-                
-                // 🚨 프론트엔드의 6번대 하드코딩 완전 제거 (isProductNoExpiry = false로 대체)
-                const statusBuckets = calculateStatusBuckets(targetBatches);
-
-                let displayStockValue = targetStock;
-                if (activeTab === 'healthy') displayStockValue = statusBuckets.healthy;
-                else if (activeTab === 'critical') displayStockValue = statusBuckets.critical;
-                else if (activeTab === 'imminent') displayStockValue = statusBuckets.imminent;
-                else if (activeTab === 'disposed') displayStockValue = statusBuckets.disposed;
-                else if (activeTab === 'no_expiry') displayStockValue = statusBuckets.no_expiry;
-
-                let badgeStatus = 'healthy';
-                let batchesForDateCalc = targetBatches;
-
-                if (activeTab === 'all') {
-                    // 전체일 때는 가장 안좋은 상태 표시
-                    if (statusBuckets.disposed > 0) badgeStatus = 'disposed';
-                    else if (statusBuckets.imminent > 0) badgeStatus = 'imminent';
-                    else if (statusBuckets.critical > 0) badgeStatus = 'critical';
-                    else if (statusBuckets.no_expiry > 0 && targetStock === statusBuckets.no_expiry) badgeStatus = 'no_expiry';
-                } else {
-                    badgeStatus = activeTab;
-                    batchesForDateCalc = targetBatches.filter(b => {
-                        // 🚨 6번대 강제 예외 걷어내기
-                        const isBatchNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
-                        if (activeTab === 'no_expiry') return isBatchNoExpiry;
-                        if (isBatchNoExpiry) return false;
-                        if (activeTab === 'disposed') return b.remainDays <= 0;
-                        if (activeTab === 'imminent') return b.remainDays > 0 && b.remainDays <= 30;
-                        if (activeTab === 'critical') return b.remainDays > 30 && b.remainDays <= 60;
-                        if (activeTab === 'healthy') return b.remainDays > 60;
-                        return false;
-                    });
-                }
-
-                const displayStock = formatQty(displayStockValue, item.umrezBox, item.unit);
-
-                // 화면에 표시할 최단 소비기한
-                const worstBatch = batchesForDateCalc.sort((a, b) => a.remainDays - b.remainDays)[0];
-                const showNoDate = !worstBatch || (!worstBatch.expirationDate || worstBatch.expirationDate === '-' || worstBatch.expirationDate === '' || worstBatch.expirationDate === '기한없음');
-
-                const expiryDateStr = showNoDate ? '-' : worstBatch.expirationDate;
-                const remainDaysStr = showNoDate ? '-' : `${worstBatch.remainDays}일`;
-                const remainRateNum = showNoDate ? null : worstBatch.remainRate;
+              {paginatedItems.map((row: BatchRow, idx: number) => {
+                const displayStock = formatQty(row.batchQty, row.umrezBox, row.unit);
 
                 return (
-                  <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[52px]">
+                  // 고유성을 보장하기 위해 code와 소비기한, idx를 혼합하여 key로 사용
+                  <tr key={`${row.code}-${row.expirationDateStr}-${idx}`} className="hover:bg-[#F9F9F9] transition-colors h-[52px]">
                     <td className="px-4 py-3 text-center text-neutral-400 text-xs">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
                     
                     <td className="px-4 py-3 text-center">
-                        <StatusBadge status={badgeStatus} />
+                        <StatusBadge status={row.status} />
                     </td>
                     
                     <td className="px-4 py-3">
-                        <div className="font-medium text-neutral-900 line-clamp-2" title={item.name}>{item.name}</div>
-                        <div className="text-[11px] text-neutral-400 font-mono mt-0.5">{item.code}</div>
+                        <div className="font-medium text-neutral-900 line-clamp-2" title={row.name}>{row.name}</div>
+                        <div className="text-[11px] text-neutral-400 font-mono mt-0.5">{row.code}</div>
                     </td>
                     
-                    <td className="px-2 py-3 text-center text-neutral-500 text-xs">{item.unit}</td>
+                    <td className="px-2 py-3 text-center text-neutral-500 text-xs">{row.unit}</td>
                     
                     <td className="px-4 py-3 text-right font-bold text-neutral-900 text-base bg-blue-50/20">
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-500 ml-1">{displayStock.unit}</span>
                     </td>
                     
                     <td className="px-4 py-3 text-center text-neutral-600 font-mono text-sm border-l border-neutral-200">
-                        {expiryDateStr}
+                        {row.expirationDateStr}
                     </td>
                     
-                    <td className={`px-4 py-3 text-right font-bold text-sm ${badgeStatus === 'disposed' ? 'text-[#C62828]' : showNoDate ? 'text-neutral-400' : 'text-neutral-700'}`}>
-                        {remainDaysStr}
+                    <td className={`px-4 py-3 text-right font-bold text-sm ${row.status === 'disposed' ? 'text-[#C62828]' : row.remainDaysNum === '-' ? 'text-neutral-400' : 'text-neutral-700'}`}>
+                        {row.remainDaysNum === '-' ? '-' : `${row.remainDaysNum}일`}
                     </td>
                     
                     <td className="px-4 py-3 text-right">
-                        {remainRateNum === null ? <span className="text-neutral-400">-</span> : (
-                            <span className={`px-2 py-1 rounded text-[11px] font-bold ${remainRateNum < 30 ? 'bg-[#FFEBEE] text-[#C62828]' : 'bg-[#E3F2FD] text-[#1565C0]'}`}>
-                                {remainRateNum.toFixed(1)}%
+                        {row.remainRateNum === null ? <span className="text-neutral-400">-</span> : (
+                            <span className={`px-2 py-1 rounded text-[11px] font-bold ${row.remainRateNum < 30 ? 'bg-[#FFEBEE] text-[#C62828]' : 'bg-[#E3F2FD] text-[#1565C0]'}`}>
+                                {row.remainRateNum.toFixed(1)}%
                             </span>
                         )}
                     </td>
@@ -381,7 +315,8 @@ function StatusBadge({ status }: { status: string }) {
       critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, 
       imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' }, 
       disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
-      no_expiry: { bg: '#F5F5F5', text: '#757575', label: '기한없음' }
+      no_expiry: { bg: '#F5F5F5', text: '#757575', label: '기한없음' },
+      quality_hold: { bg: '#F3E5F5', text: '#7B1FA2', label: '품질대기' }
   };
   const c = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };
   return (<span className="px-2.5 py-1 rounded text-xs font-bold border border-transparent" style={{ backgroundColor: c.bg, color: c.text }}>{c.label}</span>);

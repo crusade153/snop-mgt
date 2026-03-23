@@ -18,7 +18,7 @@ export async function getInventoryStatus(): Promise<SapInventory[]> {
       AND WERKS != '1031'  -- 플랜트 정보(WERKS)가 1031인 데이터 제외
       AND MATNR BETWEEN '50000000' AND '69999999'
     ORDER BY CLABS DESC
-    LIMIT 50
+    -- LIMIT 50 부분 제거: 대시보드 전체 분석을 위해 모든 유효 재고를 로드합니다.
   `;
 
   try {

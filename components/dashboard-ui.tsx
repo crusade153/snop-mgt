@@ -47,7 +47,6 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
 
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {/* 요청사항 반영: 납품 매출 */}
         <KpiCard title="납품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
         <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
         <KpiCard 
@@ -105,7 +104,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right">
                   재고 ({unitMode === 'BOX' ? 'BOX' : '기준'})
                 </th>
-                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center">상태</th>
+                <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center w-[140px]">상태 및 구성</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right group cursor-help">
                   <div className="flex items-center justify-end gap-1">
                     일평균 판매량
@@ -125,11 +124,12 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                   
                   const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
                   const displayAds = formatQty(item.inventory.ads, item.umrezBox, item.unit);
+                  const disposedQty = formatQty(item.inventory.statusBreakdown?.disposed || 0, item.umrezBox, item.unit);
 
                   return (
-                    <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
+                    <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[54px]">
                       <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
-                      <td className="px-4 py-3 text-neutral-900">{item.name}</td>
+                      <td className="px-4 py-3 text-neutral-900 font-medium">{item.name}</td>
                       <td className="px-4 py-3 text-right font-bold text-primary-brand">
                         {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}
                       </td>
@@ -138,13 +138,42 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                         <span className="text-[10px] text-neutral-400 ml-1">{displayStock.unit}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {item.totalUnfulfilledQty > 0 ? (
-                          <span className="px-2 py-1 rounded text-[11px] font-bold bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]">
-                            미납 관리
-                          </span>
-                        ) : (
-                          <StatusBadge status={item.inventory.status} />
-                        )}
+                        {/* 🚨 상태 및 구성 시각화 영역 */}
+                        <div className="flex flex-col items-center gap-1.5 w-full min-w-[120px]">
+                          {/* 1. 대표 상태 뱃지 */}
+                          <div className="flex justify-center">
+                            {item.totalUnfulfilledQty > 0 ? (
+                              <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]">
+                                미납 관리
+                              </span>
+                            ) : (
+                              <StatusBadge status={item.inventory.status} />
+                            )}
+                          </div>
+                          
+                          {/* 2. 미니 프로그레스 바 (재고 구성 비율) */}
+                          {item.inventory.totalStock > 0 && (
+                            <div 
+                              className="flex w-full h-1.5 bg-neutral-100 rounded-full overflow-hidden shadow-inner" 
+                              title={`총 ${displayStock.value} 중 폐기 ${disposedQty.value}`}
+                            >
+                              <div style={{ width: `${((item.inventory.statusBreakdown?.healthy || 0) / item.inventory.totalStock) * 100}%` }} className="bg-[#42A5F5]"></div>
+                              <div style={{ width: `${((item.inventory.statusBreakdown?.no_expiry || 0) / item.inventory.totalStock) * 100}%` }} className="bg-[#66BB6A]"></div>
+                              <div style={{ width: `${((item.inventory.statusBreakdown?.critical || 0) / item.inventory.totalStock) * 100}%` }} className="bg-[#FBC02D]"></div>
+                              <div style={{ width: `${((item.inventory.statusBreakdown?.imminent || 0) / item.inventory.totalStock) * 100}%` }} className="bg-[#F57C00]"></div>
+                              <div style={{ width: `${((item.inventory.statusBreakdown?.disposed || 0) / item.inventory.totalStock) * 100}%` }} className="bg-[#E53935]"></div>
+                            </div>
+                          )}
+
+                          {/* 3. 소량 폐기 재고가 존재할 경우 확 띄는 경고 뱃지 */}
+                          {(item.inventory.statusBreakdown?.disposed || 0) > 0 && (
+                            <div className="flex justify-center w-full">
+                              <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 animate-pulse">
+                                🚨 폐기 {disposedQty.value} {disposedQty.unit}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right font-medium text-neutral-800">
                         {displayAds.value} <span className="text-[10px] text-neutral-400 font-normal">{displayAds.unit}</span>
@@ -232,13 +261,14 @@ function StockBar({ label, value, total, color }: any) {
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string, text: string, label: string }> = {
     healthy: { bg: '#E3F2FD', text: '#1E88E5', label: '양호' },
+    no_expiry: { bg: '#E8F5E9', text: '#43A047', label: '기한없음' }, // 기한없음 추가
     critical: { bg: '#FFF8E1', text: '#F57F17', label: '긴급' }, 
     imminent: { bg: '#FFF3E0', text: '#E65100', label: '임박' },
     disposed: { bg: '#FFEBEE', text: '#E53935', label: '폐기' },
   };
   const current = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };
   return (
-    <span className="px-2 py-1 rounded text-[11px] font-bold" style={{ backgroundColor: current.bg, color: current.text }}>
+    <span className="px-2 py-0.5 rounded text-[11px] font-bold" style={{ backgroundColor: current.bg, color: current.text }}>
       {current.label}
     </span>
   );

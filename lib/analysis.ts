@@ -8,47 +8,59 @@ const THRESHOLDS = {
   FIXED_ADS_DAYS: 60, 
 };
 
-// 🚨 [완벽 조치] 어떤 형태의 날짜(Date 객체, BigQuery 객체, 문자열)가 들어와도 무조건 YYYYMMDD로 변환하는 방탄 함수
+// 🚨 [완벽 조치 1] SAP 더미 날짜(1899-12-30, 00000000 등)를 기한없음으로 정확히 걸러내는 방탄 함수
 function safeExtractDateStr(val: any): string {
   if (!val) return '';
 
   try {
-    // 1. 이미 자바스크립트 Date 객체로 넘어온 경우 (이번 오류의 핵심 원인)
+    let y = 0, m = '', d = '';
+
+    // 1. 이미 자바스크립트 Date 객체인 경우
     if (val instanceof Date) {
       if (isNaN(val.getTime())) return '';
-      const y = val.getFullYear();
-      const m = String(val.getMonth() + 1).padStart(2, '0');
-      const d = String(val.getDate()).padStart(2, '0');
-      return `${y}${m}${d}`;
-    }
-
-    // 2. BigQueryDate 객체인 경우 ({ value: "2026-06-16" })
-    let str = '';
-    if (typeof val === 'object' && val !== null && 'value' in val) {
-      str = String(val.value);
+      y = val.getFullYear();
+      m = String(val.getMonth() + 1).padStart(2, '0');
+      d = String(val.getDate()).padStart(2, '0');
     } else {
-      str = String(val);
+      let str = '';
+      if (typeof val === 'object' && val !== null && 'value' in val) {
+        str = String(val.value);
+      } else {
+        str = String(val);
+      }
+
+      str = str.trim();
+      // SAP 특유의 빈 날짜값 처리
+      if (!str || str === '00000000' || str === '-' || str.includes('1899') || str.includes('1900') || str.includes('1970')) {
+        return '';
+      }
+
+      // 정규식으로 YYYYMMDD 추출
+      const match = str.match(/(20\d{2})[-./]?(\d{2})[-./]?(\d{2})/);
+      if (match) {
+        y = parseInt(match[1], 10);
+        m = match[2];
+        d = match[3];
+      } else {
+        // 최후의 문자열 Date 파싱
+        const parsedDate = new Date(str);
+        if (!isNaN(parsedDate.getTime())) {
+          y = parsedDate.getFullYear();
+          m = String(parsedDate.getMonth() + 1).padStart(2, '0');
+          d = String(parsedDate.getDate()).padStart(2, '0');
+        } else {
+          return '';
+        }
+      }
     }
 
-    // 3. 문자열에서 정규식으로 YYYY-MM-DD 또는 YYYYMMDD 정확히 추출
-    const match = str.match(/(20\d{2})[-./]?(\d{2})[-./]?(\d{2})/);
-    if (match) {
-      return `${match[1]}${match[2]}${match[3]}`;
-    }
+    // 🚨 핵심 방어 로직: 2000년 미만(1899년 등)은 무조건 기한없음(빈 문자열) 처리
+    if (y < 2000) return ''; 
 
-    // 4. 영문 Date 문자열 포맷(Tue Jun 16 2026...)으로 변환되었을 경우를 대비한 최후의 파싱
-    const parsedDate = new Date(str);
-    if (!isNaN(parsedDate.getTime())) {
-      const y = parsedDate.getFullYear();
-      const m = String(parsedDate.getMonth() + 1).padStart(2, '0');
-      const d = String(parsedDate.getDate()).padStart(2, '0');
-      return `${y}${m}${d}`;
-    }
+    return `${y}${m}${d}`;
   } catch (e) {
     return '';
   }
-
-  return '';
 }
 
 function inferBrandInfo(name: string) {
@@ -97,6 +109,7 @@ export function analyzeSnopData(
   const filterStart = startDateStr.replace(/-/g, '');
   const filterEnd = endDateStr.replace(/-/g, '');
   const today = new Date();
+  today.setHours(0, 0, 0, 0); // 시간 오차 방지
   const todayYmd = format(today, 'yyyyMMdd');
 
   const date30DaysAgo = format(subDays(today, 30), 'yyyyMMdd');
@@ -211,7 +224,6 @@ export function analyzeSnopData(
     const actualQty = Number(order.LFIMG_LIPS || 0);
     
     if (order.VDATU >= filterStart && order.VDATU <= filterEnd) {
-      // 🚨 [수정됨] VDATU를 포맷팅하여 오늘(todayYmd)과 비교. 오늘 이후의 주문건은 미납(Unfulfilled) 계산에서 제외합니다.
       const orderVdatuStr = safeExtractDateStr(order.VDATU);
       const isExcludedFromUnfulfilled = 
         order.WERKS === '1031' || 
@@ -241,7 +253,7 @@ export function analyzeSnopData(
           if (item.inventory.totalStock > 0) cause = '당일 재고 부족'; 
 
           let daysDelayed = 0;
-          const orderDateStr = orderVdatuStr; // 이미 위에서 구한 값을 재활용
+          const orderDateStr = orderVdatuStr; 
           if (orderDateStr && orderDateStr.length === 8) {
               try {
                   const dStr = `${orderDateStr.slice(0, 4)}-${orderDateStr.slice(4, 6)}-${orderDateStr.slice(6, 8)}`;
@@ -411,6 +423,7 @@ export function analyzeSnopData(
   };
 }
 
+// 🚨 [완벽 조치 2] 단 1개의 폐기 배치로 전체 라벨이 오염되는 현상을 방지하는 '수량 기반 대표 상태(Majority Status)' 산출 로직
 function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
@@ -438,20 +451,28 @@ function initializeItem(
   let finalStatus: 'healthy' | 'imminent' | 'critical' | 'disposed' | 'no_expiry' = 'healthy';
 
   if (allBatches.length > 0) {
-    const expiryBatches = allBatches.filter(b => b.expirationDate && b.expirationDate.length === 8 && b.expirationDate !== '기한없음');
-    
-    if (expiryBatches.length > 0) {
-        minRemaining = Math.min(...expiryBatches.map(b => b.remainDays));
-        finalStatus = getStockStatus(minRemaining, false);
-    } else {
-        finalStatus = 'no_expiry';
-    }
-
+    // 1. 모든 배치를 순회하며 상태별 실제 '수량'을 누적합니다.
     allBatches.forEach(b => {
       const isNoExp = !b.expirationDate || b.expirationDate === '기한없음';
       const s = getStockStatus(b.remainDays, isNoExp);
       statusBreakdown[s] += b.quantity;
     });
+
+    // 2. 가장 많은 수량을 차지하는 상태를 대표 상태로 선정합니다 (Majority Rule)
+    let maxQty = -1;
+    (Object.keys(statusBreakdown) as Array<keyof typeof statusBreakdown>).forEach(key => {
+      if (statusBreakdown[key] > maxQty && statusBreakdown[key] > 0) {
+        maxQty = statusBreakdown[key];
+        finalStatus = key;
+      }
+    });
+
+    // 3. 최소 잔여일수 계산 (정보 제공용)
+    const expiryBatches = allBatches.filter(b => b.expirationDate && b.expirationDate.length === 8 && b.expirationDate !== '기한없음');
+    if (expiryBatches.length > 0) {
+        minRemaining = Math.min(...expiryBatches.map(b => b.remainDays));
+    }
+
   } else if (totalStock > 0) {
     finalStatus = 'no_expiry';
     statusBreakdown['no_expiry'] = totalStock;
@@ -487,8 +508,8 @@ function initializeItem(
       plantBatches,
       fbhBatches,
       batches: allBatches, 
-      status: finalStatus,
-      statusBreakdown,
+      status: finalStatus, 
+      statusBreakdown,     
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore: 0,
       ads: 0, 

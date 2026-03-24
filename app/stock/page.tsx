@@ -19,6 +19,7 @@ interface BatchRow extends IntegratedItem {
   remainRateNum: number | null;
   status: string;
   isQuality: boolean;
+  location: string; // ✅ 위치정보(LGOBE) 추가
 }
 
 export default function StockStatusPage() {
@@ -62,6 +63,9 @@ export default function StockStatusPage() {
             else if (b.remainDays <= 30) status = 'imminent';
             else if (b.remainDays <= 60) status = 'critical';
 
+            // ✅ 백엔드에서 넘어오는 lgobe 속성을 매핑 (대소문자 방어 코드 포함)
+            const lgobeValue = (b as any).LGOBE || (b as any).lgobe || (b as any).location || '-';
+
             rows.push({
                 ...item,
                 batchQty: b.quantity,
@@ -69,7 +73,8 @@ export default function StockStatusPage() {
                 remainDaysNum: isNoExpiry ? '-' : b.remainDays,
                 remainRateNum: isNoExpiry ? null : b.remainRate,
                 status: status,
-                isQuality: false
+                isQuality: false,
+                location: lgobeValue
             });
         });
 
@@ -82,7 +87,8 @@ export default function StockStatusPage() {
                 remainDaysNum: '-',
                 remainRateNum: null,
                 status: 'quality_hold',
-                isQuality: true
+                isQuality: true,
+                location: '품질대기'
             });
         }
     });
@@ -155,7 +161,6 @@ export default function StockStatusPage() {
     return '재고 수량';
   };
 
-  // 상태 라벨 가져오기
   const getStatusLabel = (status: string) => {
     const config: any = { 
         healthy: '양호', 
@@ -168,22 +173,30 @@ export default function StockStatusPage() {
     return config[status] || status;
   };
 
-  // 엑셀 다운로드 핸들러 (배치 단위로 그대로 출력)
+  // 엑셀 다운로드 핸들러
   const handleDownloadExcel = () => {
     const excelData = filteredData.map((row, idx) => {
       const displayStock = formatQty(row.batchQty, row.umrezBox, row.unit);
 
-      return {
+      const rowData: any = {
         'No': idx + 1,
         '상태': getStatusLabel(row.status),
         '제품명': row.name,
         '코드': row.code,
         '단위': row.unit,
         [getStockColumnTitle()]: displayStock.rawValue,
-        '소비기한': row.expirationDateStr,
-        '잔여일수': row.remainDaysNum !== '-' ? Number(row.remainDaysNum) : null,
-        '잔여율(%)': row.remainRateNum !== null ? Number(row.remainRateNum.toFixed(1)) : null,
       };
+
+      // ✅ 물류 모드가 아닐 때만 엑셀에 위치정보 포함
+      if (inventoryViewMode !== 'LOGISTICS') {
+        rowData['위치정보'] = row.location === '-' ? '' : row.location;
+      }
+
+      rowData['소비기한'] = row.expirationDateStr;
+      rowData['잔여일수'] = row.remainDaysNum !== '-' ? Number(row.remainDaysNum) : null;
+      rowData['잔여율(%)'] = row.remainRateNum !== null ? Number(row.remainRateNum.toFixed(1)) : null;
+
+      return rowData;
     });
 
     const worksheet = XLSX.utils.json_to_sheet(excelData);
@@ -225,20 +238,30 @@ export default function StockStatusPage() {
 
       <div className="bg-white rounded shadow border border-neutral-200 overflow-hidden">
         <div className="overflow-x-auto min-h-[500px]">
-          <table className="w-full text-sm text-left border-collapse table-fixed">
+          <table className="w-full text-sm text-left border-collapse table-fixed min-w-[1000px]">
             <thead className="bg-[#FAFAFA]">
               <tr>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-16 text-center">No</th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-24 text-center">상태</th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-[25%]">제품명</th>
-                <th className="px-2 py-3 border-b font-bold text-neutral-700 text-center w-16">단위</th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-800 text-right w-36 bg-blue-50/40">
+                <th className="px-2 py-3 border-b font-bold text-neutral-700 w-12 text-center">No</th>
+                <th className="px-2 py-3 border-b font-bold text-neutral-700 w-20 text-center">상태</th>
+                
+                {/* ✅ 제품명 영역의 과도한 너비 감소 (고정 비율 부여) */}
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 w-[28%]">제품명</th>
+                
+                <th className="px-2 py-3 border-b font-bold text-neutral-700 text-center w-14">단위</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-800 text-right w-28 bg-blue-50/40">
                   {getStockColumnTitle()}
                 </th>
-                {/* 🚨 소비기한 (최단) 텍스트를 실제 해당 배치의 소비기한을 뜻하도록 수정 */}
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center border-l border-neutral-200">소비기한</th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">잔여일수</th>
-                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right">잔여율</th>
+                
+                {/* ✅ 위치정보 영역을 대폭 확대 (22% 비율 확보) */}
+                {inventoryViewMode !== 'LOGISTICS' && (
+                  <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center w-[22%] border-l border-neutral-200 bg-neutral-50/50">
+                    위치정보
+                  </th>
+                )}
+
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-center border-l border-neutral-200 w-28">소비기한</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right w-20">잔여일수</th>
+                <th className="px-4 py-3 border-b font-bold text-neutral-700 text-right w-20">잔여율</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
@@ -246,11 +269,10 @@ export default function StockStatusPage() {
                 const displayStock = formatQty(row.batchQty, row.umrezBox, row.unit);
 
                 return (
-                  // 고유성을 보장하기 위해 code와 소비기한, idx를 혼합하여 key로 사용
                   <tr key={`${row.code}-${row.expirationDateStr}-${idx}`} className="hover:bg-[#F9F9F9] transition-colors h-[52px]">
-                    <td className="px-4 py-3 text-center text-neutral-400 text-xs">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
+                    <td className="px-2 py-3 text-center text-neutral-400 text-xs">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
                     
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-2 py-3 text-center">
                         <StatusBadge status={row.status} />
                     </td>
                     
@@ -264,8 +286,15 @@ export default function StockStatusPage() {
                     <td className="px-4 py-3 text-right font-bold text-neutral-900 text-base bg-blue-50/20">
                       {displayStock.value} <span className="text-[10px] font-normal text-neutral-500 ml-1">{displayStock.unit}</span>
                     </td>
+
+                    {/* ✅ 위치정보 텍스트 생략 없이 여유롭게 렌더링 */}
+                    {inventoryViewMode !== 'LOGISTICS' && (
+                      <td className="px-4 py-3 text-center text-neutral-600 text-[13px] font-medium border-l border-neutral-200 bg-neutral-50/20 break-keep" title={row.location !== '-' ? row.location : ''}>
+                        {row.location !== '-' ? row.location : ''}
+                      </td>
+                    )}
                     
-                    <td className="px-4 py-3 text-center text-neutral-600 font-mono text-sm border-l border-neutral-200">
+                    <td className={`px-4 py-3 text-center text-neutral-600 font-mono text-sm ${inventoryViewMode === 'LOGISTICS' ? 'border-l border-neutral-200' : ''}`}>
                         {row.expirationDateStr}
                     </td>
                     
@@ -283,7 +312,7 @@ export default function StockStatusPage() {
                   </tr>
                 );
               })}
-              {paginatedItems.length === 0 && (<tr><td colSpan={8} className="p-10 text-center text-neutral-500 font-medium">선택한 구간에 해당하는 재고 데이터가 없습니다.</td></tr>)}
+              {paginatedItems.length === 0 && (<tr><td colSpan={inventoryViewMode !== 'LOGISTICS' ? 9 : 8} className="p-10 text-center text-neutral-500 font-medium">선택한 구간에 해당하는 재고 데이터가 없습니다.</td></tr>)}
             </tbody>
           </table>
         </div>

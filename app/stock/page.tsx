@@ -1,11 +1,14 @@
 // app/stock/page.tsx
 'use client'
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Suspense } from 'react';
+import Link from 'next/link';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Search, ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Download, Share2, Star } from 'lucide-react';
+import { useUrlFilters } from '@/hooks/use-url-filters';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
-import { useUiStore } from '@/store/ui-store'; 
+import { useUiStore } from '@/store/ui-store';
+import { useFavorites } from '@/hooks/use-favorites';
 import * as XLSX from 'xlsx';
 import { format } from 'date-fns';
 
@@ -22,14 +25,21 @@ interface BatchRow extends IntegratedItem {
   location: string; // ✅ 위치정보(LGOBE) 추가
 }
 
-export default function StockStatusPage() {
+function StockStatusPageInner() {
   const { data, isLoading } = useDashboardData();
-  const { unitMode, inventoryViewMode } = useUiStore();
+  const { unitMode, inventoryViewMode, favoritesOnly } = useUiStore();
+  const { getParam, getIntParam, setParams, copyShareUrl } = useUrlFilters();
+  const { isFavorite, toggle: toggleFavorite } = useFavorites();
 
-  const [activeTab, setActiveTab] = useState<TabType>('all');
+  const activeTab = (getParam('tab', 'all') || 'all') as TabType;
+  const searchTerm = getParam('search', '');
+  const currentPage = getIntParam('page', 1);
+
+  const setActiveTab = (v: TabType) => setParams({ tab: v !== 'all' ? v : null, page: null });
+  const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
+  const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+
   const [showHiddenStock, setShowHiddenStock] = useState(false);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 15;
 
   // 1. 데이터를 소비기한(배치)별로 각각의 행으로 분리(Flatten)
@@ -100,11 +110,16 @@ export default function StockStatusPage() {
   const filteredData = useMemo(() => {
     let items = flattenedData;
 
+    // 즐겨찾기 필터
+    if (favoritesOnly) {
+      items = items.filter((row: BatchRow) => isFavorite(row.code));
+    }
+
     // 텍스트 검색 필터
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
-      items = items.filter((row: BatchRow) => 
-        row.name.toLowerCase().includes(lower) || 
+      items = items.filter((row: BatchRow) =>
+        row.name.toLowerCase().includes(lower) ||
         row.code.includes(lower)
       );
     }
@@ -123,7 +138,7 @@ export default function StockStatusPage() {
     });
     
     return items;
-  }, [flattenedData, activeTab, searchTerm]);
+  }, [flattenedData, activeTab, searchTerm, favoritesOnly, isFavorite]);
 
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
@@ -229,6 +244,14 @@ export default function StockStatusPage() {
             <Download size={14} />
             엑셀 다운로드
           </button>
+          <button
+            onClick={copyShareUrl}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-all border bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-50"
+            title="현재 필터 상태 URL 복사"
+          >
+            <Share2 size={14} />
+            뷰 공유
+          </button>
           <div className="relative w-full md:w-64">
             <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
             <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
@@ -277,8 +300,21 @@ export default function StockStatusPage() {
                     </td>
                     
                     <td className="px-4 py-3">
-                        <div className="font-medium text-neutral-900 line-clamp-2" title={row.name}>{row.name}</div>
-                        <div className="text-[11px] text-neutral-400 font-mono mt-0.5">{row.code}</div>
+                        <div className="flex items-start gap-1.5">
+                          <button
+                            onClick={() => toggleFavorite(row.code, row.name)}
+                            className="mt-0.5 flex-shrink-0 text-neutral-300 hover:text-yellow-400 transition-colors"
+                            title={isFavorite(row.code) ? '즐겨찾기 제거' : '즐겨찾기 추가'}
+                          >
+                            <Star size={13} fill={isFavorite(row.code) ? '#FBBF24' : 'none'} className={isFavorite(row.code) ? 'text-yellow-400' : ''} />
+                          </button>
+                          <div>
+                            <Link href={`/product/${row.code}`} className="font-medium text-neutral-900 hover:text-[#1565C0] hover:underline line-clamp-2" title={row.name}>
+                              {row.name}
+                            </Link>
+                            <div className="text-[11px] text-neutral-400 font-mono mt-0.5">{row.code}</div>
+                          </div>
+                        </div>
                     </td>
                     
                     <td className="px-2 py-3 text-center text-neutral-500 text-xs">{row.unit}</td>
@@ -349,6 +385,14 @@ function StatusBadge({ status }: { status: string }) {
   };
   const c = config[status] || { bg: '#F5F5F5', text: '#9E9E9E', label: status };
   return (<span className="px-2.5 py-1 rounded text-xs font-bold border border-transparent" style={{ backgroundColor: c.bg, color: c.text }}>{c.label}</span>);
+}
+
+export default function StockStatusPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>}>
+      <StockStatusPageInner />
+    </Suspense>
+  );
 }
 
 function LoadingSpinner() { return <div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>; }

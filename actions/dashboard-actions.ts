@@ -144,6 +144,56 @@ const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr:
     )();
 };
 
+/**
+ * 최근 14일 일별 매출을 조회하여 KPI 트렌드 데이터 반환
+ * (현재 7일 vs 이전 7일 비교)
+ */
+export async function getKpiTrend() {
+  const today = new Date();
+  const start14 = format(subDays(today, 13), 'yyyyMMdd');
+  const todayStr = format(today, 'yyyyMMdd');
+
+  const query = `
+    SELECT
+      A.VDATU as date,
+      SUM(A.NETWR) as amount
+    FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
+    WHERE A.VDATU BETWEEN '${start14}' AND '${todayStr}'
+      AND A.MATNR BETWEEN '50000000' AND '69999999'
+    GROUP BY A.VDATU
+    ORDER BY A.VDATU ASC
+  `;
+
+  try {
+    const [rows] = await bigqueryClient.query({ query });
+    const daily: { date: string; amount: number }[] = (rows as any[]).map((r) => ({
+      date: String(r.date || ''),
+      amount: Number(r.amount) || 0,
+    }));
+
+    // 현재 7일 / 이전 7일 분리
+    const today7 = format(subDays(today, 6), 'yyyyMMdd');
+    const current7 = daily.filter((r) => r.date >= today7);
+    const prev7 = daily.filter((r) => r.date < today7);
+
+    const currentTotal = current7.reduce((s, r) => s + r.amount, 0);
+    const prevTotal = prev7.reduce((s, r) => s + r.amount, 0);
+    const changeRate = prevTotal > 0 ? ((currentTotal - prevTotal) / prevTotal) * 100 : 0;
+
+    return {
+      success: true,
+      data: {
+        sparkline: daily.map((r) => r.amount), // 14개 포인트
+        currentWeekTotal: currentTotal,
+        prevWeekTotal: prevTotal,
+        changeRate: Math.round(changeRate * 10) / 10,
+      },
+    };
+  } catch (e: any) {
+    return { success: false, message: e.message };
+  }
+}
+
 export async function getDashboardData(startDate: string, endDate: string) {
   if (!startDate || !endDate) return { success: false, message: "날짜 정보가 누락되었습니다." };
 

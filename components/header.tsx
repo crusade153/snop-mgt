@@ -1,14 +1,16 @@
 'use client';
 
-import { Calendar, RefreshCw, Box, Layers, Factory, Warehouse, Building } from 'lucide-react';
+import { Calendar, RefreshCw, Box, Layers, Factory, Warehouse, Building, Menu, Star } from 'lucide-react';
 import { useDateStore } from '@/store/date-store';
 import { useUiStore } from '@/store/ui-store';
 import { useQueryClient } from '@tanstack/react-query';
+import { useFavorites } from '@/hooks/use-favorites';
 
 export default function Header() {
   const { startDate, endDate, setRange } = useDateStore();
-  const { unitMode, setUnitMode, inventoryViewMode, setInventoryViewMode } = useUiStore();
+  const { unitMode, setUnitMode, inventoryViewMode, setInventoryViewMode, setMobileMenuOpen, favoritesOnly, setFavoritesOnly } = useUiStore();
   const queryClient = useQueryClient();
+  const { favorites } = useFavorites();
 
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
@@ -16,14 +18,21 @@ export default function Header() {
   };
 
   return (
-    <header className="fixed top-0 right-0 left-[240px] h-[60px] z-40 flex items-center justify-between px-6 bg-white border-b border-neutral-200">
-      <div className="flex items-center gap-4">
-        <h2 className="text-lg font-bold text-neutral-900">Biz-Control Tower</h2>
+    <header className="fixed top-0 right-0 left-0 lg:left-[240px] h-[60px] z-40 flex items-center justify-between px-4 lg:px-6 bg-white border-b border-neutral-200">
+      <div className="flex items-center gap-3">
+        {/* 모바일 햄버거 버튼 */}
+        <button
+          onClick={() => setMobileMenuOpen(true)}
+          className="lg:hidden p-2 rounded hover:bg-neutral-100 text-neutral-600"
+        >
+          <Menu size={20} />
+        </button>
+        <h2 className="text-lg font-bold text-neutral-900 hidden sm:block">Biz-Control Tower</h2>
       </div>
 
       <div className="flex items-center gap-4">
         
-        {/* ✅ [수정] 재고 뷰 모드 컨트롤러 (플랜트 / 물류센터) */}
+        {/* 재고 뷰 모드 컨트롤러 (플랜트 / 물류센터) */}
         <div className="flex bg-neutral-100 p-1 rounded-lg border border-neutral-200">
             <button
                 onClick={() => setInventoryViewMode('PLANT')}
@@ -48,6 +57,26 @@ export default function Header() {
                 }`}
             >
                 <Building size={14}/> 통합(All)
+            </button>
+        </div>
+
+        {/* 즐겨 보기 / 전체 보기 토글 */}
+        <div className="flex bg-neutral-100 p-1 rounded-lg border border-neutral-200">
+            <button
+                onClick={() => setFavoritesOnly(false)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${
+                    !favoritesOnly ? 'bg-white shadow text-neutral-700' : 'text-neutral-500 hover:text-neutral-700'
+                }`}
+            >
+                <Layers size={14}/> 전체
+            </button>
+            <button
+                onClick={() => setFavoritesOnly(true)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-md transition-all ${
+                    favoritesOnly ? 'bg-white shadow text-yellow-600' : 'text-neutral-500 hover:text-neutral-700'
+                }`}
+            >
+                <Star size={14} fill={favoritesOnly ? '#CA8A04' : 'none'} className={favoritesOnly ? 'text-yellow-600' : 'text-neutral-400'}/> 즐겨 보기{favorites.length > 0 ? ` (${favorites.length})` : ''}
             </button>
         </div>
 

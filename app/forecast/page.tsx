@@ -8,12 +8,14 @@ import {
   Package, AlertCircle, Info, Calculator, 
   ChevronLeft, ChevronRight, Filter
 } from 'lucide-react';
-import { useUiStore } from '@/store/ui-store'; 
+import { useUiStore } from '@/store/ui-store';
+import { useFavorites } from '@/hooks/use-favorites';
 
 type TrendFilter = 'ALL' | 'UP' | 'DOWN' | 'STABLE';
 
 export default function ForecastPage() {
-  const { unitMode } = useUiStore(); 
+  const { unitMode, favoritesOnly } = useUiStore();
+  const { isFavorite } = useFavorites();
   
   // Data State
   const [allItems, setAllItems] = useState<any[]>([]); // 서버에서 가져온 전체 데이터
@@ -51,13 +53,18 @@ export default function ForecastPage() {
   // ✅ [로직] 클라이언트 측 필터링 및 페이징
   const filteredList = useMemo(() => {
     let list = allItems;
-    
+
+    // 즐겨찾기 필터
+    if (favoritesOnly) {
+      list = list.filter(item => isFavorite(item.info.id));
+    }
+
     // 탭 필터 적용
     if (activeTab !== 'ALL') {
       list = list.filter(item => item.trend === activeTab);
     }
     return list;
-  }, [allItems, activeTab]);
+  }, [allItems, activeTab, favoritesOnly, isFavorite]);
 
   const totalPages = Math.ceil(filteredList.length / ITEMS_PER_PAGE);
   const paginatedItems = filteredList.slice(

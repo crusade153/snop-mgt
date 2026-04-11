@@ -1,9 +1,13 @@
 // app/inventory/page.tsx
 'use client'
 
-import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query'; 
-import { getDashboardData } from '@/actions/dashboard-actions'; 
+import { useState, useMemo, Suspense } from 'react';
+import Link from 'next/link';
+import { useQuery } from '@tanstack/react-query';
+import { getDashboardData } from '@/actions/dashboard-actions';
+import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useFavorites } from '@/hooks/use-favorites';
+import { Share2, Star } from 'lucide-react';
 import { 
   Search, Eye, EyeOff, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, BarChart3,
   ChevronLeft, ChevronRight, Download // Download 아이콘 추가
@@ -13,6 +17,7 @@ import { IntegratedItem, DashboardAnalysis, ProductionRow, InventoryBatch } from
 import { useUiStore } from '@/store/ui-store'; 
 import { useDateStore } from '@/store/date-store';
 import * as XLSX from 'xlsx'; // xlsx 라이브러리 추가
+import InfoTooltip from '@/components/info-tooltip';
 
 type SortKey = 'name' | 'usableStock' | 'wasteStock' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
 type SortDirection = 'asc' | 'desc';
@@ -39,8 +44,8 @@ interface SimulatedItem extends IntegratedItem {
   }
 }
 
-export default function InventoryPage() {
-  const { unitMode, inventoryViewMode } = useUiStore(); 
+function InventoryPageInner() {
+  const { unitMode, inventoryViewMode, favoritesOnly } = useUiStore();
   const { endDate: storeEndDate } = useDateStore();
 
   const today = new Date();
@@ -60,19 +65,25 @@ export default function InventoryPage() {
 
   const data = rawData;
 
-  const [searchTerm, setSearchTerm] = useState<string>('');
+  const { getParam, getIntParam, setParams, copyShareUrl } = useUrlFilters();
+  const { isFavorite, toggle: toggleFavorite } = useFavorites();
+  const searchTerm = getParam('search', '');
+  const currentPage = getIntParam('page', 1);
+  const sortKey = (getParam('sort', 'usableStock') || 'usableStock') as SortKey;
+  const sortDir = (getParam('dir', 'desc') || 'desc') as SortDirection;
+  const sortConfig = { key: sortKey, direction: sortDir };
+
   const [showHiddenStock, setShowHiddenStock] = useState(false);
   const [includeQualityInSim, setIncludeQualityInSim] = useState(false);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ key: 'usableStock', direction: 'desc' });
 
   const itemsPerPage = 15;
 
+  const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
+  const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+
   const handleSort = (key: SortKey) => {
-    setSortConfig(current => ({
-      key,
-      direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
-    }));
+    const newDir: SortDirection = sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc';
+    setParams({ sort: key, dir: newDir, page: null });
   };
 
   const formatQty = (val: number | undefined | null, conversion: number, baseUnit: string, fixed?: number) => {
@@ -113,10 +124,11 @@ export default function InventoryPage() {
       else if (inventoryViewMode === 'LOGISTICS') hasStock = item.inventory.fbhStock > 0;
       else hasStock = item.inventory.totalStock > 0;
 
-      const matchesSearch = searchTerm === '' || 
-        item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      const matchesSearch = searchTerm === '' ||
+        item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.code.includes(searchTerm);
-      return hasStock && matchesSearch;
+      const matchesFav = !favoritesOnly || isFavorite(item.code);
+      return hasStock && matchesSearch && matchesFav;
     });
 
     let totalAds30 = 0;
@@ -192,7 +204,7 @@ export default function InventoryPage() {
     });
 
     return { all: simulatedItems, adsSummary: { totalAds30, totalAds60, totalAds90 } };
-  }, [data, searchTerm, includeQualityInSim, storeEndDate, inventoryViewMode]); 
+  }, [data, searchTerm, includeQualityInSim, storeEndDate, inventoryViewMode, favoritesOnly, isFavorite]); 
 
   // 페이지네이션 적용 전, 전체 정렬된 리스트
   const sortedFullList = useMemo(() => {
@@ -319,6 +331,14 @@ export default function InventoryPage() {
                   <Download size={14} />
                   엑셀 다운로드
                 </button>
+                <button
+                  onClick={copyShareUrl}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-all border bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-50"
+                  title="현재 필터 상태 URL 복사"
+                >
+                  <Share2 size={14} />
+                  뷰 공유
+                </button>
                 {inventoryViewMode !== 'LOGISTICS' && (
                     <button 
                         onClick={() => setShowHiddenStock(!showHiddenStock)}
@@ -352,7 +372,7 @@ export default function InventoryPage() {
             <div className="relative w-full md:w-64">
                 <input 
                     type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
-                    onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue"
                 />
                 <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
@@ -378,10 +398,11 @@ export default function InventoryPage() {
           <table className="w-full text-sm text-left border-collapse">
             <thead className="bg-[#FAFAFA]">
               <tr>
+                <th className="px-2 py-3 border-b border-neutral-200 w-8 text-center"></th>
                 <SortableHeader label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort} width="20%" />
-                <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" />
-                <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" />
-                <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" />
+                <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" tooltip="최근 30일 평균 일판매량. 재고회전 분석 기준" />
+                <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" tooltip="최근 60일 평균 일판매량. 기본 재고회전 기준값" />
+                <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" tooltip="최근 90일 평균 일판매량. 회전일수 계산 기준" />
                 <SortableHeader label="생산계획(당일)" sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" />
                 
                 {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
@@ -421,9 +442,20 @@ export default function InventoryPage() {
 
                 return (
                   <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[48px]">
+                    <td className="px-2 py-3 text-center">
+                      <button
+                        onClick={() => toggleFavorite(item.code, item.name)}
+                        className="text-neutral-300 hover:text-yellow-400 transition-colors"
+                        title={isFavorite(item.code) ? '즐겨찾기 제거' : '즐겨찾기 추가'}
+                      >
+                        <Star size={14} fill={isFavorite(item.code) ? '#FBBF24' : 'none'} className={isFavorite(item.code) ? 'text-yellow-400' : ''} />
+                      </button>
+                    </td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
-                      <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
+                      <Link href={`/product/${item.code}`} className="hover:text-[#1565C0] hover:underline">
+                        <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
+                        <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
+                      </Link>
                     </td>
                     <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/20">{dAds30.value}</td>
                     <td className="px-2 py-3 text-right text-neutral-800 font-medium bg-blue-50/40">{dAds60.value}</td>
@@ -464,9 +496,9 @@ export default function InventoryPage() {
         
         {filteredAndPaginated.totalPages > 1 && (
           <div className="flex justify-center items-center gap-2 p-4 border-t border-neutral-200 bg-[#FAFAFA]">
-            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30"><ChevronLeft size={20} /></button>
+            <button onClick={() => setCurrentPage(Math.max(1, currentPage - 1))} disabled={currentPage === 1} className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30"><ChevronLeft size={20} /></button>
             <span className="text-sm text-neutral-600 font-medium">Page {currentPage} of {filteredAndPaginated.totalPages}</span>
-            <button onClick={() => setCurrentPage(p => Math.min(filteredAndPaginated.totalPages, p + 1))} disabled={currentPage === filteredAndPaginated.totalPages} className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30"><ChevronRight size={20} /></button>
+            <button onClick={() => setCurrentPage(Math.min(filteredAndPaginated.totalPages, currentPage + 1))} disabled={currentPage === filteredAndPaginated.totalPages} className="p-1 rounded hover:bg-neutral-200 disabled:opacity-30"><ChevronRight size={20} /></button>
           </div>
         )}
       </div>
@@ -474,15 +506,24 @@ export default function InventoryPage() {
   );
 }
 
-function SortableHeader({ label, sortKey, currentSort, onSort, align = 'left', width, className = '' }: any) {
+function SortableHeader({ label, sortKey, currentSort, onSort, align = 'left', width, className = '', tooltip }: any) {
   const isActive = currentSort.key === sortKey;
   return (
     <th className={`px-2 py-3 border-b font-bold text-neutral-700 cursor-pointer select-none hover:bg-neutral-100 transition-colors ${className}`} style={{ textAlign: align, width }} onClick={() => onSort(sortKey)}>
       <div className={`flex items-center gap-1 ${align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'}`}>
         {label}
+        {tooltip && <span onClick={(e) => e.stopPropagation()}><InfoTooltip text={tooltip} /></span>}
         {isActive ? (currentSort.direction === 'asc' ? <ArrowUp size={12} className="text-primary-blue"/> : <ArrowDown size={12} className="text-primary-blue"/>) : <ArrowUpDown size={12} className="text-neutral-300"/>}
       </div>
     </th>
+  );
+}
+
+export default function InventoryPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>}>
+      <InventoryPageInner />
+    </Suspense>
   );
 }
 

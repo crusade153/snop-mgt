@@ -3,13 +3,15 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query'; // ✅ React Query 도입
 import { getDailyWatchReport, DailyAlertItem } from '@/actions/daily-actions';
+import InfoTooltip from '@/components/info-tooltip';
 import { useDateStore } from '@/store/date-store';
 import { useUiStore } from '@/store/ui-store';
-import { 
-  AlertTriangle, TrendingUp, CalendarClock, Truck, CheckCircle, 
-  RefreshCw, Clock, Info, CheckSquare, BarChart2, Package, 
-  ChevronLeft, ChevronRight, ChevronDown, ChevronUp
+import {
+  AlertTriangle, TrendingUp, CalendarClock, Truck, CheckCircle,
+  RefreshCw, Clock, Info, CheckSquare, BarChart2, Package,
+  ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Download
 } from 'lucide-react';
+import { exportToExcel } from '@/lib/excel-export';
 
 type TabType = 'ALL' | 'SPIKE' | 'SHORTAGE' | 'FRESHNESS' | 'MISS';
 
@@ -35,6 +37,20 @@ export default function DailyWatchPage() {
   const [activeTab, setActiveTab] = useState<TabType>('ALL');
   const [currentPage, setCurrentPage] = useState(1);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+
+  const handleDownloadExcel = () => {
+    const rows = items
+      .filter((item: DailyAlertItem) => activeTab === 'ALL' || item.type === activeTab)
+      .map((item: DailyAlertItem) => ({
+        '경보유형': item.type,
+        '심각도': item.level,
+        '제품코드': item.productCode,
+        '제품명': item.productName,
+        '내용': item.message,
+        '권고조치': item.action,
+      }));
+    exportToExcel(rows, `일일관리_${activeTab}`);
+  };
   
   const ITEMS_PER_PAGE = 15;
 
@@ -217,6 +233,13 @@ export default function DailyWatchPage() {
             <RefreshCw size={12} className={isLoading || isRefetching ? 'animate-spin' : ''}/>
             새로고침
           </button>
+          <button
+            onClick={handleDownloadExcel}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-green-200 text-green-700 rounded text-xs font-bold hover:bg-green-50 transition-colors"
+          >
+            <Download size={12} />
+            엑셀 다운로드
+          </button>
         </div>
       </div>
 
@@ -236,10 +259,22 @@ export default function DailyWatchPage() {
       <div className="flex flex-col md:flex-row justify-between items-end gap-4 mb-4">
         <div className="flex flex-wrap gap-2">
           <TabButton label="전체 이슈" type="ALL" count={items.length} />
-          <TabButton label="수요 급변" type="SPIKE" count={items.filter(i=>i.type==='SPIKE').length} />
-          <TabButton label="결품 예상" type="SHORTAGE" count={items.filter(i=>i.type==='SHORTAGE').length} />
-          <TabButton label="소진 불가" type="FRESHNESS" count={items.filter(i=>i.type==='FRESHNESS').length} />
-          <TabButton label="미납 발생" type="MISS" count={items.filter(i=>i.type==='MISS').length} />
+          <span className="flex items-center gap-1">
+            <TabButton label="수요 급변" type="SPIKE" count={items.filter(i=>i.type==='SPIKE').length} />
+            <InfoTooltip text="전주 평균 대비 2배 이상 주문 폭증 감지" size={12} />
+          </span>
+          <span className="flex items-center gap-1">
+            <TabButton label="결품 예상" type="SHORTAGE" count={items.filter(i=>i.type==='SHORTAGE').length} />
+            <InfoTooltip text="향후 7일 주문량 대비 재고+생산 부족 경고" size={12} />
+          </span>
+          <span className="flex items-center gap-1">
+            <TabButton label="소진 불가" type="FRESHNESS" count={items.filter(i=>i.type==='FRESHNESS').length} />
+            <InfoTooltip text="판매 속도 대비 유통기한 부족 — 폐기 위험" size={12} />
+          </span>
+          <span className="flex items-center gap-1">
+            <TabButton label="미납 발생" type="MISS" count={items.filter(i=>i.type==='MISS').length} />
+            <InfoTooltip text="전일 출고 예정 중 미처리된 납품 건" size={12} />
+          </span>
         </div>
         <div className="text-xs text-neutral-500 font-medium">
           시스템이 총 <span className="font-bold text-neutral-900">{summary.scannedCount.toLocaleString()}</span>개 품목을 검사했습니다.

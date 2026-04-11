@@ -1,18 +1,29 @@
 'use client'
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Suspense } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { ProductionRow } from '@/types/analysis';
-import { Search, ChevronLeft, ChevronRight, Calendar, Factory } from 'lucide-react';
-import { useUiStore } from '@/store/ui-store'; 
+import { Search, ChevronLeft, ChevronRight, Calendar, Factory, Share2, Download, Star } from 'lucide-react';
+import { useUiStore } from '@/store/ui-store';
+import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useFavorites } from '@/hooks/use-favorites';
+import { exportToExcel } from '@/lib/excel-export';
+import InfoTooltip from '@/components/info-tooltip';
 
-export default function ProductionPage() {
+function ProductionPageInner() {
   const { data, isLoading } = useDashboardData();
-  const { unitMode } = useUiStore(); 
+  const { unitMode, favoritesOnly } = useUiStore();
+  const { getParam, getIntParam, setParams, copyShareUrl } = useUrlFilters();
+  const { isFavorite, toggle: toggleFavorite } = useFavorites();
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedPlant, setSelectedPlant] = useState('ALL');
-  const [currentPage, setCurrentPage] = useState(1);
+  const searchTerm = getParam('search', '');
+  const selectedPlant = getParam('plant', 'ALL') || 'ALL';
+  const currentPage = getIntParam('page', 1);
+
+  const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
+  const setSelectedPlant = (v: string) => setParams({ plant: v !== 'ALL' ? v : null, page: null });
+  const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+
   const itemsPerPage = 15;
 
   // Helper: 단위 변환
@@ -35,10 +46,11 @@ export default function ProductionPage() {
     let items = data.productionList.filter((item: ProductionRow) => {
       const isFinishedGood = item.code.startsWith('5');
       const matchPlant = selectedPlant === 'ALL' || item.plant === selectedPlant;
-      const matchSearch = searchTerm === '' || 
-        item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      const matchSearch = searchTerm === '' ||
+        item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.code.includes(searchTerm);
-      return isFinishedGood && matchPlant && matchSearch;
+      const matchFav = !favoritesOnly || isFavorite(item.code);
+      return isFinishedGood && matchPlant && matchSearch && matchFav;
     });
 
     const kpiMap: any = {
@@ -58,7 +70,7 @@ export default function ProductionPage() {
     items.sort((a: ProductionRow, b: ProductionRow) => b.date.localeCompare(a.date));
 
     return { filteredList: items, kpi: kpiMap, plantOptions: plants };
-  }, [data, searchTerm, selectedPlant]);
+  }, [data, searchTerm, selectedPlant, favoritesOnly, isFavorite]);
 
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
@@ -71,6 +83,23 @@ export default function ProductionPage() {
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDownloadExcel = () => {
+    const rows = filteredList.map((item: ProductionRow) => {
+      const planDisplay = unitMode === 'BOX' ? (item.planQty / (item.umrezBox || 1)) : item.planQty;
+      const actualDisplay = unitMode === 'BOX' ? (item.actualQty / (item.umrezBox || 1)) : item.actualQty;
+      return {
+        '공장': item.plant,
+        '날짜': item.date,
+        '제품코드': item.code,
+        '제품명': item.name,
+        [`계획량(${unitMode === 'BOX' ? 'BOX' : item.unit})`]: Math.round(planDisplay),
+        [`실적량(${unitMode === 'BOX' ? 'BOX' : item.unit})`]: Math.round(actualDisplay),
+        '달성률(%)': item.planQty > 0 ? (item.rate).toFixed(1) : '-',
+      };
+    });
+    exportToExcel(rows, '생산분석');
   };
 
   if (isLoading) return <LoadingSpinner />;
@@ -100,13 +129,28 @@ export default function ProductionPage() {
           </div>
 
           <div className="relative flex-1 md:w-64">
-            <input 
+            <input
               type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+              onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue h-[38px]"
             />
             <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
           </div>
+          <button
+            onClick={handleDownloadExcel}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg border bg-white text-green-700 border-green-200 hover:bg-green-50 h-[38px]"
+          >
+            <Download size={14} />
+            엑셀 다운로드
+          </button>
+          <button
+            onClick={copyShareUrl}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg border bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-50 h-[38px]"
+            title="현재 필터 상태 URL 복사"
+          >
+            <Share2 size={14} />
+            뷰 공유
+          </button>
         </div>
       </div>
 
@@ -154,7 +198,12 @@ export default function ProductionPage() {
                   계획수량 ({unitMode === 'BOX' ? 'BOX' : '기준'})
                 </th>
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">실적수량</th>
-                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">달성률</th>
+                <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-right">
+                  <div className="flex items-center justify-end gap-1">
+                    달성률
+                    <InfoTooltip text="생산실적 ÷ 계획량 × 100. 90% 이상 양호, 미만 부진" />
+                  </div>
+                </th>
                 <th className="px-4 py-3 border-b border-neutral-200 font-bold text-neutral-700 text-center">상태</th>
               </tr>
             </thead>
@@ -171,8 +220,19 @@ export default function ProductionPage() {
                       <div className="flex items-center justify-center gap-1"><Calendar size={12} className="text-neutral-400" />{item.date}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-neutral-900">{item.name}</div>
-                      <div className="text-[10px] text-neutral-400 font-mono">{item.code}</div>
+                      <div className="flex items-start gap-1.5">
+                        <button
+                          onClick={() => toggleFavorite(item.code, item.name)}
+                          className="mt-0.5 flex-shrink-0 text-neutral-300 hover:text-yellow-400 transition-colors"
+                          title={isFavorite(item.code) ? '즐겨찾기 제거' : '즐겨찾기 추가'}
+                        >
+                          <Star size={13} fill={isFavorite(item.code) ? '#FBBF24' : 'none'} className={isFavorite(item.code) ? 'text-yellow-400' : ''} />
+                        </button>
+                        <div>
+                          <div className="font-medium text-neutral-900">{item.name}</div>
+                          <div className="text-[10px] text-neutral-400 font-mono">{item.code}</div>
+                        </div>
+                      </div>
                     </td>
                     {/* 단위 표시도 동적으로 변경 */}
                     <td className="px-4 py-3 text-center text-neutral-500 text-xs font-bold">{dPlan.unit}</td>
@@ -203,6 +263,14 @@ export default function ProductionPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function ProductionPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>}>
+      <ProductionPageInner />
+    </Suspense>
   );
 }
 

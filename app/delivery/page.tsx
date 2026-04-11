@@ -2,9 +2,11 @@
 
 import { useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { ChevronLeft, ChevronRight, HelpCircle, Users, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, HelpCircle, Users, Clock, Download } from 'lucide-react';
 import { IntegratedItem } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
+import { exportToExcel } from '@/lib/excel-export';
+import { useFavorites } from '@/hooks/use-favorites';
 
 // WideRightSheet (800px)
 function WideRightSheet({ isOpen, onClose, title, children }: any) {
@@ -27,8 +29,9 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 
 export default function DeliveryPage() {
   const { data, isLoading } = useDashboardData();
-  const { unitMode } = useUiStore(); 
-  
+  const { unitMode, favoritesOnly } = useUiStore();
+  const { isFavorite } = useFavorites();
+
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
   const [selectedProduct, setSelectedProduct] = useState<IntegratedItem | null>(null);
@@ -49,7 +52,7 @@ export default function DeliveryPage() {
   };
 
   const unfulfilledList = data.integratedArray
-    .filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0)
+    .filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0 && (!favoritesOnly || isFavorite(item.code)))
     .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
   
   const totalUnfulfilledCount = unfulfilledList.reduce((acc: number, cur: IntegratedItem) => acc + cur.unfulfilledOrders.length, 0);
@@ -61,9 +64,39 @@ export default function DeliveryPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleDownloadExcel = () => {
+    const rows = unfulfilledList.flatMap((item: IntegratedItem) =>
+      item.unfulfilledOrders.map((o) => ({
+        '제품코드': item.code,
+        '제품명': item.name,
+        '거래처': o.place,
+        [`미납수량(${unitMode === 'BOX' ? 'BOX' : item.unit})`]: unitMode === 'BOX'
+          ? (o.qty / (item.umrezBox || 1)).toFixed(1)
+          : o.qty,
+        '미납금액(원)': o.value,
+        '원인': o.cause || '-',
+        '지연일수': o.daysDelayed,
+        '요청일': o.reqDate,
+      }))
+    );
+    exportToExcel(rows, '미납리스트');
+  };
+
   return (
     <div className="space-y-6">
-      <PageHeader title="🚨 미납 리스트 (Delivery Issue)" desc="고객 약속 미이행 건 및 원인 집중 관리" />
+      <div className="flex justify-between items-center pb-4 border-b border-neutral-200">
+        <div>
+          <h1 className="text-[20px] font-bold text-neutral-900">🚨 미납 리스트 (Delivery Issue)</h1>
+          <p className="text-[12px] text-neutral-700 mt-1">고객 약속 미이행 건 및 원인 집중 관리</p>
+        </div>
+        <button
+          onClick={handleDownloadExcel}
+          className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg border bg-white text-green-700 border-green-200 hover:bg-green-50"
+        >
+          <Download size={14} />
+          엑셀 다운로드
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="p-5 rounded shadow border border-[#E53935] bg-[#FFEBEE]">

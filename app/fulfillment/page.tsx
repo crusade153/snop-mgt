@@ -1,19 +1,24 @@
 'use client'
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Suspense } from 'react';
+import Link from 'next/link';
 import { useDashboardData } from '@/hooks/use-dashboard';
+import { useUrlFilters } from '@/hooks/use-url-filters';
 import { 
   ChevronLeft, 
   ChevronRight, 
   ShoppingBag, 
   AlertCircle, 
-  Clock, 
-  Search, 
-  TrendingUp, 
-  CircleDollarSign 
+  Clock,
+  Search,
+  TrendingUp,
+  CircleDollarSign,
+  Share2
 } from 'lucide-react';
 import { CustomerStat } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
+import { exportToExcel } from '@/lib/excel-export';
+import { Download } from 'lucide-react';
 
 // WideRightSheet (800px)
 function WideRightSheet({ isOpen, onClose, title, children }: any) {
@@ -34,12 +39,17 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
   );
 }
 
-export default function FulfillmentPage() {
+function FulfillmentPageInner() {
   // 1. 모든 데이터 페칭 및 상태 훅을 최상단에 배치 (Rule of Hooks 준수)
   const { data, isLoading } = useDashboardData();
-  const { unitMode } = useUiStore(); 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const { unitMode } = useUiStore();
+  const { getParam, getIntParam, setParams, copyShareUrl } = useUrlFilters();
+
+  const searchTerm = getParam('search', '');
+  const currentPage = getIntParam('page', 1);
+  const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
+  const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerStat | null>(null);
 
   const itemsPerPage = 15;
@@ -96,6 +106,19 @@ export default function FulfillmentPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const handleDownloadExcel = () => {
+    const rows = filteredData.list.map((c) => ({
+      '거래처명': c.name,
+      '거래처코드': c.id,
+      '주문건수': c.orderCount,
+      '납품완료': c.fulfilledCount,
+      '매출액(원)': c.totalRevenue,
+      '미납손실(원)': c.missedRevenue,
+      '납품률(%)': c.fulfillmentRate.toFixed(1),
+    }));
+    exportToExcel(rows, '납품현황');
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       {/* 헤더 및 검색바 */}
@@ -105,15 +128,32 @@ export default function FulfillmentPage() {
           <p className="text-[12px] text-neutral-700 mt-1">거래처별 납품 준수율 및 매출 실시간 분석</p>
         </div>
         
-        <div className="relative w-full md:w-80">
-          <input 
-            type="text" 
-            placeholder="거래처명 또는 코드 검색..." 
-            value={searchTerm}
-            onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-            className="w-full pl-10 pr-4 py-2.5 border border-neutral-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white shadow-sm transition-all"
-          />
-          <Search className="absolute left-3 top-3 text-neutral-400" size={18} />
+        <div className="flex gap-2 items-center w-full md:w-auto flex-wrap">
+          <button
+            onClick={handleDownloadExcel}
+            className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border bg-white text-green-700 border-green-200 hover:bg-green-50"
+          >
+            <Download size={14} />
+            엑셀 다운로드
+          </button>
+          <div className="relative flex-1 md:w-80">
+            <input
+              type="text"
+              placeholder="거래처명 또는 코드 검색..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 border border-neutral-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white shadow-sm transition-all"
+            />
+            <Search className="absolute left-3 top-3 text-neutral-400" size={18} />
+          </div>
+          <button
+            onClick={copyShareUrl}
+            className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border bg-white text-neutral-600 border-neutral-200 hover:bg-neutral-50"
+            title="현재 필터 상태 URL 복사"
+          >
+            <Share2 size={14} />
+            뷰 공유
+          </button>
         </div>
       </div>
 
@@ -233,6 +273,14 @@ export default function FulfillmentPage() {
         )}
       </WideRightSheet>
     </div>
+  );
+}
+
+export default function FulfillmentPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>}>
+      <FulfillmentPageInner />
+    </Suspense>
   );
 }
 

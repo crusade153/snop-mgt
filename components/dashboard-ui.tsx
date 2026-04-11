@@ -1,9 +1,14 @@
 'use client'
 
-import { useDashboardData } from '@/hooks/use-dashboard'; 
-import { Filter, HelpCircle } from 'lucide-react';
+import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
+import { useDashboardData } from '@/hooks/use-dashboard';
+import { Filter, HelpCircle, Star, TrendingUp, TrendingDown } from 'lucide-react';
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
-import { useUiStore } from '@/store/ui-store'; 
+import { useUiStore } from '@/store/ui-store';
+import { useFavorites } from '@/hooks/use-favorites';
+import { getKpiTrend } from '@/actions/dashboard-actions';
+import { useQuery } from '@tanstack/react-query';
 
 interface Props {
   initialData: DashboardAnalysis | null;
@@ -11,7 +16,18 @@ interface Props {
 
 export default function DashboardClientUserInterface({ initialData }: Props) {
   const { data, isLoading } = useDashboardData(initialData || undefined);
-  const { unitMode } = useUiStore(); 
+  const { unitMode, favoritesOnly, setFavoritesOnly } = useUiStore();
+  const { favorites, isFavorite } = useFavorites();
+
+  const { data: trendData } = useQuery({
+    queryKey: ['kpi-trend'],
+    queryFn: async () => {
+      const res = await getKpiTrend();
+      return res.success ? res.data : null;
+    },
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+  }); 
 
   if (isLoading) return (
     <div className="flex items-center justify-center h-[calc(100vh-100px)]">
@@ -38,30 +54,35 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   return (
     <div className="space-y-6">
       {/* 1. Page Header */}
-      <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-4 border-b border-neutral-200">
-        <div>
-          <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
-          <p className="text-[12px] text-neutral-700 mt-1">전사 S&OP 핵심 지표 모니터링</p>
-        </div>
+      <div className="pb-4 border-b border-neutral-200">
+        <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
+        <p className="text-[12px] text-neutral-700 mt-1">
+          전사 S&OP 핵심 지표 모니터링
+          {favoritesOnly && <span className="ml-2 text-yellow-600 font-bold">— 관심제품 보기 중</span>}
+        </p>
       </div>
 
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <KpiCard title="납품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue" />
-        <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
-        <KpiCard 
-          title="미납 손실액" 
-          value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)} 
-          unit="백만원" 
-          type="brand" 
-          alert={true} 
-          tooltip="미납수량 × 정상단가 합계" 
+        <KpiCard
+          title="납품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue"
+          sparkline={trendData?.sparkline}
+          changeRate={trendData?.changeRate}
         />
-        <KpiCard 
-          title="긴급 납품" 
-          value={data.kpis.criticalDeliveryCount} 
-          unit="건" 
-          type="warning" 
+        <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
+        <KpiCard
+          title="미납 손실액"
+          value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)}
+          unit="백만원"
+          type="brand"
+          alert={true}
+          tooltip="미납수량 × 정상단가 합계"
+        />
+        <KpiCard
+          title="긴급 납품"
+          value={data.kpis.criticalDeliveryCount}
+          unit="건"
+          type="warning"
           tooltip="납품요청일로부터 7일 이상 지연된 품목 수"
         />
         <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.imminent} unit="개 제품" type="warning" />
@@ -86,10 +107,23 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
         </div>
       </div>
 
-      {/* 4. Table Section */}
+      {/* 4. 관심 제품 링크 */}
+      {favorites.length > 0 && (
+        <div className="flex items-center gap-2 text-xs text-neutral-500">
+          <Star size={12} className="text-yellow-400" fill="#FBBF24" />
+          관심 제품 {favorites.length}개 등록됨
+          <Link href="/favorites" className="text-yellow-700 hover:underline font-medium">
+            관리하기 →
+          </Link>
+        </div>
+      )}
+
+      {/* 5. Table Section */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden mt-2">
         <div className="p-5 border-b border-neutral-200 flex justify-between items-center bg-white">
-          <h2 className="text-[16px] font-semibold text-neutral-900">📋 통합 S&OP 상세 현황 (Top 20 주요 관리 항목)</h2>
+          <h2 className="text-[16px] font-semibold text-neutral-900">
+            📋 {favoritesOnly ? '관심 제품 현황' : '통합 S&OP 상세 현황 (Top 20 주요 관리 항목)'}
+          </h2>
           <button className="text-xs text-neutral-500 flex items-center gap-1 hover:text-primary-blue">
             <Filter size={12} /> 필터
           </button>
@@ -117,10 +151,25 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
-              {data.integratedArray
-                .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue)
-                .slice(0, 20)
-                .map((item: IntegratedItem) => {
+              {(() => {
+                const sorted = [...data.integratedArray].sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
+                const displayItems = favoritesOnly
+                  ? sorted.filter((item: IntegratedItem) => isFavorite(item.code))
+                  : sorted.slice(0, 20);
+                if (favoritesOnly && displayItems.length === 0) {
+                  return (
+                    <tr>
+                      <td colSpan={6} className="p-10 text-center text-neutral-400 text-sm">
+                        <Star size={28} className="mx-auto mb-2 text-neutral-200" />
+                        관심 제품이 없습니다.{' '}
+                        <Link href="/favorites" className="text-yellow-600 hover:underline font-medium">
+                          관심 제품 추가하기 →
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                }
+                return displayItems.map((item: IntegratedItem) => {
                   
                   const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
                   const displayAds = formatQty(item.inventory.ads, item.umrezBox, item.unit);
@@ -128,8 +177,16 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
 
                   return (
                     <tr key={item.code} className="hover:bg-[#F9F9F9] transition-colors h-[54px]">
-                      <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">{item.code}</td>
-                      <td className="px-4 py-3 text-neutral-900 font-medium">{item.name}</td>
+                      <td className="px-4 py-3 text-center text-neutral-500 font-mono text-xs">
+                        <Link href={`/product/${item.code}`} className="hover:text-[#1565C0] hover:underline">
+                          {item.code}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-neutral-900 font-medium">
+                        <Link href={`/product/${item.code}`} className="hover:text-[#1565C0] hover:underline">
+                          {item.name}
+                        </Link>
+                      </td>
                       <td className="px-4 py-3 text-right font-bold text-primary-brand">
                         {Math.round(item.totalUnfulfilledValue / 1000000).toLocaleString()}
                       </td>
@@ -180,7 +237,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                       </td>
                     </tr>
                   );
-                })}
+                });
+              })()}
             </tbody>
           </table>
         </div>
@@ -189,7 +247,32 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   );
 }
 
-function KpiCard({ title, value, unit, type, tooltip }: any) {
+function Sparkline({ data }: { data: number[] }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !data.length) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const max = Math.max(...data, 1);
+    const step = w / (data.length - 1 || 1);
+    ctx.beginPath();
+    ctx.strokeStyle = '#4A90E2';
+    ctx.lineWidth = 1.5;
+    data.forEach((v, i) => {
+      const x = i * step;
+      const y = h - (v / max) * h;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }, [data]);
+  return <canvas ref={canvasRef} width={60} height={24} className="opacity-60" />;
+}
+
+function KpiCard({ title, value, unit, type, tooltip, sparkline, changeRate }: any) {
   const styles: any = {
     brand: { bg: 'bg-[#FFEBEE]', text: 'text-[#C62828]', label: 'text-[#E53935]' },
     blue: { bg: 'bg-[#E3F2FD]', text: 'text-[#1565C0]', label: 'text-[#4A90E2]' },
@@ -197,16 +280,26 @@ function KpiCard({ title, value, unit, type, tooltip }: any) {
     neutral: { bg: 'bg-[#FAFAFA]', text: 'text-[#424242]', label: 'text-[#757575]' },
   };
   const currentStyle = styles[type] || styles.neutral;
+  const isUp = changeRate > 0;
   return (
     <div className={`p-5 rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 ${currentStyle.bg} transition hover:-translate-y-1 relative group`}>
       <div className={`text-[12px] font-medium mb-1 ${currentStyle.label} flex items-center gap-1`}>
         {title}
         {tooltip && <HelpCircle size={12} className="cursor-help" />}
       </div>
-      <div className={`text-[24px] font-bold ${currentStyle.text}`}>
-        {value.toLocaleString()} 
-        <span className="text-[12px] font-normal ml-1 opacity-70">{unit}</span>
+      <div className="flex items-end justify-between gap-2">
+        <div className={`text-[24px] font-bold ${currentStyle.text}`}>
+          {value.toLocaleString()}
+          <span className="text-[12px] font-normal ml-1 opacity-70">{unit}</span>
+        </div>
+        {sparkline && sparkline.length > 0 && <Sparkline data={sparkline} />}
       </div>
+      {changeRate !== undefined && (
+        <div className={`flex items-center gap-1 mt-1 text-[11px] font-medium ${isUp ? 'text-green-600' : 'text-red-500'}`}>
+          {isUp ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+          {isUp ? '+' : ''}{changeRate}% vs 전주
+        </div>
+      )}
       {tooltip && (
         <div className="absolute hidden group-hover:block bottom-full left-1/2 -translate-x-1/2 mb-2 p-2 bg-gray-800 text-white text-xs rounded shadow-lg whitespace-nowrap z-10">
           {tooltip}

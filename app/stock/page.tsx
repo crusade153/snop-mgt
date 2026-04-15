@@ -228,12 +228,12 @@ function StockStatusPageInner() {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
       <div id="stock-table-top" className="flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex bg-neutral-100 p-1 rounded-lg overflow-x-auto max-w-full">
-          <TabButton label="전체" active={activeTab === 'all'} onClick={() => { setActiveTab('all'); setCurrentPage(1); }} />
-          <TabButton label="양호 (61일↑)" active={activeTab === 'healthy'} onClick={() => { setActiveTab('healthy'); setCurrentPage(1); }} color="text-[#1565C0]" />
-          <TabButton label="긴급 (31~60일)" active={activeTab === 'critical'} onClick={() => { setActiveTab('critical'); setCurrentPage(1); }} color="text-[#F57F17]" />
-          <TabButton label="임박 (1~30일)" active={activeTab === 'imminent'} onClick={() => { setActiveTab('imminent'); setCurrentPage(1); }} color="text-[#E65100]" />
-          <TabButton label="폐기" active={activeTab === 'disposed'} onClick={() => { setActiveTab('disposed'); setCurrentPage(1); }} color="text-[#C62828]" />
-          <TabButton label="기한없음" active={activeTab === 'no_expiry'} onClick={() => { setActiveTab('no_expiry'); setCurrentPage(1); }} color="text-neutral-600" />
+          <TabButton label="전체" active={activeTab === 'all'} onClick={() => setActiveTab('all')} />
+          <TabButton label="양호 (61일↑)" active={activeTab === 'healthy'} onClick={() => setActiveTab('healthy')} color="text-[#1565C0]" />
+          <TabButton label="긴급 (31~60일)" active={activeTab === 'critical'} onClick={() => setActiveTab('critical')} color="text-[#F57F17]" />
+          <TabButton label="임박 (1~30일)" active={activeTab === 'imminent'} onClick={() => setActiveTab('imminent')} color="text-[#E65100]" />
+          <TabButton label="폐기" active={activeTab === 'disposed'} onClick={() => setActiveTab('disposed')} color="text-[#C62828]" />
+          <TabButton label="기한없음" active={activeTab === 'no_expiry'} onClick={() => setActiveTab('no_expiry')} color="text-neutral-600" />
         </div>
         
         <div className="flex items-center gap-2 w-full md:w-auto">
@@ -253,7 +253,7 @@ function StockStatusPageInner() {
             뷰 공유
           </button>
           <div className="relative w-full md:w-64">
-            <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
+            <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
             <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
           </div>
         </div>

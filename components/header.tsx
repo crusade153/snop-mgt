@@ -5,12 +5,15 @@ import { useDateStore } from '@/store/date-store';
 import { useUiStore } from '@/store/ui-store';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFavorites } from '@/hooks/use-favorites';
+import { useFavoriteCustomers } from '@/hooks/use-favorite-customers';
 
 export default function Header() {
   const { startDate, endDate, setRange } = useDateStore();
   const { unitMode, setUnitMode, inventoryViewMode, setInventoryViewMode, setMobileMenuOpen, favoritesOnly, setFavoritesOnly } = useUiStore();
   const queryClient = useQueryClient();
   const { favorites } = useFavorites();
+  const { favoriteCustomers } = useFavoriteCustomers();
+  const totalFavorites = favorites.length + favoriteCustomers.length;
 
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ['dashboard'] });
@@ -76,7 +79,7 @@ export default function Header() {
                     favoritesOnly ? 'bg-white shadow text-yellow-600' : 'text-neutral-500 hover:text-neutral-700'
                 }`}
             >
-                <Star size={14} fill={favoritesOnly ? '#CA8A04' : 'none'} className={favoritesOnly ? 'text-yellow-600' : 'text-neutral-400'}/> 즐겨 보기{favorites.length > 0 ? ` (${favorites.length})` : ''}
+                <Star size={14} fill={favoritesOnly ? '#CA8A04' : 'none'} className={favoritesOnly ? 'text-yellow-600' : 'text-neutral-400'}/> 즐겨 보기{totalFavorites > 0 ? ` (${totalFavorites})` : ''}
             </button>
         </div>
 

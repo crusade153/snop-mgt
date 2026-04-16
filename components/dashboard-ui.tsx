@@ -7,6 +7,7 @@ import { Filter, HelpCircle, Star, TrendingUp, TrendingDown } from 'lucide-react
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
 import { useFavorites } from '@/hooks/use-favorites';
+import { useFavoriteCustomers } from '@/hooks/use-favorite-customers';
 import { getKpiTrend } from '@/actions/dashboard-actions';
 import { useQuery } from '@tanstack/react-query';
 
@@ -18,6 +19,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   const { data, isLoading } = useDashboardData(initialData || undefined);
   const { unitMode, favoritesOnly, setFavoritesOnly } = useUiStore();
   const { favorites, isFavorite } = useFavorites();
+  const { favoriteCustomers, isFavoriteCustomer } = useFavoriteCustomers();
 
   const { data: trendData } = useQuery({
     queryKey: ['kpi-trend'],
@@ -58,7 +60,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
         <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
         <p className="text-[12px] text-neutral-700 mt-1">
           전사 S&OP 핵심 지표 모니터링
-          {favoritesOnly && <span className="ml-2 text-yellow-600 font-bold">— 관심제품 보기 중</span>}
+          {favoritesOnly && <span className="ml-2 text-yellow-600 font-bold">— 관심 메뉴 보기 중</span>}
         </p>
       </div>
 
@@ -90,8 +92,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
 
       {/* 3. Analysis Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <RankingCard title="🏆 Top 5 베스트 제품 (매출)" data={data.salesAnalysis.topProducts} />
-        <RankingCard title="🏢 Top 5 거래처 (매출)" data={data.salesAnalysis.topCustomers} />
+        <RankingCard title="🏆 Top 5 베스트 제품 (매출)" data={favoritesOnly ? data.salesAnalysis.topProducts.filter(p => isFavorite(p.id)) : data.salesAnalysis.topProducts} />
+        <RankingCard title="🏢 Top 5 거래처 (매출)" data={favoritesOnly ? data.salesAnalysis.topCustomers.filter(c => isFavoriteCustomer(c.id)) : data.salesAnalysis.topCustomers} />
         
         {/* 재고 건전성 */}
         <div className="bg-white rounded p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
@@ -107,11 +109,11 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
         </div>
       </div>
 
-      {/* 4. 관심 제품 링크 */}
-      {favorites.length > 0 && (
+      {/* 4. 관심 메뉴 안내 링크 */}
+      {(favorites.length > 0 || favoriteCustomers.length > 0) && (
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <Star size={12} className="text-yellow-400" fill="#FBBF24" />
-          관심 제품 {favorites.length}개 등록됨
+          관심 제품 {favorites.length}개, 관심 거래처 {favoriteCustomers.length}곳 등록됨
           <Link href="/favorites" className="text-yellow-700 hover:underline font-medium">
             관리하기 →
           </Link>

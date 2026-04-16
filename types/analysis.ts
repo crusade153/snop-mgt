@@ -139,8 +139,8 @@ export interface DashboardAnalysis {
     no_expiry: number;
   };
   salesAnalysis: {
-    topProducts: { name: string; value: number }[];   
-    topCustomers: { name: string; value: number }[];  
+    topProducts: { id: string; name: string; value: number }[];   
+    topCustomers: { id: string; name: string; value: number }[];  
   };
   integratedArray: IntegratedItem[];
   fulfillment: FulfillmentAnalysis; 

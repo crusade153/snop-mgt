@@ -414,8 +414,8 @@ export function analyzeSnopData(
     },
     stockHealth,
     salesAnalysis: {
-      topProducts: integratedArray.sort((a, b) => b.totalSalesAmount - a.totalSalesAmount).slice(0, 5).map(i => ({ name: i.name, value: i.totalSalesAmount })),
-      topCustomers: customerStats.slice(0, 5).map(c => ({ name: c.name, value: c.totalRevenue }))
+      topProducts: integratedArray.sort((a, b) => b.totalSalesAmount - a.totalSalesAmount).slice(0, 5).map(i => ({ id: i.code, name: i.name, value: i.totalSalesAmount })),
+      topCustomers: customerStats.slice(0, 5).map(c => ({ id: c.id, name: c.name, value: c.totalRevenue }))
     },
     integratedArray,
     fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats },

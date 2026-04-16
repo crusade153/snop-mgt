@@ -14,7 +14,7 @@ import { useUiStore } from '@/store/ui-store';
 const menuItems = [
   { name: '일일 관리 (Morning)', href: '/daily', icon: Sun },
   { name: '종합 현황', href: '/dashboard', icon: LayoutDashboard },
-  { name: '관심 제품', href: '/favorites', icon: Star },
+  { name: '관심 메뉴', href: '/favorites', icon: Star },
   { name: '납품 현황', href: '/fulfillment', icon: Truck },
   { name: '미납 리스트', href: '/delivery', icon: ClipboardList },
   { name: '미납 상세', href: '/unfulfilled-detail', icon: FileText },

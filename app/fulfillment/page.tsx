@@ -4,6 +4,7 @@ import { useState, useMemo, Suspense } from 'react';
 import Link from 'next/link';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useFavoriteCustomers } from '@/hooks/use-favorite-customers';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -18,7 +19,7 @@ import {
 import { CustomerStat } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
 import { exportToExcel } from '@/lib/excel-export';
-import { Download } from 'lucide-react';
+import { Download, Star } from 'lucide-react';
 
 // WideRightSheet (800px)
 function WideRightSheet({ isOpen, onClose, title, children }: any) {
@@ -42,7 +43,8 @@ function WideRightSheet({ isOpen, onClose, title, children }: any) {
 function FulfillmentPageInner() {
   // 1. 모든 데이터 페칭 및 상태 훅을 최상단에 배치 (Rule of Hooks 준수)
   const { data, isLoading } = useDashboardData();
-  const { unitMode } = useUiStore();
+  const { unitMode, favoritesOnly } = useUiStore();
+  const { favoriteCustomers, isFavoriteCustomer, toggleCustomer } = useFavoriteCustomers();
   const { getParam, getIntParam, setParams, copyShareUrl } = useUrlFilters();
 
   const searchTerm = getParam('search', '');
@@ -58,11 +60,18 @@ function FulfillmentPageInner() {
   const filteredData = useMemo(() => {
     const byCustomer = data?.fulfillment?.byCustomer || [];
     
-    // 거래처명 또는 ID로 필터링
-    const filtered = byCustomer.filter((cust: CustomerStat) => 
-      cust.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      cust.id.includes(searchTerm)
-    );
+    let filtered = byCustomer;
+
+    if (favoritesOnly) {
+      filtered = filtered.filter((cust: CustomerStat) => isFavoriteCustomer(cust.id));
+    }
+
+    if (searchTerm) {
+      filtered = filtered.filter((cust: CustomerStat) => 
+        cust.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        cust.id.includes(searchTerm)
+      );
+    }
 
     // 필터링된 결과 기반 실시간 KPI 합산
     const totalRevenue = filtered.reduce((acc, cur) => acc + cur.totalRevenue, 0);
@@ -129,6 +138,7 @@ function FulfillmentPageInner() {
         </div>
         
         <div className="flex gap-2 items-center w-full md:w-auto flex-wrap">
+
           <button
             onClick={handleDownloadExcel}
             className="flex items-center gap-1.5 px-3 py-2.5 text-xs font-bold rounded-xl border bg-white text-green-700 border-green-200 hover:bg-green-50"
@@ -217,8 +227,19 @@ function FulfillmentPageInner() {
                   >
                     <td className="px-4 py-3 text-center text-neutral-400 font-mono text-xs">{rowNo}</td>
                     <td className="px-4 py-3">
-                      <div className="font-bold text-neutral-900">{cust.name}</div>
-                      <div className="text-[11px] text-neutral-400 font-mono">{cust.id}</div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleCustomer(cust.id, cust.name); }}
+                          className="mt-0.5 flex-shrink-0 text-neutral-300 hover:text-yellow-400 transition-colors"
+                          title={isFavoriteCustomer(cust.id) ? '관심 거래처 해제' : '관심 거래처 등록'}
+                        >
+                          <Star size={14} fill={isFavoriteCustomer(cust.id) ? '#FBBF24' : 'none'} className={isFavoriteCustomer(cust.id) ? 'text-yellow-400' : ''} />
+                        </button>
+                        <div>
+                          <div className="font-bold text-neutral-900">{cust.name}</div>
+                          <div className="text-[11px] text-neutral-400 font-mono">{cust.id}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right text-neutral-600">{cust.orderCount.toLocaleString()}건</td>
                     <td className="px-4 py-3 text-right font-bold text-neutral-900">{Math.round(cust.totalRevenue / 1000000).toLocaleString()}백만</td>

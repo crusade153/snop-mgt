@@ -12,12 +12,15 @@ import {
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Download
 } from 'lucide-react';
 import { exportToExcel } from '@/lib/excel-export';
+import { useFavorites } from '@/hooks/use-favorites';
+import { Star } from 'lucide-react';
 
 type TabType = 'ALL' | 'SPIKE' | 'SHORTAGE' | 'FRESHNESS' | 'MISS';
 
 export default function DailyWatchPage() {
-  const { endDate } = useDateStore(); 
-  const { unitMode } = useUiStore(); // 단위 설정 (BOX / EA)
+  const { endDate } = useDateStore();
+  const { unitMode, favoritesOnly } = useUiStore();
+  const { isFavorite } = useFavorites();
   
   // ✅ [최적화] React Query로 데이터 페칭 로직 교체
   const { data: report, isLoading, refetch, isRefetching } = useQuery({
@@ -95,9 +98,10 @@ export default function DailyWatchPage() {
 
   // 필터링 및 페이징 로직
   const filteredItems = useMemo(() => {
-    if (activeTab === 'ALL') return items;
-    return items.filter(item => item.type === activeTab);
-  }, [items, activeTab]);
+    let list = activeTab === 'ALL' ? items : items.filter((item: DailyAlertItem) => item.type === activeTab);
+    if (favoritesOnly) list = list.filter((item: DailyAlertItem) => isFavorite(item.productCode));
+    return list;
+  }, [items, activeTab, favoritesOnly, isFavorite]);
 
   const totalPages = Math.ceil(filteredItems.length / ITEMS_PER_PAGE);
   const paginatedItems = filteredItems.slice(
@@ -210,6 +214,11 @@ export default function DailyWatchPage() {
           <span className="text-xs text-neutral-500 bg-neutral-100 px-2 py-1 rounded">
             기준일: {endDate}
           </span>
+          {favoritesOnly && (
+            <span className="flex items-center gap-1 text-xs font-bold text-yellow-700 bg-yellow-50 border border-yellow-200 px-2 py-1 rounded">
+              <Star size={11} fill="currentColor" /> 즐겨찾기 제품만 표시
+            </span>
+          )}
         </div>
         
         <div className="flex items-center gap-3">
@@ -258,23 +267,30 @@ export default function DailyWatchPage() {
       {/* 3. 필터 탭 & 요약 정보 */}
       <div className="flex flex-col md:flex-row justify-between items-end gap-4 mb-4">
         <div className="flex flex-wrap gap-2">
-          <TabButton label="전체 이슈" type="ALL" count={items.length} />
-          <span className="flex items-center gap-1">
-            <TabButton label="수요 급변" type="SPIKE" count={items.filter(i=>i.type==='SPIKE').length} />
-            <InfoTooltip text="전주 평균 대비 2배 이상 주문 폭증 감지" size={12} />
-          </span>
-          <span className="flex items-center gap-1">
-            <TabButton label="결품 예상" type="SHORTAGE" count={items.filter(i=>i.type==='SHORTAGE').length} />
-            <InfoTooltip text="향후 7일 주문량 대비 재고+생산 부족 경고" size={12} />
-          </span>
-          <span className="flex items-center gap-1">
-            <TabButton label="소진 불가" type="FRESHNESS" count={items.filter(i=>i.type==='FRESHNESS').length} />
-            <InfoTooltip text="판매 속도 대비 유통기한 부족 — 폐기 위험" size={12} />
-          </span>
-          <span className="flex items-center gap-1">
-            <TabButton label="미납 발생" type="MISS" count={items.filter(i=>i.type==='MISS').length} />
-            <InfoTooltip text="전일 출고 예정 중 미처리된 납품 건" size={12} />
-          </span>
+          {(() => {
+            const baseItems = favoritesOnly ? items.filter((i: DailyAlertItem) => isFavorite(i.productCode)) : items;
+            return (
+              <>
+                <TabButton label="전체 이슈" type="ALL" count={baseItems.length} />
+                <span className="flex items-center gap-1">
+                  <TabButton label="수요 급변" type="SPIKE" count={baseItems.filter((i: DailyAlertItem) => i.type === 'SPIKE').length} />
+                  <InfoTooltip text="전주 평균 대비 2배 이상 주문 폭증 감지" size={12} />
+                </span>
+                <span className="flex items-center gap-1">
+                  <TabButton label="결품 예상" type="SHORTAGE" count={baseItems.filter((i: DailyAlertItem) => i.type === 'SHORTAGE').length} />
+                  <InfoTooltip text="향후 7일 주문량 대비 재고+생산 부족 경고" size={12} />
+                </span>
+                <span className="flex items-center gap-1">
+                  <TabButton label="소진 불가" type="FRESHNESS" count={baseItems.filter((i: DailyAlertItem) => i.type === 'FRESHNESS').length} />
+                  <InfoTooltip text="판매 속도 대비 유통기한 부족 — 폐기 위험" size={12} />
+                </span>
+                <span className="flex items-center gap-1">
+                  <TabButton label="미납 발생" type="MISS" count={baseItems.filter((i: DailyAlertItem) => i.type === 'MISS').length} />
+                  <InfoTooltip text="전일 출고 예정 중 미처리된 납품 건" size={12} />
+                </span>
+              </>
+            );
+          })()}
         </div>
         <div className="text-xs text-neutral-500 font-medium">
           시스템이 총 <span className="font-bold text-neutral-900">{summary.scannedCount.toLocaleString()}</span>개 품목을 검사했습니다.
@@ -333,13 +349,27 @@ export default function DailyWatchPage() {
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-[400px] gap-4">
-            <div className="w-16 h-16 bg-green-50 text-green-600 rounded-full flex items-center justify-center">
-              <CheckCircle size={32} />
-            </div>
-            <div className="text-center">
-              <h3 className="text-lg font-bold text-neutral-900">발견된 특이사항이 없습니다</h3>
-              <p className="text-sm text-neutral-500 mt-1">모든 제품이 정상 범위 내에서 운영되고 있습니다.</p>
-            </div>
+            {favoritesOnly ? (
+              <>
+                <div className="w-16 h-16 bg-yellow-50 text-yellow-500 rounded-full flex items-center justify-center">
+                  <Star size={32} fill="currentColor" />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-lg font-bold text-neutral-900">즐겨찾기 제품의 이슈가 없습니다</h3>
+                  <p className="text-sm text-neutral-500 mt-1">관심 제품이 모두 정상 범위 내에서 운영되고 있습니다.</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 bg-green-50 text-green-600 rounded-full flex items-center justify-center">
+                  <CheckCircle size={32} />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-lg font-bold text-neutral-900">발견된 특이사항이 없습니다</h3>
+                  <p className="text-sm text-neutral-500 mt-1">모든 제품이 정상 범위 내에서 운영되고 있습니다.</p>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

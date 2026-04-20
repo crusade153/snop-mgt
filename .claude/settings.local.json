@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(rm /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/app/snop/page.tsx /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/components/snop/weekly-grid.tsx /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/store/snop-store.ts /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/actions/snop-actions.ts /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/lib/snop-aggregation.ts)",
-      "Bash(rmdir /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/app/snop /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/components/snop)"
+      "Bash(rmdir /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/app/snop /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/components/snop)",
+      "Bash(npx tsc *)"
     ]
   }
 }

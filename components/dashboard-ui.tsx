@@ -37,8 +37,43 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       </div>
     </div>
   );
-  
+
   if (!data) return <div className="p-10 text-center text-status-error">데이터 로드 실패</div>;
+
+  // 즐겨찾기 필터 적용 파생 KPI
+  const favItems = favoritesOnly
+    ? data.integratedArray.filter((item: IntegratedItem) => isFavorite(item.code))
+    : null;
+
+  const displayKpis = favItems
+    ? {
+        productSales: favItems.reduce((s: number, i: IntegratedItem) => s + i.totalSalesAmount, 0),
+        merchandiseSales: data.kpis.merchandiseSales,
+        totalUnfulfilledValue: favItems.reduce((s: number, i: IntegratedItem) => s + i.totalUnfulfilledValue, 0),
+        criticalDeliveryCount: favItems.filter((i: IntegratedItem) =>
+          i.unfulfilledOrders.some((o) => o.daysDelayed >= 7)
+        ).length,
+      }
+    : data.kpis;
+
+  const displayStockHealth = favItems
+    ? {
+        healthy: favItems.filter((i: IntegratedItem) => i.inventory.status === 'healthy').length,
+        critical: favItems.filter((i: IntegratedItem) => i.inventory.status === 'critical').length,
+        imminent: favItems.filter((i: IntegratedItem) => i.inventory.status === 'imminent').length,
+        disposed: favItems.filter((i: IntegratedItem) => i.inventory.status === 'disposed').length,
+        no_expiry: favItems.filter((i: IntegratedItem) => i.inventory.status === 'no_expiry').length,
+      }
+    : data.stockHealth;
+
+  const displayTopProducts = favItems
+    ? [...favItems]
+        .sort((a: IntegratedItem, b: IntegratedItem) => b.totalSalesAmount - a.totalSalesAmount)
+        .slice(0, 5)
+        .map((i: IntegratedItem) => ({ name: i.name, value: i.totalSalesAmount }))
+    : data.salesAnalysis.topProducts;
+
+  const totalForStockBar = favItems ? favItems.length : data.integratedArray.length;
 
   const formatQty = (val: number, conversion: number, baseUnit: string) => {
     if (unitMode === 'BOX') {
@@ -65,44 +100,58 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <KpiCard
-          title="납품 매출" value={Math.round(data.kpis.productSales / 1000000)} unit="백만원" type="blue"
-          sparkline={trendData?.sparkline}
-          changeRate={trendData?.changeRate}
+          title={favoritesOnly ? "즐겨찾기 납품 매출" : "납품 매출"}
+          value={Math.round(displayKpis.productSales / 1000000)}
+          unit="백만원"
+          type="blue"
+          sparkline={favoritesOnly ? undefined : trendData?.sparkline}
+          changeRate={favoritesOnly ? undefined : trendData?.changeRate}
         />
-        <KpiCard title="상품 매출" value={Math.round(data.kpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
+        <KpiCard title="상품 매출" value={Math.round(displayKpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
         <KpiCard
-          title="미납 손실액"
-          value={Math.round(data.kpis.totalUnfulfilledValue / 1000000)}
+          title={favoritesOnly ? "즐겨찾기 미납 손실" : "미납 손실액"}
+          value={Math.round(displayKpis.totalUnfulfilledValue / 1000000)}
           unit="백만원"
           type="brand"
           alert={true}
           tooltip="미납수량 × 정상단가 합계"
         />
         <KpiCard
-          title="긴급 납품"
-          value={data.kpis.criticalDeliveryCount}
+          title={favoritesOnly ? "즐겨찾기 긴급 납품" : "긴급 납품"}
+          value={displayKpis.criticalDeliveryCount}
           unit="건"
           type="warning"
           tooltip="납품요청일로부터 7일 이상 지연된 품목 수"
         />
-        <KpiCard title="재고 폐기/임박" value={data.stockHealth.disposed + data.stockHealth.imminent} unit="개 제품" type="warning" />
+        <KpiCard
+          title={favoritesOnly ? "즐겨찾기 폐기/임박" : "재고 폐기/임박"}
+          value={displayStockHealth.disposed + displayStockHealth.imminent}
+          unit="개 제품"
+          type="warning"
+        />
       </div>
 
       {/* 3. Analysis Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <RankingCard title="🏆 Top 5 베스트 제품 (매출)" data={data.salesAnalysis.topProducts} />
+        <RankingCard
+          title={favoritesOnly ? "⭐ 즐겨찾기 제품 (매출순)" : "🏆 Top 5 베스트 제품 (매출)"}
+          data={displayTopProducts}
+        />
         <RankingCard title="🏢 Top 5 거래처 (매출)" data={data.salesAnalysis.topCustomers} />
-        
+
         {/* 재고 건전성 */}
         <div className="bg-white rounded p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-[16px] font-semibold text-neutral-900">📦 재고 건전성</h2>
+            <h2 className="text-[16px] font-semibold text-neutral-900">
+              📦 재고 건전성
+              {favoritesOnly && <span className="ml-2 text-xs text-yellow-600 font-normal">즐겨찾기 기준</span>}
+            </h2>
           </div>
           <div className="space-y-5">
-            <StockBar label="양호 (Healthy)" value={data.stockHealth.healthy} total={data.integratedArray.length} color="bg-[#42A5F5]" />
-            <StockBar label="긴급 (Critical)" value={data.stockHealth.critical} total={data.integratedArray.length} color="bg-[#FBC02D]" />
-            <StockBar label="임박 (Imminent)" value={data.stockHealth.imminent} total={data.integratedArray.length} color="bg-[#F57C00]" />
-            <StockBar label="폐기 (Disposed)" value={data.stockHealth.disposed} total={data.integratedArray.length} color="bg-[#E53935]" />
+            <StockBar label="양호 (Healthy)" value={displayStockHealth.healthy} total={totalForStockBar} color="bg-[#42A5F5]" />
+            <StockBar label="긴급 (Critical)" value={displayStockHealth.critical} total={totalForStockBar} color="bg-[#FBC02D]" />
+            <StockBar label="임박 (Imminent)" value={displayStockHealth.imminent} total={totalForStockBar} color="bg-[#F57C00]" />
+            <StockBar label="폐기 (Disposed)" value={displayStockHealth.disposed} total={totalForStockBar} color="bg-[#E53935]" />
           </div>
         </div>
       </div>

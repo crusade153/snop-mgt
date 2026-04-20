@@ -54,8 +54,9 @@ export default function DeliveryPage() {
   const unfulfilledList = data.integratedArray
     .filter((item: IntegratedItem) => item.totalUnfulfilledQty > 0 && (!favoritesOnly || isFavorite(item.code)))
     .sort((a: IntegratedItem, b: IntegratedItem) => b.totalUnfulfilledValue - a.totalUnfulfilledValue);
-  
+
   const totalUnfulfilledCount = unfulfilledList.reduce((acc: number, cur: IntegratedItem) => acc + cur.unfulfilledOrders.length, 0);
+  const totalFilteredUnfulfilledValue = unfulfilledList.reduce((acc: number, cur: IntegratedItem) => acc + cur.totalUnfulfilledValue, 0);
   const totalPages = Math.ceil(unfulfilledList.length / itemsPerPage);
   const paginatedList = unfulfilledList.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -105,7 +106,7 @@ export default function DeliveryPage() {
         </div>
         <div className="p-5 rounded shadow border border-[#E53935] bg-[#FFEBEE]">
           <div className="text-[12px] font-bold text-[#E53935] mb-1">총 미납 기회손실</div>
-          <div className="text-[24px] font-bold text-[#C62828]">{Math.round(data.kpis.totalUnfulfilledValue / 1000000).toLocaleString()}<span className="text-[12px] font-normal ml-1 opacity-80">백만원</span></div>
+          <div className="text-[24px] font-bold text-[#C62828]">{Math.round(totalFilteredUnfulfilledValue / 1000000).toLocaleString()}<span className="text-[12px] font-normal ml-1 opacity-80">백만원</span></div>
         </div>
       </div>
 

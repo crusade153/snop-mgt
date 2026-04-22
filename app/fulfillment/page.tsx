@@ -3,6 +3,7 @@
 import { useState, useMemo, Suspense } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useFavorites } from '@/hooks/use-favorites';
 import {
   ChevronLeft,
@@ -51,6 +52,7 @@ function FulfillmentPageInner() {
   const searchTerm = getParam('search', '');
   const currentPage = getIntParam('page', 1);
   const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
+  const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
   const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
 
   // 즐겨찾기 ON이면 제품별 탭 자동 활성화
@@ -178,8 +180,7 @@ function FulfillmentPageInner() {
             <input
               type="text"
               placeholder={currentTab === 'customer' ? "거래처명 또는 코드 검색..." : "제품명 또는 코드 검색..."}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              {...searchInputProps}
               className="w-full pl-10 pr-4 py-2.5 border border-neutral-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white shadow-sm transition-all"
             />
             <Search className="absolute left-3 top-3 text-neutral-400" size={18} />

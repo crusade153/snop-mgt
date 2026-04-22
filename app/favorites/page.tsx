@@ -8,6 +8,7 @@ import {
   ShieldAlert, Clock, Boxes, BarChart3
 } from 'lucide-react';
 import { useFavorites } from '@/hooks/use-favorites';
+import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { useUiStore } from '@/store/ui-store';
 import { IntegratedItem } from '@/types/analysis';
@@ -238,6 +239,7 @@ function GhostCard({ matnr, name, onRemove }: { matnr: string; name: string; onR
 // ── 검색 패널 (드로어) ────────────────────────────────────────────────────────
 function SearchPanel({ isOpen, onClose, data, isFavorite, toggle }: any) {
   const [searchTerm, setSearchTerm] = useState('');
+  const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
   const results = useMemo(() => {
     if (!searchTerm.trim() || !data?.integratedArray) return [];
     const q = searchTerm.toLowerCase();
@@ -262,8 +264,7 @@ function SearchPanel({ isOpen, onClose, data, isFavorite, toggle }: any) {
               autoFocus
               type="text"
               placeholder="제품명 또는 코드 검색..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              {...searchInputProps}
               className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
             />
           </div>

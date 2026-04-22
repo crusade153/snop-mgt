@@ -6,6 +6,7 @@ import { ProductionRow } from '@/types/analysis';
 import { Search, ChevronLeft, ChevronRight, Calendar, Factory, Share2, Download, Star } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useFavorites } from '@/hooks/use-favorites';
 import { exportToExcel } from '@/lib/excel-export';
 import InfoTooltip from '@/components/info-tooltip';
@@ -22,6 +23,7 @@ function ProductionPageInner() {
 
   const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
   const setSelectedPlant = (v: string) => setParams({ plant: v !== 'ALL' ? v : null, page: null });
+  const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
   const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
 
   const itemsPerPage = 15;
@@ -130,8 +132,7 @@ function ProductionPageInner() {
 
           <div className="relative flex-1 md:w-64">
             <input
-              type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              type="text" placeholder="제품명 또는 코드 검색..." {...searchInputProps}
               className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue h-[38px]"
             />
             <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />

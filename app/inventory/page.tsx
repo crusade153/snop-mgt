@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { getDashboardData } from '@/actions/dashboard-actions';
 import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useFavorites } from '@/hooks/use-favorites';
 import { Share2, Star } from 'lucide-react';
 import { 
@@ -80,6 +81,7 @@ function InventoryPageInner() {
 
   const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
   const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+  const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
 
   const handleSort = (key: SortKey) => {
     const newDir: SortDirection = sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc';
@@ -370,9 +372,8 @@ function InventoryPageInner() {
             </div>
 
             <div className="relative w-full md:w-64">
-                <input 
-                    type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                <input
+                    type="text" placeholder="제품명 또는 코드 검색..." {...searchInputProps}
                     className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue"
                 />
                 <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />

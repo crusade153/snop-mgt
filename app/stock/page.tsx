@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { Search, ChevronLeft, ChevronRight, Download, Share2, Star } from 'lucide-react';
 import { useUrlFilters } from '@/hooks/use-url-filters';
+import { useKoreanInput } from '@/hooks/use-korean-input';
 import { IntegratedItem, InventoryBatch } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
 import { useFavorites } from '@/hooks/use-favorites';
@@ -38,6 +39,7 @@ function StockStatusPageInner() {
   const setActiveTab = (v: TabType) => setParams({ tab: v !== 'all' ? v : null, page: null });
   const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
   const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+  const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
 
   const [showHiddenStock, setShowHiddenStock] = useState(false);
   const itemsPerPage = 15;
@@ -253,7 +255,7 @@ function StockStatusPageInner() {
             뷰 공유
           </button>
           <div className="relative w-full md:w-64">
-            <input type="text" placeholder="제품명 또는 코드 검색..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
+            <input type="text" placeholder="제품명 또는 코드 검색..." {...searchInputProps} className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white" />
             <Search className="absolute left-3 top-2.5 text-neutral-400" size={16} />
           </div>
         </div>

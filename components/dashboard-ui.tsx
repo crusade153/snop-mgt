@@ -18,6 +18,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   const { data, isLoading } = useDashboardData(initialData || undefined);
   const { unitMode, favoritesOnly, setFavoritesOnly } = useUiStore();
   const { favorites, isFavorite } = useFavorites();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const { data: trendData } = useQuery({
     queryKey: ['kpi-trend'],
@@ -157,7 +159,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       </div>
 
       {/* 4. 관심 제품 링크 */}
-      {favorites.length > 0 && (
+      {mounted && favorites.length > 0 && (
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <Star size={12} className="text-yellow-400" fill="#FBBF24" />
           관심 제품 {favorites.length}개 등록됨

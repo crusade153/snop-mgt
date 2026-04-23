@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Star, Search, Trash2, ExternalLink, Package, AlertTriangle,
   TrendingUp, CircleDollarSign, ChevronRight, Plus, X,
-  ShieldAlert, Clock, Boxes, BarChart3
+  ShieldAlert, Clock, Boxes, BarChart3, Layers, ChevronDown, CheckCircle2
 } from 'lucide-react';
 import { useFavorites } from '@/hooks/use-favorites';
 import { useKoreanInput } from '@/hooks/use-korean-input';
@@ -236,69 +236,356 @@ function GhostCard({ matnr, name, onRemove }: { matnr: string; name: string; onR
   );
 }
 
+// ── 계층 탐색 제품 목록 ────────────────────────────────────────────────────────
+function HierarchyProductList({
+  items, isFavorite, toggle,
+}: { items: IntegratedItem[]; isFavorite: (c: string) => boolean; toggle: (c: string, n: string) => void }) {
+  if (items.length === 0) return (
+    <div className="py-10 text-center text-neutral-400 text-sm">해당 계층에 제품이 없습니다</div>
+  );
+  return (
+    <ul className="divide-y divide-neutral-100">
+      {items.map((item) => {
+        const starred = isFavorite(item.code);
+        return (
+          <li key={item.code} className="flex items-center justify-between px-4 py-2.5 hover:bg-neutral-50 transition-colors">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-neutral-900 truncate">{item.name}</p>
+              <p className="text-[11px] text-neutral-400 font-mono">{item.code}</p>
+            </div>
+            <button
+              onClick={() => toggle(item.code, item.name)}
+              className={`ml-3 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shrink-0 ${
+                starred
+                  ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+                  : 'bg-neutral-100 text-neutral-600 hover:bg-yellow-50 hover:text-yellow-600'
+              }`}
+            >
+              <Star size={11} fill={starred ? '#FBBF24' : 'none'} className={starred ? 'text-yellow-400' : 'text-neutral-400'} />
+              {starred ? '추가됨' : '추가'}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 // ── 검색 패널 (드로어) ────────────────────────────────────────────────────────
 function SearchPanel({ isOpen, onClose, data, isFavorite, toggle }: any) {
+  const [mode, setMode] = useState<'search' | 'hierarchy'>('search');
+
+  // ── 직접 검색 상태 ──────────────────────────────────────────────────────────
   const [searchTerm, setSearchTerm] = useState('');
   const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
-  const results = useMemo(() => {
-    if (!searchTerm.trim() || !data?.integratedArray) return [];
+
+  // ── 계층 탐색 상태 ──────────────────────────────────────────────────────────
+  const [selL1, setSelL1] = useState<string | null>(null);
+  const [selL2, setSelL2] = useState<string | null>(null);
+  const [selL3, setSelL3] = useState<string | null>(null);
+
+  const allItems: IntegratedItem[] = data?.integratedArray ?? [];
+
+  // 직접 검색 결과
+  const searchResults = useMemo(() => {
+    if (!searchTerm.trim()) return [];
     const q = searchTerm.toLowerCase();
-    return (data.integratedArray as IntegratedItem[])
-      .filter((item) => item.name.toLowerCase().includes(q) || item.code.includes(q))
-      .slice(0, 30);
-  }, [searchTerm, data]);
+    return allItems.filter((i) => i.name.toLowerCase().includes(q) || i.code.includes(q)).slice(0, 50);
+  }, [searchTerm, allItems]);
+
+  // 계층 옵션 계산
+  const l1Options = useMemo(
+    () => [...new Set(allItems.map((i) => i.brand).filter(Boolean))].sort(),
+    [allItems]
+  );
+  const l2Options = useMemo(
+    () => selL1 ? [...new Set(allItems.filter((i) => i.brand === selL1).map((i) => i.category).filter(Boolean))].sort() : [],
+    [allItems, selL1]
+  );
+  const l3Options = useMemo(
+    () => selL1 && selL2 ? [...new Set(allItems.filter((i) => i.brand === selL1 && i.category === selL2).map((i) => i.family).filter(Boolean))].sort() : [],
+    [allItems, selL1, selL2]
+  );
+
+  // 현재 선택 기준 필터된 제품 목록
+  const hierarchyProducts = useMemo(() => {
+    if (!selL1) return [];
+    return allItems.filter((i) => {
+      if (selL3) return i.brand === selL1 && i.category === selL2 && i.family === selL3;
+      if (selL2) return i.brand === selL1 && i.category === selL2;
+      return i.brand === selL1;
+    });
+  }, [allItems, selL1, selL2, selL3]);
+
+  const addedCount  = hierarchyProducts.filter((i) => isFavorite(i.code)).length;
+  const toAddCount  = hierarchyProducts.length - addedCount;
+
+  // 일괄 추가 (이미 추가된 항목은 제외)
+  const handleBulkAdd = () => {
+    hierarchyProducts.forEach((item) => {
+      if (!isFavorite(item.code)) toggle(item.code, item.name);
+    });
+  };
+
+  // 계층별 제품 수
+  const countL1 = (l1: string) => allItems.filter((i) => i.brand === l1).length;
+  const countL2 = (l2: string) => allItems.filter((i) => i.brand === selL1 && i.category === l2).length;
+  const countL3 = (l3: string) => allItems.filter((i) => i.brand === selL1 && i.category === selL2 && i.family === l3).length;
 
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="fixed inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative w-[420px] h-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
-        <div className="flex items-center justify-between p-5 border-b border-neutral-200">
-          <h2 className="text-base font-bold text-neutral-900">제품 검색 & 즐겨찾기 추가</h2>
-          <button onClick={onClose} className="p-2 hover:bg-neutral-100 rounded-full text-neutral-400"><X size={16} /></button>
+      <div className="relative w-[460px] h-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+
+        {/* 헤더 */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-neutral-200">
+          <h2 className="text-base font-bold text-neutral-900">즐겨찾기 제품 추가</h2>
+          <button onClick={onClose} className="p-2 hover:bg-neutral-100 rounded-full text-neutral-400 transition-colors">
+            <X size={16} />
+          </button>
         </div>
-        <div className="p-4 border-b border-neutral-100">
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 text-neutral-400" size={15} />
-            <input
-              autoFocus
-              type="text"
-              placeholder="제품명 또는 코드 검색..."
-              {...searchInputProps}
-              className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-            />
-          </div>
+
+        {/* 모드 탭 */}
+        <div className="flex border-b border-neutral-200 bg-neutral-50">
+          <button
+            onClick={() => setMode('search')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold transition-all ${
+              mode === 'search'
+                ? 'text-blue-600 bg-white border-b-2 border-blue-500 -mb-px'
+                : 'text-neutral-400 hover:text-neutral-600'
+            }`}
+          >
+            <Search size={13} />
+            직접 검색
+          </button>
+          <button
+            onClick={() => setMode('hierarchy')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-bold transition-all ${
+              mode === 'hierarchy'
+                ? 'text-blue-600 bg-white border-b-2 border-blue-500 -mb-px'
+                : 'text-neutral-400 hover:text-neutral-600'
+            }`}
+          >
+            <Layers size={13} />
+            계층 탐색
+          </button>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {searchTerm.trim() === '' ? (
-            <div className="p-8 text-center text-neutral-400 text-sm">제품명이나 코드를 입력하세요</div>
-          ) : results.length === 0 ? (
-            <div className="p-8 text-center text-neutral-400 text-sm">검색 결과 없음</div>
-          ) : (
-            <ul className="divide-y divide-neutral-100">
-              {results.map((item: IntegratedItem) => {
-                const starred = isFavorite(item.code);
-                return (
-                  <li key={item.code} className="flex items-center justify-between px-4 py-3 hover:bg-neutral-50 transition-colors">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-neutral-900 truncate">{item.name}</p>
-                      <p className="text-[11px] text-neutral-400 font-mono">{item.code}</p>
-                    </div>
+
+        {/* ── 직접 검색 모드 ── */}
+        {mode === 'search' && (
+          <>
+            <div className="p-4 border-b border-neutral-100">
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 text-neutral-400" size={15} />
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="제품명 또는 코드 검색..."
+                  {...searchInputProps}
+                  className="w-full pl-9 pr-4 py-2 border border-neutral-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {searchTerm.trim() === '' ? (
+                <div className="p-8 text-center text-neutral-400 text-sm">제품명이나 코드를 입력하세요</div>
+              ) : searchResults.length === 0 ? (
+                <div className="p-8 text-center text-neutral-400 text-sm">검색 결과 없음</div>
+              ) : (
+                <HierarchyProductList items={searchResults} isFavorite={isFavorite} toggle={toggle} />
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── 계층 탐색 모드 ── */}
+        {mode === 'hierarchy' && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+
+            {/* 브레드크럼 */}
+            {selL1 && (
+              <div className="px-4 py-2 flex items-center gap-1 flex-wrap bg-blue-50 border-b border-blue-100 text-xs">
+                <button
+                  onClick={() => { setSelL1(null); setSelL2(null); setSelL3(null); }}
+                  className="text-blue-500 hover:text-blue-700 font-medium hover:underline"
+                >
+                  전체
+                </button>
+                <ChevronRight size={11} className="text-blue-300" />
+                <button
+                  onClick={() => { setSelL2(null); setSelL3(null); }}
+                  className={`font-medium ${!selL2 ? 'text-neutral-800' : 'text-blue-500 hover:text-blue-700 hover:underline'}`}
+                >
+                  {selL1}
+                </button>
+                {selL2 && (
+                  <>
+                    <ChevronRight size={11} className="text-blue-300" />
                     <button
-                      onClick={() => toggle(item.code, item.name)}
-                      className={`ml-3 flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shrink-0 ${
-                        starred ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' : 'bg-neutral-100 text-neutral-600 hover:bg-yellow-50 hover:text-yellow-600'
-                      }`}
+                      onClick={() => setSelL3(null)}
+                      className={`font-medium ${!selL3 ? 'text-neutral-800' : 'text-blue-500 hover:text-blue-700 hover:underline'}`}
                     >
-                      <Star size={11} fill={starred ? '#FBBF24' : 'none'} className={starred ? 'text-yellow-400' : 'text-neutral-400'} />
-                      {starred ? '추가됨' : '추가'}
+                      {selL2}
                     </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
+                  </>
+                )}
+                {selL3 && (
+                  <>
+                    <ChevronRight size={11} className="text-blue-300" />
+                    <span className="font-medium text-neutral-800">{selL3}</span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* 일괄 추가 바 */}
+            {selL1 && hierarchyProducts.length > 0 && (
+              <div className="px-4 py-2.5 bg-white border-b border-neutral-100 flex items-center justify-between gap-2">
+                <span className="text-xs text-neutral-500 flex items-center gap-1.5">
+                  <span className="font-bold text-neutral-800">{hierarchyProducts.length}개</span> 제품
+                  {addedCount > 0 && (
+                    <span className="flex items-center gap-0.5 text-yellow-600 font-medium">
+                      <CheckCircle2 size={11} />
+                      {addedCount}개 추가됨
+                    </span>
+                  )}
+                </span>
+                {toAddCount > 0 ? (
+                  <button
+                    onClick={handleBulkAdd}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <Plus size={12} />
+                    전체 추가 ({toAddCount}개)
+                  </button>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs font-bold text-green-600">
+                    <CheckCircle2 size={13} />
+                    모두 추가됨
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto">
+
+              {/* L1 — 브랜드 선택 */}
+              {!selL1 && (
+                <div className="p-3">
+                  <p className="text-[11px] text-neutral-400 font-bold tracking-wide px-1 mb-2 uppercase">
+                    브랜드 선택 (PRDHA 1)
+                  </p>
+                  {l1Options.length === 0 ? (
+                    <div className="py-10 text-center text-neutral-400 text-sm">데이터가 없습니다</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {l1Options.map((l1) => (
+                        <button
+                          key={l1}
+                          onClick={() => { setSelL1(l1); setSelL2(null); setSelL3(null); }}
+                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors text-left group"
+                        >
+                          <span className="text-sm font-semibold text-neutral-800 group-hover:text-blue-700">{l1}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-neutral-400 bg-neutral-100 group-hover:bg-blue-100 group-hover:text-blue-600 px-2 py-0.5 rounded-full font-medium transition-colors">
+                              {countL1(l1)}개
+                            </span>
+                            <ChevronRight size={14} className="text-neutral-300 group-hover:text-blue-400 transition-colors" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* L2 — 카테고리 선택 + 제품 목록 */}
+              {selL1 && !selL2 && (
+                <>
+                  {l2Options.length > 0 && (
+                    <div className="p-3 border-b border-neutral-100">
+                      <p className="text-[11px] text-neutral-400 font-bold tracking-wide px-1 mb-2 uppercase">
+                        카테고리 선택 (PRDHA 2)
+                      </p>
+                      <div className="space-y-1">
+                        {l2Options.map((l2) => (
+                          <button
+                            key={l2}
+                            onClick={() => { setSelL2(l2); setSelL3(null); }}
+                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors text-left group"
+                          >
+                            <span className="text-sm font-semibold text-neutral-800 group-hover:text-blue-700">{l2}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-neutral-400 bg-neutral-100 group-hover:bg-blue-100 group-hover:text-blue-600 px-2 py-0.5 rounded-full font-medium transition-colors">
+                                {countL2(l2)}개
+                              </span>
+                              <ChevronRight size={14} className="text-neutral-300 group-hover:text-blue-400 transition-colors" />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="p-3">
+                    <p className="text-[11px] text-neutral-400 font-bold tracking-wide px-1 mb-1 uppercase">
+                      전체 제품 ({hierarchyProducts.length})
+                    </p>
+                    <HierarchyProductList items={hierarchyProducts} isFavorite={isFavorite} toggle={toggle} />
+                  </div>
+                </>
+              )}
+
+              {/* L3 — 제품군 선택 + 제품 목록 */}
+              {selL1 && selL2 && !selL3 && (
+                <>
+                  {l3Options.length > 0 && (
+                    <div className="p-3 border-b border-neutral-100">
+                      <p className="text-[11px] text-neutral-400 font-bold tracking-wide px-1 mb-2 uppercase">
+                        제품군 선택 (PRDHA 3)
+                      </p>
+                      <div className="space-y-1">
+                        {l3Options.map((l3) => (
+                          <button
+                            key={l3}
+                            onClick={() => setSelL3(l3)}
+                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl hover:bg-blue-50 transition-colors text-left group"
+                          >
+                            <span className="text-sm font-semibold text-neutral-800 group-hover:text-blue-700">{l3}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-neutral-400 bg-neutral-100 group-hover:bg-blue-100 group-hover:text-blue-600 px-2 py-0.5 rounded-full font-medium transition-colors">
+                                {countL3(l3)}개
+                              </span>
+                              <ChevronRight size={14} className="text-neutral-300 group-hover:text-blue-400 transition-colors" />
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="p-3">
+                    <p className="text-[11px] text-neutral-400 font-bold tracking-wide px-1 mb-1 uppercase">
+                      해당 카테고리 제품 ({hierarchyProducts.length})
+                    </p>
+                    <HierarchyProductList items={hierarchyProducts} isFavorite={isFavorite} toggle={toggle} />
+                  </div>
+                </>
+              )}
+
+              {/* 최종 L3 선택 — 제품 목록만 */}
+              {selL1 && selL2 && selL3 && (
+                <div className="p-3">
+                  <p className="text-[11px] text-neutral-400 font-bold tracking-wide px-1 mb-1 uppercase">
+                    제품 목록 ({hierarchyProducts.length})
+                  </p>
+                  <HierarchyProductList items={hierarchyProducts} isFavorite={isFavorite} toggle={toggle} />
+                </div>
+              )}
+
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );

@@ -2,6 +2,7 @@
 
 import bigqueryClient from '@/lib/bigquery';
 import { SapOrder, SapInventory, SapProduction } from '@/types/sap';
+import { unstable_cache } from 'next/cache';
 import { format, subDays } from 'date-fns';
 
 export interface ProductDetailData {
@@ -36,7 +37,7 @@ export interface ProductDetailData {
   }[];
 }
 
-export async function getProductDetail(matnr: string): Promise<{ success: boolean; data?: ProductDetailData; message?: string }> {
+async function getProductDetailUncached(matnr: string): Promise<{ success: boolean; data?: ProductDetailData; message?: string }> {
   const today = new Date();
   const start60 = format(subDays(today, 60), 'yyyyMMdd');
   const start30 = format(subDays(today, 30), 'yyyyMMdd');
@@ -184,4 +185,14 @@ export async function getProductDetail(matnr: string): Promise<{ success: boolea
     console.error('❌ [product-actions] Error:', e.message);
     return { success: false, message: e.message };
   }
+}
+
+export async function getProductDetail(matnr: string): Promise<{ success: boolean; data?: ProductDetailData; message?: string }> {
+  const productCode = matnr.trim();
+
+  return unstable_cache(
+    async () => getProductDetailUncached(productCode),
+    ['product-detail-v1', productCode],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
 }

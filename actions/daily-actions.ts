@@ -1,6 +1,7 @@
 'use server'
 
 import bigqueryClient from '@/lib/bigquery';
+import { unstable_cache } from 'next/cache';
 import { addDays, subDays, format, parseISO } from 'date-fns';
 
 export interface DailyAlertItem {
@@ -24,7 +25,7 @@ export interface DailySummary {
   lowestBalance: { name: string; balance: number; umrez: number; unit: string }[];
 }
 
-export async function getDailyWatchReport(targetDateStr?: string): Promise<{ success: boolean; data: DailyAlertItem[]; summary: DailySummary; runTime: string }> {
+async function getDailyWatchReportUncached(targetDateStr?: string): Promise<{ success: boolean; data: DailyAlertItem[]; summary: DailySummary; runTime: string }> {
   
   const today = targetDateStr ? parseISO(targetDateStr) : new Date();
   const runTime = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
@@ -351,4 +352,14 @@ export async function getDailyWatchReport(targetDateStr?: string): Promise<{ suc
       runTime 
     };
   }
+}
+
+export async function getDailyWatchReport(targetDateStr?: string): Promise<{ success: boolean; data: DailyAlertItem[]; summary: DailySummary; runTime: string }> {
+  const cacheDate = targetDateStr || format(new Date(), 'yyyy-MM-dd');
+
+  return unstable_cache(
+    async () => getDailyWatchReportUncached(cacheDate),
+    ['daily-watch-report-v1', cacheDate],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
 }

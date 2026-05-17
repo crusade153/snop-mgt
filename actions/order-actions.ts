@@ -2,8 +2,9 @@
 
 import bigqueryClient from '@/lib/bigquery';
 import { SapOrder } from '@/types/sap';
+import { unstable_cache } from 'next/cache';
 
-export async function getLatestOrders(): Promise<SapOrder[]> {
+async function getLatestOrdersUncached(): Promise<SapOrder[]> {
   const query = `
     SELECT 
       VBELN, POSNR, AUART, BEZEI_TVAKT, BSTKD,
@@ -26,4 +27,12 @@ export async function getLatestOrders(): Promise<SapOrder[]> {
     console.error('판매 오더 조회 실패:', error);
     return []; 
   }
+}
+
+export async function getLatestOrders(): Promise<SapOrder[]> {
+  return unstable_cache(
+    getLatestOrdersUncached,
+    ['latest-orders-v1'],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
 }

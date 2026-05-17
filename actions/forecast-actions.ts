@@ -2,142 +2,191 @@
 
 import bigqueryClient from '@/lib/bigquery';
 import { generateForecast } from '@/lib/forecasting-engine';
-import { subMonths, subYears, addMonths, format, parseISO, startOfMonth } from 'date-fns';
+import { unstable_cache } from 'next/cache';
+import { createHash } from 'crypto';
+import { subMonths, subYears, addMonths, format, startOfMonth } from 'date-fns';
 
-// 1. [수정] 전체 유효 품목 검색 (검색어가 없으면 전체 조회)
+type ForecastTargetItem = {
+  MATNR: string;
+  ARKTX: string;
+  MEINS?: string;
+  UMREZ_BOX?: number;
+  total_sales_amt?: number;
+};
+
 async function searchAllItems(term: string, endDateStr: string) {
   const endDate = new Date(endDateStr);
-  const startDate = subMonths(endDate, 6); // 최근 6개월 실적 기준
+  const startDate = subMonths(endDate, 6);
   const startStr = format(startDate, 'yyyyMMdd');
   const endStr = format(endDate, 'yyyyMMdd');
+  const safeTerm = term.trim();
 
-  // 검색어가 있으면 필터링, 없으면 판매금액 순으로 상위 300개 (성능 고려)
-  const whereCondition = term 
-    ? `AND (A.MATNR LIKE '%${term}%' OR A.ARKTX LIKE '%${term}%')`
+  const whereCondition = safeTerm
+    ? `AND (A.MATNR LIKE @term OR A.ARKTX LIKE @term)`
     : ``;
 
   const query = `
-    SELECT 
-      A.MATNR, 
-      A.ARKTX, 
+    SELECT
+      A.MATNR,
+      A.ARKTX,
       SUM(A.NETWR) as total_sales_amt,
       MAX(M.MEINS) as MEINS,
       MAX(IFNULL(M.UMREZ_BOX, 1)) as UMREZ_BOX
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS A
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON A.MATNR = M.MATNR
-    WHERE A.VDATU BETWEEN '${startStr}' AND '${endStr}'
+    WHERE A.VDATU BETWEEN @startStr AND @endStr
       ${whereCondition}
     GROUP BY A.MATNR, A.ARKTX
     ORDER BY total_sales_amt DESC
     LIMIT 300
   `;
-  
-  const [rows] = await bigqueryClient.query({ query });
+
+  const [rows] = await bigqueryClient.query({
+    query,
+    params: safeTerm ? { startStr, endStr, term: `%${safeTerm}%` } : { startStr, endStr },
+  });
   return rows;
 }
 
-// 2. [공통] 월별 이력 조회 함수
-async function fetchMonthlyData(matnr: string, umrezBox: number, startQueryDate: Date, endQueryDate: Date) {
+async function fetchMonthlyDataForItems(matnrs: string[], startQueryDate: Date, endQueryDate: Date) {
   const sDate = format(startQueryDate, 'yyyyMMdd');
   const eDate = format(endQueryDate, 'yyyyMMdd');
 
+  if (matnrs.length === 0) return new Map<string, Map<string, number>>();
+
   const query = `
-    SELECT 
-      SUBSTR(VDATU, 1, 6) as month_key, 
+    SELECT
+      S.MATNR,
+      SUBSTR(S.VDATU, 1, 6) as month_key,
       SUM(
-        CASE 
-          WHEN VRKME = 'BOX' THEN KWMENG * ${umrezBox}
-          ELSE KWMENG 
+        CASE
+          WHEN S.VRKME = 'BOX' THEN S.KWMENG * IFNULL(M.UMREZ_BOX, 1)
+          ELSE S.KWMENG
         END
       ) as total_qty
-    FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\`
-    WHERE MATNR = '${matnr}'
-      AND VDATU BETWEEN '${sDate}' AND '${eDate}'
-    GROUP BY month_key
-    ORDER BY month_key ASC
+    FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS S
+    LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON S.MATNR = M.MATNR
+    WHERE S.MATNR IN UNNEST(@matnrs)
+      AND S.VDATU BETWEEN @sDate AND @eDate
+    GROUP BY S.MATNR, month_key
+    ORDER BY S.MATNR, month_key ASC
   `;
-  const [rows] = await bigqueryClient.query({ query });
-  
-  // Map으로 변환 (빠른 조회용)
-  const dataMap = new Map<string, number>();
-  rows.forEach((r: any) => {
-    // YYYYMM -> YYYY-MM-01
-    const key = `${r.month_key.substring(0, 4)}-${r.month_key.substring(4, 6)}-01`;
-    dataMap.set(key, Number(r.total_qty));
+
+  const [rows] = await bigqueryClient.query({
+    query,
+    params: { matnrs, sDate, eDate },
   });
 
-  return dataMap;
+  const byProduct = new Map<string, Map<string, number>>();
+  rows.forEach((r: any) => {
+    const key = `${r.month_key.substring(0, 4)}-${r.month_key.substring(4, 6)}-01`;
+    const matnr = String(r.MATNR);
+    if (!byProduct.has(matnr)) byProduct.set(matnr, new Map<string, number>());
+    byProduct.get(matnr)!.set(key, Number(r.total_qty));
+  });
+
+  return byProduct;
 }
 
-// 3. [보정] 빈 달 채우기 (Gap Filling)
 function fillMonthlyGaps(dataMap: Map<string, number>, startDate: Date, monthsCount: number) {
   const result = [];
   let current = startOfMonth(startDate);
 
   for (let i = 0; i < monthsCount; i++) {
     const key = format(current, 'yyyy-MM-dd');
-    const val = dataMap.get(key) || 0; // 데이터 없으면 0 처리
+    const val = dataMap.get(key) || 0;
     result.push({ date: key, value: val });
     current = addMonths(current, 1);
   }
   return result;
 }
 
+function createMatnrHash(matnrs: string[]) {
+  return createHash('md5')
+    .update(matnrs.slice().sort().join(','))
+    .digest('hex');
+}
+
+async function buildForecastDashboard(
+  targetItems: ForecastTargetItem[],
+  historyStart: Date,
+  historyEnd: Date,
+  lastYearStart: Date,
+  lastYearEnd: Date
+) {
+  const matnrs = targetItems.map((item) => String(item.MATNR));
+  const [historyByProduct, lastYearByProduct] = await Promise.all([
+    fetchMonthlyDataForItems(matnrs, historyStart, historyEnd),
+    fetchMonthlyDataForItems(matnrs, lastYearStart, lastYearEnd),
+  ]);
+
+  const results = await Promise.all(
+    targetItems.map(async (item) => {
+      const matnr = String(item.MATNR);
+      const umrez = item.UMREZ_BOX || 1;
+      const historyMap = historyByProduct.get(matnr) || new Map<string, number>();
+      const lastYearMap = lastYearByProduct.get(matnr) || new Map<string, number>();
+      const historyFilled = fillMonthlyGaps(historyMap, historyStart, 6);
+      const lastYearFilled = fillMonthlyGaps(lastYearMap, lastYearStart, 12);
+      const forecast = await generateForecast(historyFilled, lastYearFilled, 6);
+
+      return {
+        info: {
+          id: item.MATNR,
+          name: item.ARKTX,
+          unit: item.MEINS || 'EA',
+          umrezBox: umrez,
+          totalSales: item.total_sales_amt,
+        },
+        ...forecast,
+      };
+    })
+  );
+
+  return { success: true, data: results };
+}
+
 export async function getForecastDashboard(searchTerm?: string) {
+  const normalizedSearchTerm = (searchTerm || '').trim();
+
   try {
     const today = new Date();
-    
-    // 1. 기간 설정
-    // (A) 금년 실적: 최근 6개월 (T-6 ~ T-1)
-    // (B) 전년 동월: (T-6 - 1년) ~ (T+5 - 1년) -> 총 12개월치 필요
-    const historyStart = subMonths(today, 6); // 조회 시작일 (6개월 전)
-    const historyEnd = today;                 // 조회 종료일 (오늘)
-
-    // 전년도 조회 구간 (차트의 X축 전체 범위인 12개월에 해당하는 1년 전 데이터)
+    const historyStart = subMonths(today, 6);
+    const historyEnd = today;
     const lastYearStart = subYears(historyStart, 1);
     const lastYearEnd = subYears(addMonths(today, 6), 1);
-
     const todayStr = format(today, 'yyyy-MM-dd');
+    const historyStartStr = format(historyStart, 'yyyyMMdd');
+    const historyEndStr = format(historyEnd, 'yyyyMMdd');
+    const lastYearStartStr = format(lastYearStart, 'yyyyMMdd');
+    const lastYearEndStr = format(lastYearEnd, 'yyyyMMdd');
 
-    // ✅ [수정] 전체 검색 로직 사용
-    const targetItems = await searchAllItems(searchTerm || '', todayStr);
+    const targetItems = await unstable_cache(
+      async () => searchAllItems(normalizedSearchTerm, todayStr),
+      ['forecast-target-items-v1', normalizedSearchTerm, todayStr],
+      { revalidate: 600, tags: ['report-data'] }
+    )() as ForecastTargetItem[];
 
     if (targetItems.length === 0) return { success: true, data: [] };
 
-    const results = await Promise.all(
-      targetItems.map(async (item: any) => {
-        const umrez = item.UMREZ_BOX || 1;
+    const matnrs = targetItems.map((item: any) => String(item.MATNR));
+    const matnrHash = createMatnrHash(matnrs);
 
-        // DB 조회 (병렬 처리)
-        const [historyMap, lastYearMap] = await Promise.all([
-          fetchMonthlyData(item.MATNR, umrez, historyStart, historyEnd),
-          fetchMonthlyData(item.MATNR, umrez, lastYearStart, lastYearEnd)
-        ]);
-        
-        // 데이터 채우기 (Gap Filling)
-        const historyFilled = fillMonthlyGaps(historyMap, historyStart, 6);
-        const lastYearFilled = fillMonthlyGaps(lastYearMap, lastYearStart, 12);
-
-        // 엔진 호출
-        const forecast = await generateForecast(historyFilled, lastYearFilled, 6);
-        
-        return {
-          info: { 
-            id: item.MATNR, 
-            name: item.ARKTX,
-            unit: item.MEINS || 'EA',
-            umrezBox: umrez,
-            totalSales: item.total_sales_amt // 정렬용 매출액
-          },
-          ...forecast
-        };
-      })
-    );
-
-    return { success: true, data: results };
-
+    return unstable_cache(
+      async () => buildForecastDashboard(targetItems, historyStart, historyEnd, lastYearStart, lastYearEnd),
+      [
+        'forecast-dashboard-v4',
+        normalizedSearchTerm,
+        historyStartStr,
+        historyEndStr,
+        lastYearStartStr,
+        lastYearEndStr,
+        matnrHash,
+      ],
+      { revalidate: 600, tags: ['report-data'] }
+    )();
   } catch (error: any) {
-    console.error("Forecasting Error:", error);
-    return { success: false, error: error.message };
+    console.error('Forecasting Error:', error);
+    return { success: false, data: [], error: error.message };
   }
 }

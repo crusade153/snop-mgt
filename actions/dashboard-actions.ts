@@ -140,7 +140,7 @@ const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr:
         return compressed;
       },
       [cacheKey], 
-      { revalidate: 60 } 
+      { revalidate: 600, tags: ['report-data'] } 
     )();
 };
 
@@ -149,6 +149,14 @@ const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr:
  * (현재 7일 vs 이전 7일 비교)
  */
 export async function getKpiTrend() {
+  return unstable_cache(
+    getKpiTrendUncached,
+    ['kpi-trend-v1'],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
+}
+
+async function getKpiTrendUncached() {
   const today = new Date();
   const start14 = format(subDays(today, 13), 'yyyyMMdd');
   const todayStr = format(today, 'yyyyMMdd');

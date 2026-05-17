@@ -2,8 +2,9 @@
 
 import bigqueryClient from '@/lib/bigquery';
 import { SapProduction } from '@/types/sap';
+import { unstable_cache } from 'next/cache';
 
-export async function getProductionPlan(): Promise<SapProduction[]> {
+async function getProductionPlanUncached(): Promise<SapProduction[]> {
   const query = `
     SELECT 
       AUFNR, AUART, TXT,
@@ -23,4 +24,12 @@ export async function getProductionPlan(): Promise<SapProduction[]> {
     console.error('생산 계획 조회 실패:', error);
     return []; 
   }
+}
+
+export async function getProductionPlan(): Promise<SapProduction[]> {
+  return unstable_cache(
+    getProductionPlanUncached,
+    ['production-plan-v1'],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
 }

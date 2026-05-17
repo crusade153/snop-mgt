@@ -2,8 +2,9 @@
 
 import bigqueryClient from '@/lib/bigquery';
 import { SapInventory } from '@/types/sap';
+import { unstable_cache } from 'next/cache';
 
-export async function getInventoryStatus(): Promise<SapInventory[]> {
+async function getInventoryStatusUncached(): Promise<SapInventory[]> {
   const query = `
     SELECT 
       MATNR, MATNR_T, MEINS, C_MEINS,
@@ -28,4 +29,12 @@ export async function getInventoryStatus(): Promise<SapInventory[]> {
     console.error('재고 조회 실패:', error);
     return []; 
   }
+}
+
+export async function getInventoryStatus(): Promise<SapInventory[]> {
+  return unstable_cache(
+    getInventoryStatusUncached,
+    ['inventory-status-v1'],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
 }

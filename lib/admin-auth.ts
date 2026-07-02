@@ -2,6 +2,8 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient, type User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
+const DEFAULT_ADMIN_EMAILS = ["yukd2022@harim-foods.com"];
+
 export type ProfileRecord = Record<string, unknown> & {
   id?: string;
   status?: string;
@@ -60,10 +62,14 @@ export function createAdminSupabaseClient() {
 }
 
 function getAdminEmails() {
-  return (process.env.ADMIN_EMAILS ?? "")
+  const configuredEmails = (process.env.ADMIN_EMAILS ?? "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
+
+  return Array.from(
+    new Set([...DEFAULT_ADMIN_EMAILS, ...configuredEmails]),
+  );
 }
 
 function hasAdminProfileFlag(profile: ProfileRecord | null) {

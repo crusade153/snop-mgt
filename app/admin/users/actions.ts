@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import {
   createAdminSupabaseClient,
   createCookieSupabaseClient,
@@ -112,7 +113,15 @@ export async function updateUserPassword(
     return { ok: true, message: "비밀번호를 변경했습니다." };
   }
 
-  const { error } = await guard.supabase.auth.resetPasswordForEmail(email);
+  const headerStore = await headers();
+  const origin =
+    headerStore.get("origin") ??
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    process.env.NEXT_PUBLIC_APP_URL;
+
+  const { error } = await guard.supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: origin ? `${origin}/reset-password` : undefined,
+  });
 
   if (error) {
     return { ok: false, message: error.message };

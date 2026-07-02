@@ -8,7 +8,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
   const pathname = usePathname();
 
   // 로그인 페이지나 승인 대기 페이지에서는 헤더/사이드바를 숨김
-  const isFullScreenPage = pathname === '/login' || pathname === '/unauthorized';
+  const isFullScreenPage = pathname === '/login' || pathname === '/unauthorized' || pathname === '/reset-password';
 
   if (isFullScreenPage) {
     return <main className="w-full h-screen">{children}</main>;

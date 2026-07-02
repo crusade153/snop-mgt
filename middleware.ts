@@ -54,6 +54,7 @@ export async function middleware(request: NextRequest) {
   // - /favicon.ico, /_next: 정적 파일 (이미지, 스타일 등)
   const isPublicPath = 
     path.startsWith('/login') || 
+    path.startsWith('/reset-password') || 
     path.startsWith('/unauthorized') || 
     path.startsWith('/auth') ||
     path.startsWith('/_next') ||

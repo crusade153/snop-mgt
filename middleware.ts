@@ -1,6 +1,22 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+const DEFAULT_ADMIN_EMAILS = ['yukd2022@harim-foods.com'];
+
+function isAdminEmail(email?: string | null) {
+  const configuredEmails = (process.env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  return Boolean(
+    email &&
+      new Set([...DEFAULT_ADMIN_EMAILS, ...configuredEmails]).has(
+        email.toLowerCase(),
+      ),
+  );
+}
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request: { headers: request.headers },
@@ -60,7 +76,7 @@ export async function middleware(request: NextRequest) {
       .single();
 
     // 승인되지 않은(active가 아닌) 유저가 시스템에 접근하려 할 때
-    if (profile?.status !== 'active' && !path.startsWith('/unauthorized') && !path.startsWith('/login')) {
+    if (profile?.status !== 'active' && !isAdminEmail(session.user.email) && !path.startsWith('/unauthorized') && !path.startsWith('/login')) {
       return NextResponse.redirect(new URL('/unauthorized', request.url));
     }
 

@@ -1,14 +1,16 @@
 import { redirect } from "next/navigation";
 import {
   createAdminSupabaseClient,
+  createCookieSupabaseClient,
   getAdminContext,
+  hasAdminSupabaseConfig,
   type ProfileRecord,
 } from "@/lib/admin-auth";
 import UserManagementClient, { type ManagedUser } from "./user-management-client";
 
 export const dynamic = "force-dynamic";
 
-function readName(profile: ProfileRecord | null, metadata: Record<string, unknown>) {
+function readName(profile: ProfileRecord | null, metadata: Record<string, unknown> = {}) {
   const profileName = profile?.full_name ?? profile?.name ?? profile?.display_name;
   const metadataName = metadata.full_name ?? metadata.name;
 
@@ -16,7 +18,16 @@ function readName(profile: ProfileRecord | null, metadata: Record<string, unknow
 }
 
 function readRole(profile: ProfileRecord | null) {
-  return String(profile?.role ?? "");
+  return String(profile?.role ?? "user");
+}
+
+function readEmail(profile: ProfileRecord | null, fallback = "-") {
+  return String(profile?.email ?? fallback);
+}
+
+function readDate(profile: ProfileRecord | null, key: string) {
+  const value = profile?.[key];
+  return typeof value === "string" ? value : null;
 }
 
 function readIsAdmin(profile: ProfileRecord | null, role: string) {
@@ -32,7 +43,7 @@ function normalizeStatus(profile: ProfileRecord | null) {
   return String(profile?.status ?? "pending");
 }
 
-async function getManagedUsers() {
+async function getManagedUsersWithServiceRole() {
   const admin = createAdminSupabaseClient();
   const {
     data: { users },
@@ -64,30 +75,60 @@ async function getManagedUsers() {
     });
   }
 
-  return users
-    .map((user): ManagedUser => {
-      const profile = profilesById.get(user.id) ?? null;
-      const role = readRole(profile);
+  return users.map((user): ManagedUser => {
+    const profile = profilesById.get(user.id) ?? null;
+    const role = readRole(profile);
 
-      return {
-        id: user.id,
-        email: user.email ?? "-",
-        name: readName(profile, user.user_metadata ?? {}),
-        status: normalizeStatus(profile),
-        role,
-        isAdmin: readIsAdmin(profile, role),
-        createdAt: user.created_at ?? null,
-        lastSignInAt: user.last_sign_in_at ?? null,
-        emailConfirmedAt: user.email_confirmed_at ?? null,
-      };
-    })
-    .sort((a, b) => {
-      const statusOrder = { pending: 0, active: 1, suspended: 2, rejected: 3 };
-      const aOrder = statusOrder[a.status as keyof typeof statusOrder] ?? 9;
-      const bOrder = statusOrder[b.status as keyof typeof statusOrder] ?? 9;
-      if (aOrder !== bOrder) return aOrder - bOrder;
-      return a.email.localeCompare(b.email);
-    });
+    return {
+      id: user.id,
+      email: readEmail(profile, user.email ?? "-"),
+      name: readName(profile, user.user_metadata ?? {}),
+      status: normalizeStatus(profile),
+      role,
+      isAdmin: readIsAdmin(profile, role),
+      createdAt: user.created_at ?? null,
+      lastSignInAt: user.last_sign_in_at ?? null,
+      emailConfirmedAt: user.email_confirmed_at ?? null,
+    };
+  });
+}
+
+async function getManagedUsersFromProfiles() {
+  const supabase = await createCookieSupabaseClient();
+  const { data: profiles, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (profiles ?? []).map((profile): ManagedUser => {
+    const role = readRole(profile);
+
+    return {
+      id: String(profile.id),
+      email: readEmail(profile),
+      name: readName(profile),
+      status: normalizeStatus(profile),
+      role,
+      isAdmin: readIsAdmin(profile, role),
+      createdAt: readDate(profile, "created_at"),
+      lastSignInAt: null,
+      emailConfirmedAt: null,
+    };
+  });
+}
+
+function sortManagedUsers(users: ManagedUser[]) {
+  return users.sort((a, b) => {
+    const statusOrder = { pending: 0, active: 1, suspended: 2, rejected: 3 };
+    const aOrder = statusOrder[a.status as keyof typeof statusOrder] ?? 9;
+    const bOrder = statusOrder[b.status as keyof typeof statusOrder] ?? 9;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return a.email.localeCompare(b.email);
+  });
 }
 
 export default async function AdminUsersPage() {
@@ -103,24 +144,34 @@ export default async function AdminUsersPage() {
         <div className="text-sm font-bold text-red-600">Access denied</div>
         <h1 className="mt-2 text-2xl font-bold text-neutral-950">관리자 권한이 필요합니다.</h1>
         <p className="mt-3 text-sm leading-6 text-neutral-600">
-          이 페이지는 활성 상태의 관리자만 접근할 수 있습니다. 관리자 지정은 서버 환경변수
-          <span className="mx-1 font-mono text-neutral-900">ADMIN_EMAILS</span>
-          또는 <span className="mx-1 font-mono text-neutral-900">profiles.role/is_admin</span>
-          값으로 판별합니다.
+          이 페이지는 관리자만 접근할 수 있습니다. 현재 기본 관리자는
+          <span className="mx-1 font-mono text-neutral-900">yukd2022@harim-foods.com</span>
+          입니다.
         </p>
       </div>
     );
   }
 
+  const hasServiceRole = hasAdminSupabaseConfig();
   let users: ManagedUser[] = [];
   let configError: string | undefined;
 
   try {
-    users = await getManagedUsers();
+    users = sortManagedUsers(
+      hasServiceRole
+        ? await getManagedUsersWithServiceRole()
+        : await getManagedUsersFromProfiles(),
+    );
   } catch (error) {
     configError =
       error instanceof Error ? error.message : "회원 목록을 불러오지 못했습니다.";
   }
 
-  return <UserManagementClient users={users} configError={configError} />;
+  return (
+    <UserManagementClient
+      users={users}
+      configError={configError}
+      hasServiceRole={hasServiceRole}
+    />
+  );
 }

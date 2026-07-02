@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient, type User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
-const DEFAULT_ADMIN_EMAILS = ["yukd2022@harim-foods.com"];
+export const DEFAULT_ADMIN_EMAILS = ["yukd2022@harim-foods.com"];
 
 export type ProfileRecord = Record<string, unknown> & {
   id?: string;
@@ -42,6 +42,13 @@ export async function createCookieSupabaseClient() {
   );
 }
 
+export function hasAdminSupabaseConfig() {
+  return Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY),
+  );
+}
+
 export function createAdminSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey =
@@ -49,7 +56,7 @@ export function createAdminSupabaseClient() {
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다. Supabase Project Settings > API의 service_role 키를 서버 환경변수로 추가해주세요.",
+      "SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다. 직접 비밀번호 변경 대신 재설정 메일 발송을 사용할 수 있습니다.",
     );
   }
 
@@ -61,15 +68,17 @@ export function createAdminSupabaseClient() {
   });
 }
 
-function getAdminEmails() {
+export function getAdminEmails() {
   const configuredEmails = (process.env.ADMIN_EMAILS ?? "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
 
-  return Array.from(
-    new Set([...DEFAULT_ADMIN_EMAILS, ...configuredEmails]),
-  );
+  return Array.from(new Set([...DEFAULT_ADMIN_EMAILS, ...configuredEmails]));
+}
+
+export function isConfiguredAdminEmail(email?: string | null) {
+  return !!email && getAdminEmails().includes(email.toLowerCase());
 }
 
 function hasAdminProfileFlag(profile: ProfileRecord | null) {
@@ -114,11 +123,9 @@ export async function getAdminContext(): Promise<AdminContext> {
     };
   }
 
-  const isActive = profile?.status === "active";
-  const adminEmails = getAdminEmails();
-  const isAdminEmail =
-    !!user.email && adminEmails.includes(user.email.toLowerCase());
-  const isAdmin = isActive && (isAdminEmail || hasAdminProfileFlag(profile));
+  const isAdminEmail = isConfiguredAdminEmail(user.email);
+  const isActive = profile?.status === "active" || isAdminEmail;
+  const isAdmin = isAdminEmail || (isActive && hasAdminProfileFlag(profile));
 
   return {
     user,

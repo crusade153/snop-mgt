@@ -1,7 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createAdminSupabaseClient, getAdminContext } from "@/lib/admin-auth";
+import {
+  createAdminSupabaseClient,
+  createCookieSupabaseClient,
+  getAdminContext,
+  hasAdminSupabaseConfig,
+} from "@/lib/admin-auth";
 
 type ActionResult = {
   ok: boolean;
@@ -17,7 +22,7 @@ async function ensureAdmin() {
     return {
       ok: false as const,
       message: "로그인이 필요합니다.",
-      admin: null,
+      supabase: null,
     };
   }
 
@@ -25,23 +30,15 @@ async function ensureAdmin() {
     return {
       ok: false as const,
       message: context.reason ?? "관리자 권한이 필요합니다.",
-      admin: null,
+      supabase: null,
     };
   }
 
-  try {
-    return {
-      ok: true as const,
-      message: "",
-      admin: createAdminSupabaseClient(),
-    };
-  } catch (error) {
-    return {
-      ok: false as const,
-      message: error instanceof Error ? error.message : "관리자 클라이언트 생성에 실패했습니다.",
-      admin: null,
-    };
-  }
+  return {
+    ok: true as const,
+    message: "",
+    supabase: await createCookieSupabaseClient(),
+  };
 }
 
 export async function updateUserStatus(
@@ -53,24 +50,27 @@ export async function updateUserStatus(
   }
 
   const guard = await ensureAdmin();
-  if (!guard.ok || !guard.admin) {
+  if (!guard.ok || !guard.supabase) {
     return { ok: false, message: guard.message };
   }
 
-  const { data, error } = await guard.admin
+  const { data, error } = await guard.supabase
     .from("profiles")
     .update({ status })
     .eq("id", userId)
     .select("id");
 
   if (error) {
-    return { ok: false, message: error.message };
+    return {
+      ok: false,
+      message: `${error.message} profiles 테이블 RLS가 관리자 업데이트를 막는 경우 Supabase SQL Editor에서 role 정책을 추가해야 합니다.`,
+    };
   }
 
   if (!data?.length) {
-    const { error: insertError } = await guard.admin
+    const { error: insertError } = await guard.supabase
       .from("profiles")
-      .insert({ id: userId, status });
+      .insert({ id: userId, status, role: "user" });
 
     if (insertError) {
       return { ok: false, message: insertError.message };
@@ -83,24 +83,43 @@ export async function updateUserStatus(
 
 export async function updateUserPassword(
   userId: string,
+  email: string,
   password: string,
 ): Promise<ActionResult> {
-  if (!userId || password.length < 8) {
-    return { ok: false, message: "비밀번호는 8자 이상으로 입력해주세요." };
+  if (!userId || !email || email === "-") {
+    return { ok: false, message: "비밀번호 재설정에 사용할 이메일이 없습니다." };
   }
 
   const guard = await ensureAdmin();
-  if (!guard.ok || !guard.admin) {
+  if (!guard.ok || !guard.supabase) {
     return { ok: false, message: guard.message };
   }
 
-  const { error } = await guard.admin.auth.admin.updateUserById(userId, {
-    password,
-  });
+  if (hasAdminSupabaseConfig()) {
+    if (password.length < 8) {
+      return { ok: false, message: "비밀번호는 8자 이상으로 입력해주세요." };
+    }
+
+    const admin = createAdminSupabaseClient();
+    const { error } = await admin.auth.admin.updateUserById(userId, {
+      password,
+    });
+
+    if (error) {
+      return { ok: false, message: error.message };
+    }
+
+    return { ok: true, message: "비밀번호를 변경했습니다." };
+  }
+
+  const { error } = await guard.supabase.auth.resetPasswordForEmail(email);
 
   if (error) {
     return { ok: false, message: error.message };
   }
 
-  return { ok: true, message: "비밀번호를 변경했습니다." };
+  return {
+    ok: true,
+    message: "비밀번호 재설정 메일을 발송했습니다. 사용자가 메일 링크에서 새 비밀번호를 설정하면 됩니다.",
+  };
 }

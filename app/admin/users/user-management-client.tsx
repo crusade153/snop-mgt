@@ -9,6 +9,7 @@ import {
   KeyRound,
   Mail,
   RefreshCw,
+  Send,
   ShieldCheck,
   UserRound,
 } from "lucide-react";
@@ -29,6 +30,7 @@ export type ManagedUser = {
 type Props = {
   users: ManagedUser[];
   configError?: string;
+  hasServiceRole: boolean;
 };
 
 const statusLabels: Record<string, string> = {
@@ -57,7 +59,11 @@ function formatDate(value: string | null) {
   }).format(new Date(value));
 }
 
-export default function UserManagementClient({ users, configError }: Props) {
+export default function UserManagementClient({
+  users,
+  configError,
+  hasServiceRole,
+}: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
@@ -85,14 +91,14 @@ export default function UserManagementClient({ users, configError }: Props) {
     });
   };
 
-  const runPasswordChange = (userId: string) => {
-    const password = passwords[userId] ?? "";
+  const runPasswordChange = (user: ManagedUser) => {
+    const password = passwords[user.id] ?? "";
     setMessage(null);
     startTransition(async () => {
-      const result = await updateUserPassword(userId, password);
+      const result = await updateUserPassword(user.id, user.email, password);
       setMessage(result.message);
       if (result.ok) {
-        setPasswords((current) => ({ ...current, [userId]: "" }));
+        setPasswords((current) => ({ ...current, [user.id]: "" }));
       }
     });
   };
@@ -107,7 +113,7 @@ export default function UserManagementClient({ users, configError }: Props) {
           </div>
           <h1 className="mt-2 text-2xl font-bold text-neutral-950">회원관리</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            가입 승인, 계정 중지, 비밀번호 변경을 한 화면에서 처리합니다.
+            가입 승인과 계정 중지는 role/status 기준으로 처리합니다.
           </p>
         </div>
         <button
@@ -119,6 +125,13 @@ export default function UserManagementClient({ users, configError }: Props) {
           새로고침
         </button>
       </div>
+
+      {!hasServiceRole && (
+        <div className="rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          service role 키 없이 실행 중입니다. 회원 권한 관리는 profiles 테이블 기준으로 처리하고,
+          비밀번호는 직접 변경 대신 재설정 메일을 발송합니다.
+        </div>
+      )}
 
       {configError && (
         <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -144,11 +157,11 @@ export default function UserManagementClient({ users, configError }: Props) {
             <thead className="bg-neutral-50 text-xs font-bold uppercase tracking-wide text-neutral-500">
               <tr>
                 <th className="px-4 py-3">회원</th>
-                <th className="px-4 py-3">상태</th>
+                <th className="px-4 py-3">권한/상태</th>
                 <th className="px-4 py-3">가입일</th>
                 <th className="px-4 py-3">최근 로그인</th>
                 <th className="px-4 py-3">승인 관리</th>
-                <th className="px-4 py-3">비밀번호 변경</th>
+                <th className="px-4 py-3">비밀번호</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
@@ -179,6 +192,9 @@ export default function UserManagementClient({ users, configError }: Props) {
                         {user.status === "active" ? <CheckCircle2 size={13} /> : <Clock3 size={13} />}
                         {statusLabels[user.status] ?? user.status}
                       </span>
+                      <div className="text-xs font-bold text-neutral-500">
+                        role: {user.role || "user"}
+                      </div>
                       {user.isAdmin && (
                         <div className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-xs font-bold text-red-700">
                           <ShieldCheck size={13} />
@@ -220,30 +236,42 @@ export default function UserManagementClient({ users, configError }: Props) {
                     </div>
                   </td>
                   <td className="px-4 py-4">
-                    <div className="flex max-w-[320px] gap-2">
-                      <input
-                        type="password"
-                        minLength={8}
-                        value={passwords[user.id] ?? ""}
-                        onChange={(event) =>
-                          setPasswords((current) => ({
-                            ...current,
-                            [user.id]: event.target.value,
-                          }))
-                        }
-                        placeholder="새 비밀번호 8자 이상"
-                        className="h-9 min-w-0 flex-1 rounded border border-neutral-300 px-3 text-xs outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
-                      />
+                    {hasServiceRole ? (
+                      <div className="flex max-w-[320px] gap-2">
+                        <input
+                          type="password"
+                          minLength={8}
+                          value={passwords[user.id] ?? ""}
+                          onChange={(event) =>
+                            setPasswords((current) => ({
+                              ...current,
+                              [user.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="새 비밀번호 8자 이상"
+                          className="h-9 min-w-0 flex-1 rounded border border-neutral-300 px-3 text-xs outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                        />
+                        <button
+                          type="button"
+                          disabled={isPending || (passwords[user.id] ?? "").length < 8}
+                          onClick={() => runPasswordChange(user)}
+                          className="inline-flex h-9 items-center gap-1.5 rounded bg-red-600 px-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-neutral-300"
+                        >
+                          <KeyRound size={14} />
+                          변경
+                        </button>
+                      </div>
+                    ) : (
                       <button
                         type="button"
-                        disabled={isPending || (passwords[user.id] ?? "").length < 8}
-                        onClick={() => runPasswordChange(user.id)}
+                        disabled={isPending || !user.email || user.email === "-"}
+                        onClick={() => runPasswordChange(user)}
                         className="inline-flex h-9 items-center gap-1.5 rounded bg-red-600 px-3 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-neutral-300"
                       >
-                        <KeyRound size={14} />
-                        변경
+                        <Send size={14} />
+                        재설정 메일
                       </button>
-                    </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -266,7 +294,9 @@ function SummaryItem({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded border border-neutral-200 bg-white p-4">
       <div className="text-sm font-medium text-neutral-500">{label}</div>
-      <div className="mt-2 text-2xl font-bold text-neutral-950">{value.toLocaleString("ko-KR")}</div>
+      <div className="mt-2 text-2xl font-bold text-neutral-950">
+        {value.toLocaleString("ko-KR")}
+      </div>
     </div>
   );
 }

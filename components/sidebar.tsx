@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
@@ -7,7 +8,7 @@ import {
   LayoutDashboard, Truck, ClipboardList, FileText,
   Package, Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
-  Sun, X, Star
+  Sun, X, Star, UserCog
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 
@@ -29,6 +30,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { mobileMenuOpen, setMobileMenuOpen } = useUiStore();
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -44,6 +46,27 @@ export default function Sidebar() {
   const handleNavClick = () => {
     setMobileMenuOpen(false);
   };
+
+  useEffect(() => {
+    let active = true;
+
+    fetch('/api/admin/status', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : { isAdmin: false }))
+      .then((data) => {
+        if (active) setIsAdmin(Boolean(data.isAdmin));
+      })
+      .catch(() => {
+        if (active) setIsAdmin(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const visibleMenuItems = isAdmin
+    ? [...menuItems, { name: '회원관리', href: '/admin/users', icon: UserCog }]
+    : menuItems;
 
   const sidebarContent = (
     <aside className="flex flex-col w-[240px] h-full bg-[#FAFAFA] border-r border-neutral-200">
@@ -68,7 +91,7 @@ export default function Sidebar() {
 
       <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
         <div className="px-3 py-2 text-xs font-bold text-neutral-500 uppercase tracking-wider">Menu</div>
-        {menuItems.map((item) => {
+        {visibleMenuItems.map((item) => {
           const isActive = pathname === item.href;
           const Icon = item.icon;
           return (

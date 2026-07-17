@@ -202,6 +202,50 @@ async function getKpiTrendUncached() {
   }
 }
 
+/**
+ * 청구(매출) 기준 매출 조회 — V_SD_SO1 (FKDAT 청구일 기준)
+ * 대시보드 "납품 매출"(SD_ZASSDDV0020, VDATU 납품요청일 기준)과 병행 표시하기 위한 지표.
+ * 사용자가 대조하는 V_SD_SO1 값과 정확히 일치시키기 위해 raw SUM(NETWR)을 그대로 합산한다.
+ */
+export async function getBillingRevenue(startDate: string, endDate: string) {
+  if (!startDate || !endDate) return { success: false, message: "날짜 정보가 누락되었습니다." };
+
+  const s = startDate.replace(/-/g, '');
+  const e = endDate.replace(/-/g, '');
+
+  return unstable_cache(
+    async () => getBillingRevenueUncached(s, e),
+    [`billing-revenue-v1-${s}-${e}`],
+    { revalidate: 600, tags: ['report-data'] }
+  )();
+}
+
+async function getBillingRevenueUncached(s: string, e: string) {
+  const query = `
+    SELECT VTWEG, ROUND(SUM(NETWR)) AS netwr
+    FROM \`harimfood-361004.harim_sap_bi_user.V_SD_SO1\`
+    WHERE FKDAT BETWEEN '${s}' AND '${e}'
+      AND MATNR BETWEEN '50000000' AND '69999999'
+    GROUP BY VTWEG
+  `;
+
+  try {
+    const [rows] = await bigqueryClient.query({ query });
+    let domestic = 0; // VTWEG '10' 내수
+    let exportSales = 0; // VTWEG '20' 수출
+    let total = 0;
+    (rows as any[]).forEach((r) => {
+      const amt = Number(r.netwr) || 0;
+      total += amt;
+      if (String(r.VTWEG) === '10') domestic += amt;
+      else if (String(r.VTWEG) === '20') exportSales += amt;
+    });
+    return { success: true, data: { total, domestic, export: exportSales } };
+  } catch (e: any) {
+    return { success: false, message: e.message };
+  }
+}
+
 export async function getDashboardData(startDate: string, endDate: string) {
   if (!startDate || !endDate) return { success: false, message: "날짜 정보가 누락되었습니다." };
 

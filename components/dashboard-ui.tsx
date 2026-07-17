@@ -7,8 +7,9 @@ import { Filter, HelpCircle, Star, TrendingUp, TrendingDown } from 'lucide-react
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
 import { useFavorites } from '@/hooks/use-favorites';
-import { getKpiTrend } from '@/actions/dashboard-actions';
+import { getKpiTrend, getBillingRevenue } from '@/actions/dashboard-actions';
 import { useQuery } from '@tanstack/react-query';
+import { useDateStore } from '@/store/date-store';
 
 interface Props {
   initialData: DashboardAnalysis | null;
@@ -29,7 +30,19 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
     },
     staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: false,
-  }); 
+  });
+
+  // 청구(매출) 기준 매출 — V_SD_SO1(FKDAT 청구일 기준). 선택 기간에 연동.
+  const { startDate, endDate } = useDateStore();
+  const { data: billingData } = useQuery({
+    queryKey: ['billing-revenue', startDate, endDate],
+    queryFn: async () => {
+      const res = await getBillingRevenue(startDate, endDate);
+      return res.success ? res.data : null;
+    },
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+  });
 
   if (isLoading) return (
     <div className="flex items-center justify-center h-[calc(100vh-100px)]">
@@ -100,7 +113,7 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       </div>
 
       {/* 2. KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
         <KpiCard
           title={favoritesOnly ? "즐겨찾기 납품 매출" : "납품 매출"}
           value={Math.round(displayKpis.productSales / 1000000)}
@@ -108,6 +121,18 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
           type="blue"
           sparkline={favoritesOnly ? undefined : trendData?.sparkline}
           changeRate={favoritesOnly ? undefined : trendData?.changeRate}
+          tooltip="납품요청일(VDATU) 기준 · 청구매출과 기준일이 달라 차이가 날 수 있음"
+        />
+        <KpiCard
+          title="청구 매출 (V_SD_SO1)"
+          value={billingData ? Math.round(billingData.total / 1000000) : 0}
+          unit="백만원"
+          type="blue"
+          tooltip={
+            billingData
+              ? `청구일(FKDAT) 기준 · 내수 ${Math.round(billingData.domestic / 1000000).toLocaleString()} / 수출 ${Math.round(billingData.export / 1000000).toLocaleString()} (백만원)`
+              : "청구일(FKDAT) 기준 실매출"
+          }
         />
         <KpiCard title="상품 매출" value={Math.round(displayKpis.merchandiseSales / 1000000)} unit="백만원" type="neutral" />
         <KpiCard

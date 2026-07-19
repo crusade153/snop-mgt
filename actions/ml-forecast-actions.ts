@@ -64,6 +64,10 @@ async function fetchSchema(): Promise<TableMeta[]> {
   return Array.from(byTable.values());
 }
 
+const fetchSchemaCached = unstable_cache(fetchSchema, ['ml-forecast-schema'], {
+  revalidate: 600,
+});
+
 function detectMapping(tables: TableMeta[]): Mapping | null {
   let best: { score: number; mapping: Mapping } | null = null;
 
@@ -150,7 +154,7 @@ export async function testNeonConnection() {
     };
   }
   try {
-    const tables = await fetchSchema();
+    const tables = await fetchSchemaCached();
     const mapping = resolveMapping(tables);
     return { configured: true, connected: true, tables, mapping, error: null as string | null };
   } catch (error: any) {
@@ -197,16 +201,15 @@ async function fetchPredictions(mapping: Mapping) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  실제 매출 로드 (BigQuery, 월별 · MATNR)
 // ═══════════════════════════════════════════════════════════════════════════
-async function fetchActuals(matnrs: string[], startYm: string, endYm: string) {
+async function fetchActuals(matnrs: string[], startDate: string, endDate: string) {
   if (matnrs.length === 0) {
     return {
       actualByProduct: new Map<string, Map<string, number>>(),
       infoByProduct: new Map<string, ProductInfo>(),
-      dataAsOf: null as string | null,
     };
   }
-  const sDate = `${startYm.replace('-', '')}01`;
-  const eDate = `${endYm.replace('-', '')}31`;
+  const sDate = startDate.replaceAll('-', '');
+  const eDate = endDate.replaceAll('-', '');
 
   const query = `
     SELECT
@@ -219,27 +222,11 @@ async function fetchActuals(matnrs: string[], startYm: string, endYm: string) {
     FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS S
     LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON S.MATNR = M.MATNR
     WHERE S.MATNR IN UNNEST(@matnrs)
-      AND S.VDATU BETWEEN @sDate AND @eDate
+      AND S.VDATU >= @sDate
+      AND S.VDATU < @eDate
     GROUP BY S.MATNR, month_key
   `;
-
-  // 데이터 기준일(가장 최근 납품일) — 진행 중인 달의 안분 계산에 사용
-  const asOfQuery = `
-    SELECT MAX(S.VDATU) AS max_vdatu
-    FROM \`harimfood-361004.harim_sap_bi.SD_ZASSDDV0020\` AS S
-    WHERE S.MATNR IN UNNEST(@matnrs)
-      AND S.VDATU BETWEEN @sDate AND @eDate
-  `;
-
-  const [[rows], [asOfRows]] = await Promise.all([
-    bigqueryClient.query({ query, params: { matnrs, sDate, eDate } }),
-    bigqueryClient.query({ query: asOfQuery, params: { matnrs, sDate, eDate } }),
-  ]);
-
-  const maxVdatu = (asOfRows as any[])[0]?.max_vdatu as string | undefined;
-  const dataAsOf = maxVdatu && maxVdatu.length === 8
-    ? `${maxVdatu.slice(0, 4)}-${maxVdatu.slice(4, 6)}-${maxVdatu.slice(6, 8)}`
-    : null;
+  const [rows] = await bigqueryClient.query({ query, params: { matnrs, sDate, eDate } });
 
   const actualByProduct = new Map<string, Map<string, number>>();
   const infoByProduct = new Map<string, ProductInfo>();
@@ -258,7 +245,7 @@ async function fetchActuals(matnrs: string[], startYm: string, endYm: string) {
       });
     }
   }
-  return { actualByProduct, infoByProduct, dataAsOf };
+  return { actualByProduct, infoByProduct };
 }
 
 // ─── 월 범위 유틸 ──────────────────────────────────────────────────────────
@@ -274,42 +261,47 @@ function monthRange(start: string, end: string): string[] {
   return out;
 }
 
-function currentMonth() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
 function daysInMonth(ym: string): number {
   const [y, m] = ym.split('-').map(Number);
   return new Date(y, m, 0).getDate();
 }
 
+function parseDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function formatMonth(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthCoverage(ym: string, startDate: string, endDate: string) {
+  const [year, month] = ym.split('-').map(Number);
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEndExclusive = new Date(Date.UTC(year, month, 1));
+  const rangeStart = parseDate(startDate);
+  const rangeEndExclusive = parseDate(endDate);
+  const coveredStart = Math.max(monthStart.getTime(), rangeStart.getTime());
+  const coveredEnd = Math.min(monthEndExclusive.getTime(), rangeEndExclusive.getTime());
+  const elapsedDays = Math.max(0, Math.round((coveredEnd - coveredStart) / 86_400_000));
+  const totalDays = daysInMonth(ym);
+  return { elapsedDays, totalDays, fraction: Math.min(1, elapsedDays / totalDays) };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  비교 데이터 빌드
 // ═══════════════════════════════════════════════════════════════════════════
-async function buildComparison(mapping: Mapping) {
+async function buildComparison(mapping: Mapping, startDate: string, endDate: string) {
   const predByProduct = await fetchPredictions(mapping);
   const matnrs = Array.from(predByProduct.keys());
   if (matnrs.length === 0) return { success: true, data: [], mapping };
 
-  // 예측이 걸쳐있는 전체 월 범위
-  let minM = '9999-99';
-  let maxM = '0000-00';
-  for (const mm of predByProduct.values()) {
-    for (const month of mm.keys()) {
-      if (month < minM) minM = month;
-      if (month > maxM) maxM = month;
-    }
-  }
-
-  const { actualByProduct, infoByProduct, dataAsOf } = await fetchActuals(matnrs, minM, maxM);
-  const nowM = currentMonth();
-
-  // 데이터 기준일(진행 중인 달과 경과일). dataAsOf 없으면 오늘 기준.
-  const asOfMonth = dataAsOf ? dataAsOf.slice(0, 7) : nowM;
-  const asOfDay = dataAsOf ? Number(dataAsOf.slice(8, 10)) : new Date().getDate();
-  const asOfDim = daysInMonth(asOfMonth);
-  const asOfFraction = Math.min(1, asOfDay / asOfDim); // 진행 중인 달의 경과 비율
+  const startMonth = startDate.slice(0, 7);
+  const endExclusiveDate = parseDate(endDate);
+  endExclusiveDate.setUTCDate(endExclusiveDate.getUTCDate() - 1);
+  const comparisonMonth = formatMonth(endExclusiveDate);
+  const comparisonMonths = monthRange(startMonth, comparisonMonth);
+  const { actualByProduct, infoByProduct } = await fetchActuals(matnrs, startDate, endDate);
 
   const results = matnrs.map((matnr) => {
     const predMap = predByProduct.get(matnr)!;
@@ -318,25 +310,18 @@ async function buildComparison(mapping: Mapping) {
     // ML 예측은 '식' 단위 → EA(기본단위)로 환산 (입수 N으로 나눔)
     const upe = info.unitsPerEa || 1;
 
-    // 이 제품의 예측 월 범위로 시계열 구성
-    let pMin = '9999-99';
-    let pMax = '0000-00';
-    for (const month of predMap.keys()) {
-      if (month < pMin) pMin = month;
-      if (month > pMax) pMax = month;
-    }
-    const months = monthRange(pMin, pMax);
+    // 상단 필터와 겹치는 월만 검증합니다. 종료일은 완료되지 않은 당일이므로 비교에서 제외합니다.
+    const months = comparisonMonths;
 
     // 월 총 예측(EA 환산, 한 달 전체 예상 수량)
     const predictedFull = months.map((m) => (predMap.has(m) ? Math.round(predMap.get(m)! / upe) : null));
-    // 비교용 예측: 진행 중인 달(asOfMonth)은 경과 비율만큼 안분하여 부분 실적과 공정 비교
+    // 비교용 예측: 필터에 포함된 완료 일수만큼 월 예측을 안분합니다.
     const predicted = months.map((m, i) => {
       const pf = predictedFull[i];
       if (pf === null) return null;
-      return m === asOfMonth ? Math.round(pf * asOfFraction) : pf;
+      return Math.round(pf * monthCoverage(m, startDate, endDate).fraction);
     });
-    // 실제값: 데이터 기준월 이하만 표시(그 이후는 아직 실적 없음)
-    const actual = months.map((m) => (m <= asOfMonth && actualMap.has(m) ? Math.round(actualMap.get(m)!) : null));
+    const actual = months.map((m) => (actualMap.has(m) ? Math.round(actualMap.get(m)!) : null));
 
     // 정확도 지표: 실제와 (안분)예측이 모두 있고 실제>0 인 월
     let sumApe = 0;
@@ -356,14 +341,15 @@ async function buildComparison(mapping: Mapping) {
     const accuracy = mape !== null ? Math.max(0, Math.round((100 - mape) * 10) / 10) : null;
 
     // 진행 중인 달 정보 (월 총 예상 vs 현재까지 실적 vs 안분 예측)
-    const asOfIdx = months.indexOf(asOfMonth);
+    const asOfIdx = months.indexOf(comparisonMonth);
+    const coverage = monthCoverage(comparisonMonth, startDate, endDate);
     const inProgress =
       asOfIdx >= 0 && predictedFull[asOfIdx] !== null
         ? {
-            month: asOfMonth,
-            elapsedDays: asOfDay,
-            daysInMonth: asOfDim,
-            fraction: asOfFraction,
+            month: comparisonMonth,
+            elapsedDays: coverage.elapsedDays,
+            daysInMonth: coverage.totalDays,
+            fraction: coverage.fraction,
             actualToDate: actual[asOfIdx],
             proratedPredicted: predicted[asOfIdx],
             fullPredicted: predictedFull[asOfIdx],
@@ -371,9 +357,9 @@ async function buildComparison(mapping: Mapping) {
         : null;
 
     // 다음 달 예측(월 총) — 데이터 기준월 이후 첫 예측 월
-    const nextIdx = months.findIndex((m) => m > asOfMonth);
-    const nextForecast = nextIdx >= 0 ? predictedFull[nextIdx] : null;
-    const nextForecastMonth = nextIdx >= 0 ? months[nextIdx] : null;
+    const nextForecastMonth = Array.from(predMap.keys()).sort().find((m) => m > comparisonMonth) ?? null;
+    const nextForecast = nextForecastMonth ? Math.round(predMap.get(nextForecastMonth)! / upe) : null;
+    const periodPredicted = predicted.reduce<number>((sum, value) => sum + (value ?? 0), 0);
 
     return {
       info: { id: matnr, name: info.name, unit: info.unit, umrezBox: info.umrezBox, unitsPerEa: upe },
@@ -382,27 +368,30 @@ async function buildComparison(mapping: Mapping) {
       predicted,
       predictedFull,
       inProgress,
-      metrics: { mape, bias, accuracy, nComparable: n, nextForecast, nextForecastMonth },
+      metrics: { mape, bias, accuracy, nComparable: n, nextForecast, nextForecastMonth, periodPredicted },
     };
   });
 
-  // 비교 가능(정확도 산출됨) 항목 우선, 그 다음 정확도 낮은 순(개선 필요) 정렬
+  // 검증 대상 목록은 선택 기간의 비교 예측치가 큰 품목부터 보여줍니다.
   results.sort((a, b) => {
-    const an = a.metrics.nComparable, bn = b.metrics.nComparable;
-    if ((an > 0) !== (bn > 0)) return bn - an;
-    return (a.metrics.accuracy ?? -1) - (b.metrics.accuracy ?? -1);
+    const byPrediction = b.metrics.periodPredicted - a.metrics.periodPredicted;
+    if (byPrediction !== 0) return byPrediction;
+    return (b.metrics.accuracy ?? -1) - (a.metrics.accuracy ?? -1);
   });
 
-  return { success: true, data: results, mapping, dataAsOf };
+  return { success: true, data: results, mapping, dataAsOf: endDate };
 }
 
-export async function getMlComparison(searchTerm?: string) {
+export async function getMlComparison(searchTerm = '', startDate?: string, endDate?: string) {
   const term = (searchTerm || '').trim().toLowerCase();
   try {
+    if (!startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate >= endDate) {
+      return { success: false, data: [], error: '조회 시작일은 종료일보다 앞서야 합니다.', mapping: null as Mapping | null, dataAsOf: null as string | null };
+    }
     if (!isNeonConfigured()) {
       return { success: false, data: [], error: 'NEON_DATABASE_URL 미설정', mapping: null as Mapping | null, dataAsOf: null as string | null };
     }
-    const tables = await fetchSchema();
+    const tables = await fetchSchemaCached();
     const mapping = resolveMapping(tables);
     if (!mapping) {
       return {
@@ -415,8 +404,8 @@ export async function getMlComparison(searchTerm?: string) {
     }
 
     const built = await unstable_cache(
-      async () => buildComparison(mapping),
-      ['ml-comparison-v3-prorate', mapping.schema, mapping.table, mapping.matnrCol, mapping.monthCol, mapping.predictCol],
+      async () => buildComparison(mapping, startDate, endDate),
+      ['ml-comparison-v4-filter-range', mapping.schema, mapping.table, mapping.matnrCol, mapping.monthCol, mapping.predictCol, startDate, endDate],
       { revalidate: 600, tags: ['report-data'] }
     )();
 

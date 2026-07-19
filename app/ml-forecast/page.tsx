@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getMlComparison, testNeonConnection } from '@/actions/ml-forecast-actions';
 import CanvasCompareChart from '@/components/charts/canvas-compare-chart';
 import {
-  RefreshCw, Search, Filter, Database, CheckCircle2, XCircle,
+  RefreshCw, Search, Filter, Database, XCircle,
   Target, TrendingUp, TrendingDown, ChevronLeft, ChevronRight, AlertCircle,
   Info, Brain, CalendarDays, CalendarClock,
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
+import { useDateStore } from '@/store/date-store';
 import { useFavorites } from '@/hooks/use-favorites';
 
 type Metrics = {
@@ -18,6 +19,7 @@ type Metrics = {
   nComparable: number;
   nextForecast: number | null;
   nextForecastMonth: string | null;
+  periodPredicted: number;
 };
 type InProgress = {
   month: string;
@@ -64,6 +66,7 @@ function InfoTip({ title, children, align = 'right' }: { title: string; children
 
 export default function MlForecastPage() {
   const { unitMode, favoritesOnly } = useUiStore();
+  const { startDate, endDate } = useDateStore();
   const { isFavorite } = useFavorites();
 
   const [items, setItems] = useState<Item[]>([]);
@@ -78,20 +81,10 @@ export default function MlForecastPage() {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const checkConnection = async () => {
-    setChecking(true);
-    setError(null);
-    const res = await testNeonConnection();
-    setConn(res);
-    setChecking(false);
-    if (res.connected && res.mapping) load('');
-    else if (res.error) setError(res.error);
-  };
-
-  const load = async (term: string) => {
+  const load = useCallback(async (term: string) => {
     setLoading(true);
     setError(null);
-    const res = await getMlComparison(term);
+    const res = await getMlComparison(term, startDate, endDate);
     if (res.success) {
       const data = (res.data || []) as Item[];
       setItems(data);
@@ -104,9 +97,21 @@ export default function MlForecastPage() {
       setError(res.error || '데이터를 불러오지 못했습니다.');
     }
     setLoading(false);
-  };
+  }, [startDate, endDate]);
 
-  useEffect(() => { checkConnection(); }, []);
+  const checkConnection = useCallback(async () => {
+    setChecking(true);
+    setError(null);
+    const res = await testNeonConnection();
+    setConn(res);
+    setChecking(false);
+    if (res.error) setError(res.error);
+  }, []);
+
+  useEffect(() => { checkConnection(); }, [checkConnection]);
+  useEffect(() => {
+    if (conn?.connected && conn?.mapping) load('');
+  }, [conn?.connected, conn?.mapping, load]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter') load(searchTerm); };
 
@@ -160,16 +165,18 @@ export default function MlForecastPage() {
         <div className="flex items-center gap-2">
           {dataAsOf && !notReady && (
             <span className="hidden md:inline-flex items-center gap-1 text-xs text-neutral-500 bg-neutral-100 px-2.5 py-1.5 rounded-lg">
-              <CalendarClock size={13} /> 실적 기준일 {dataAsOf}
+              <CalendarClock size={13} /> 비교 기준일 {dataAsOf} 직전까지
             </span>
           )}
-          <button
-            onClick={checkConnection}
-            disabled={checking}
-            className="flex items-center gap-2 px-3 py-2 bg-white border border-neutral-300 text-neutral-700 rounded-lg text-sm font-bold hover:bg-neutral-50 transition-colors disabled:opacity-50"
-          >
-            <Database size={14} /> {checking ? '조회 중...' : '연결 & 스키마 조회'}
-          </button>
+          {notReady && (
+            <button
+              onClick={checkConnection}
+              disabled={checking}
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-neutral-300 text-neutral-700 rounded-lg text-sm font-bold hover:bg-neutral-50 transition-colors disabled:opacity-50"
+            >
+              <Database size={14} /> {checking ? '확인 중...' : '연결 확인'}
+            </button>
+          )}
           {!notReady && (
             <button
               onClick={() => load(searchTerm)}
@@ -182,22 +189,11 @@ export default function MlForecastPage() {
       </div>
 
       {/* 연결 상태 배너 */}
-      {conn && (
+      {conn && !conn.connected && (
         <div className={`mb-4 px-4 py-3 rounded-lg border text-sm flex items-start gap-2 ${conn.connected ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
-          {conn.connected ? <CheckCircle2 size={18} className="shrink-0 mt-0.5" /> : <XCircle size={18} className="shrink-0 mt-0.5" />}
+          <XCircle size={18} className="shrink-0 mt-0.5" />
           <div className="flex-1">
-            {conn.connected ? (
-              conn.mapping ? (
-                <span>
-                  Neon 연결됨 · 감지된 예측 테이블 <code className="font-mono bg-white/60 px-1.5 py-0.5 rounded">{conn.mapping.schema}.{conn.mapping.table}</code>
-                  {' '}(MATNR=<b>{conn.mapping.matnrCol}</b>, 월=<b>{conn.mapping.monthCol}</b>, 예측=<b>{conn.mapping.predictCol}</b>)
-                </span>
-              ) : (
-                <span>Neon 연결됨. 그러나 예측 테이블(MATNR·월·예측값 컬럼)을 자동 감지하지 못했습니다. 아래 테이블 목록을 확인하세요.</span>
-              )
-            ) : (
-              <span>{conn.error}</span>
-            )}
+            <span>{conn.error}</span>
           </div>
         </div>
       )}
@@ -264,7 +260,18 @@ export default function MlForecastPage() {
         </div>
       ) : (
         // ─── 비교 화면 ──────────────────────────────────────────────────────
-        <div className="flex gap-6 flex-1 overflow-hidden">
+        <div className="flex flex-col gap-4 flex-1 overflow-hidden">
+          <div className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <div className="flex items-center gap-2 font-bold"><Brain size={16} /> ML 예측은 이렇게 비교해요</div>
+            <div className="mt-1.5 text-xs leading-relaxed text-blue-800">
+              과거 판매 흐름을 배운 ML이 <b>한 달 예상 수량</b>을 만들어요. 아직 지나지 않은 날은 빼고,
+              <span className="mx-1 rounded bg-white/80 px-1.5 py-0.5 font-mono font-semibold">비교 예측 = 한 달 예측 × 지난 날 ÷ 한 달 날짜</span>
+              로 맞춘 뒤 <span className="rounded bg-white/80 px-1.5 py-0.5 font-mono font-semibold">정확도 = 100 − 오차율</span>로 점수를 내요.
+              {ip && <span className="ml-1 font-semibold">현재 필터는 {ip.elapsedDays}/{ip.daysInMonth}만 비교합니다.</span>}
+            </div>
+          </div>
+
+          <div className="flex gap-6 flex-1 overflow-hidden">
           {/* 좌측 리스트 */}
           <div className="w-[340px] flex flex-col bg-white border border-neutral-200 rounded-xl shadow-sm">
             <div className="p-4 border-b border-neutral-200 bg-neutral-50 rounded-t-xl space-y-3">
@@ -304,8 +311,9 @@ export default function MlForecastPage() {
                       <div className="shrink-0 text-right">
                         {acc !== null ? (
                           <>
-                            <div className={`text-sm font-bold ${accuracyColor(acc)}`}>{acc}%</div>
-                            <div className="text-[9px] text-neutral-400">정확도</div>
+                            <div className="text-sm font-bold text-neutral-800">{item.metrics.periodPredicted.toLocaleString()}</div>
+                            <div className="text-[9px] text-neutral-400">비교 예측</div>
+                            <div className={`mt-1 text-[11px] font-bold ${accuracyColor(acc)}`}>정확도 {acc}%</div>
                           </>
                         ) : (
                           <div className="text-[10px] text-neutral-400">실적없음</div>
@@ -472,6 +480,7 @@ export default function MlForecastPage() {
             ) : (
               <div className="flex items-center justify-center h-full text-neutral-400">좌측 목록에서 검증할 품목을 선택하세요.</div>
             )}
+          </div>
           </div>
         </div>
       )}

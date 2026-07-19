@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Truck, ClipboardList, FileText,
   Package, Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
-  Sun, X, Star, UserCog
+  Sun, X, Star, UserCog, Bot
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 
@@ -23,6 +23,7 @@ const menuItems = [
   { name: '재고 분석', href: '/inventory', icon: Package },
   { name: '생산 분석', href: '/production', icon: Factory },
   { name: '수요 예측', href: '/forecast', icon: BrainCircuit },
+  { name: '머신러닝 예측 검증', href: '/ml-forecast', icon: Bot },
   { name: '시뮬레이션 (ATP)', href: '/simulation', icon: LineChart },
 ];
 

@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Truck, ClipboardList, FileText,
   Package, Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
-  Sun, X, Star, UserCog, Bot
+  Sun, X, Star, UserCog, Bot, Megaphone
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 
@@ -66,7 +66,11 @@ export default function Sidebar() {
   }, []);
 
   const visibleMenuItems = isAdmin
-    ? [...menuItems, { name: '회원관리', href: '/admin/users', icon: UserCog }]
+    ? [
+        ...menuItems,
+        { name: '회원관리', href: '/admin/users', icon: UserCog },
+        { name: '공지관리', href: '/admin/notices', icon: Megaphone },
+      ]
     : menuItems;
 
   const sidebarContent = (

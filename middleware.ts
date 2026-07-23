@@ -52,10 +52,12 @@ export async function middleware(request: NextRequest) {
   // - /unauthorized: 승인 대기 페이지
   // - /auth: 소셜 로그인 등 콜백
   // - /favicon.ico, /_next: 정적 파일 (이미지, 스타일 등)
-  const isPublicPath = 
-    path.startsWith('/login') || 
-    path.startsWith('/reset-password') || 
-    path.startsWith('/unauthorized') || 
+  // - /api/notice: 로그인 못 한 사용자에게 안내 팝업을 띄우기 위한 공개 API
+  const isPublicPath =
+    path.startsWith('/login') ||
+    path.startsWith('/reset-password') ||
+    path.startsWith('/unauthorized') ||
+    path.startsWith('/api/notice') ||
     path.startsWith('/auth') ||
     path.startsWith('/_next') ||
     path.startsWith('/favicon.ico') ||
@@ -77,7 +79,8 @@ export async function middleware(request: NextRequest) {
       .single();
 
     // 승인되지 않은(active가 아닌) 유저가 시스템에 접근하려 할 때
-    if (profile?.status !== 'active' && !isAdminEmail(session.user.email) && !path.startsWith('/unauthorized') && !path.startsWith('/login')) {
+    // (공개 경로는 승인 대기 화면에서 공지를 읽을 수 있도록 그대로 통과시킨다)
+    if (profile?.status !== 'active' && !isAdminEmail(session.user.email) && !isPublicPath) {
       return NextResponse.redirect(new URL('/unauthorized', request.url));
     }
 

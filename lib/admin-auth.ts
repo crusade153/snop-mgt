@@ -56,7 +56,7 @@ export function createAdminSupabaseClient() {
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다. 직접 비밀번호 변경 대신 재설정 메일 발송을 사용할 수 있습니다.",
+      "SUPABASE_SERVICE_ROLE_KEY 환경변수가 필요합니다. Supabase Dashboard → Project Settings → API 에서 service_role 키를 발급받아 .env.local 과 Vercel 환경변수에 등록해주세요.",
     );
   }
 

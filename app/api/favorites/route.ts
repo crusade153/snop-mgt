@@ -27,7 +27,7 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { data, error } = await supabase
-    .from('user_favorites')
+    .from('snop_user_favorites')
     .select('matnr, product_name, created_at')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
   if (!matnr) return NextResponse.json({ error: 'matnr required' }, { status: 400 });
 
   const { error } = await supabase
-    .from('user_favorites')
+    .from('snop_user_favorites')
     .upsert({ user_id: user.id, matnr, product_name }, { onConflict: 'user_id,matnr' });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -63,7 +63,7 @@ export async function DELETE(req: NextRequest) {
   if (!matnr) return NextResponse.json({ error: 'matnr required' }, { status: 400 });
 
   const { error } = await supabase
-    .from('user_favorites')
+    .from('snop_user_favorites')
     .delete()
     .eq('user_id', user.id)
     .eq('matnr', matnr);

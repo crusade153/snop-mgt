@@ -71,9 +71,9 @@ export async function middleware(request: NextRequest) {
 
   // 🚀 3. [로그인 완료] 상태에서의 처리
   if (session) {
-    // 3-1. 승인 여부 체크 (profiles 테이블)
+    // 3-1. 승인 여부 체크 (snop_profiles 테이블)
     const { data: profile } = await supabase
-      .from('profiles')
+      .from('snop_profiles')
       .select('status')
       .eq('id', session.user.id)
       .single();

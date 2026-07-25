@@ -1,4 +1,5 @@
 -- Run once in the Supabase SQL Editor before using /admin/product-code-notifications.
+-- 선행 조건: snop-namespace-migration.sql (관리자 판별 함수 snop_is_admin 을 만든다)
 create table if not exists public.product_code_notifications (
   id uuid primary key default gen_random_uuid(),
   product_code text not null unique,
@@ -34,9 +35,9 @@ grant select, insert on public.product_code_notification_events to authenticated
 do $$
 begin
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'product_code_notifications' and policyname = 'product_code_notifications_admin_all') then
-    create policy product_code_notifications_admin_all on public.product_code_notifications for all using (public.is_profile_admin()) with check (public.is_profile_admin());
+    create policy product_code_notifications_admin_all on public.product_code_notifications for all using (public.snop_is_admin()) with check (public.snop_is_admin());
   end if;
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'product_code_notification_events' and policyname = 'product_code_notification_events_admin_all') then
-    create policy product_code_notification_events_admin_all on public.product_code_notification_events for all using (public.is_profile_admin()) with check (public.is_profile_admin());
+    create policy product_code_notification_events_admin_all on public.product_code_notification_events for all using (public.snop_is_admin()) with check (public.snop_is_admin());
   end if;
 end $$;

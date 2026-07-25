@@ -25,7 +25,7 @@ function isAdminRole(role: string) {
 }
 
 /**
- * auth.users(로그인 이력)와 profiles(이름/팀/로그인 ID)를 합쳐서 보여준다.
+ * auth.users(로그인 이력)와 snop_profiles(이름/팀/로그인 ID)를 합쳐서 보여준다.
  * 계정은 항상 service role 로 생성되므로 두 테이블은 1:1로 대응한다.
  */
 async function getManagedUsers(): Promise<ManagedUser[]> {
@@ -43,7 +43,7 @@ async function getManagedUsers(): Promise<ManagedUser[]> {
 
   if (ids.length) {
     const { data: profiles, error: profilesError } = await admin
-      .from("profiles")
+      .from("snop_profiles")
       .select("*")
       .in("id", ids);
 

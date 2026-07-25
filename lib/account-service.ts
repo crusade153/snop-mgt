@@ -26,7 +26,7 @@ export type AccountResult = {
 
 /**
  * 가입 신청(status: pending)과 관리자 직접 생성(status: active)이 같은 경로를 쓴다.
- * auth 계정을 만든 뒤 profiles insert 가 실패하면 auth 계정을 되돌린다.
+ * auth 계정을 만든 뒤 snop_profiles insert 가 실패하면 auth 계정을 되돌린다.
  */
 export async function createAccount(input: AccountInput): Promise<AccountResult> {
   const fullName = input.fullName?.trim() ?? "";
@@ -83,7 +83,7 @@ export async function createAccount(input: AccountInput): Promise<AccountResult>
 
   const userId = created.user.id;
 
-  const { error: profileError } = await admin.from("profiles").upsert(
+  const { error: profileError } = await admin.from("snop_profiles").upsert(
     {
       id: userId,
       login_id: loginId,

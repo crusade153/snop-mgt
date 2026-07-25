@@ -96,7 +96,7 @@ export async function findProfileByLoginId(loginId: string) {
   const admin = createAdminSupabaseClient();
 
   const { data, error } = await admin
-    .from("profiles")
+    .from("snop_profiles")
     .select(
       "id, login_id, auth_email, company_email, email, full_name, team, role, status, failed_attempts, locked_until",
     )
@@ -112,7 +112,7 @@ export async function isLoginIdTaken(loginId: string) {
   const admin = createAdminSupabaseClient();
 
   const { data, error } = await admin
-    .from("profiles")
+    .from("snop_profiles")
     .select("id")
     .ilike("login_id", normalizeLoginId(loginId))
     .maybeSingle();
@@ -136,7 +136,7 @@ export async function registerFailedAttempt(profileId: string, currentAttempts: 
   const shouldLock = attempts >= MAX_FAILED_ATTEMPTS;
 
   await admin
-    .from("profiles")
+    .from("snop_profiles")
     .update({
       failed_attempts: shouldLock ? 0 : attempts,
       locked_until: shouldLock
@@ -152,7 +152,7 @@ export async function clearFailedAttempts(profileId: string) {
   const admin = createAdminSupabaseClient();
 
   await admin
-    .from("profiles")
+    .from("snop_profiles")
     .update({ failed_attempts: 0, locked_until: null })
     .eq("id", profileId);
 }

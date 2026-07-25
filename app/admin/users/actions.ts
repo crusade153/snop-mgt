@@ -61,7 +61,7 @@ export async function updateUserStatus(
 
   const admin = createAdminSupabaseClient();
   const { error } = await admin
-    .from("profiles")
+    .from("snop_profiles")
     .update({ status, failed_attempts: 0, locked_until: null })
     .eq("id", userId);
 
@@ -96,7 +96,7 @@ export async function updateUserRole(
   }
 
   const admin = createAdminSupabaseClient();
-  const { error } = await admin.from("profiles").update({ role }).eq("id", userId);
+  const { error } = await admin.from("snop_profiles").update({ role }).eq("id", userId);
 
   if (error) return { ok: false, message: error.message };
 
@@ -128,7 +128,7 @@ export async function resetUserPin(
 
   // PIN 재설정은 잠금 해제도 겸한다.
   await admin
-    .from("profiles")
+    .from("snop_profiles")
     .update({ failed_attempts: 0, locked_until: null })
     .eq("id", userId);
 
@@ -144,7 +144,7 @@ export async function unlockUser(userId: string): Promise<ActionResult> {
 
   const admin = createAdminSupabaseClient();
   const { error } = await admin
-    .from("profiles")
+    .from("snop_profiles")
     .update({ failed_attempts: 0, locked_until: null })
     .eq("id", userId);
 
@@ -184,7 +184,7 @@ export async function deleteUserAccount(userId: string): Promise<ActionResult> {
 
   const admin = createAdminSupabaseClient();
 
-  const { error: profileError } = await admin.from("profiles").delete().eq("id", userId);
+  const { error: profileError } = await admin.from("snop_profiles").delete().eq("id", userId);
   if (profileError) return { ok: false, message: profileError.message };
 
   const { error } = await admin.auth.admin.deleteUser(userId);
@@ -194,7 +194,7 @@ export async function deleteUserAccount(userId: string): Promise<ActionResult> {
   if (error) {
     // 이 Supabase 프로젝트의 auth.users 는 다른 대시보드와 공유된다.
     // 그쪽에서 참조 중인 계정은 인증 계정을 지울 수 없지만,
-    // 이 대시보드의 회원 자격(profiles)은 이미 제거됐으므로 목적은 달성된 것이다.
+    // 이 대시보드의 회원 자격(snop_profiles)은 이미 제거됐으므로 목적은 달성된 것이다.
     return {
       ok: true,
       message: `이 대시보드 회원에서 제거했습니다. 다만 이 계정은 다른 대시보드에서 사용 중이라 인증 계정 자체는 남겨뒀습니다. (${error.message})`,

@@ -108,7 +108,7 @@ export async function getAdminContext(): Promise<AdminContext> {
   }
 
   const { data: profile, error: profileError } = await supabase
-    .from("profiles")
+    .from("snop_profiles")
     .select("*")
     .eq("id", user.id)
     .maybeSingle();
@@ -134,6 +134,6 @@ export async function getAdminContext(): Promise<AdminContext> {
     isActive,
     reason: isAdmin
       ? undefined
-      : "관리자 권한이 필요합니다. ADMIN_EMAILS 또는 profiles.role/is_admin 설정을 확인해주세요.",
+      : "관리자 권한이 필요합니다. ADMIN_EMAILS 또는 snop_profiles.role/is_admin 설정을 확인해주세요.",
   };
 }

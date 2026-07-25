@@ -107,7 +107,7 @@ async function seedAdmin() {
     console.log(`✔ 관리자 계정을 생성했습니다: ${ADMIN.authEmail}`);
   }
 
-  const { error: profileError } = await supabase.from("profiles").upsert(
+  const { error: profileError } = await supabase.from("snop_profiles").upsert(
     {
       id: user.id,
       login_id: ADMIN.loginId,

@@ -1,6 +1,23 @@
 import { SapOrder, SapInventory, SapProduction, FbhInventory } from '@/types/sap';
 import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder, ProductionRow } from '@/types/analysis';
 import { differenceInCalendarDays, parseISO, format, subDays } from 'date-fns';
+import { classifyInventoryStock, getProductionLine } from '@/lib/inventory-classification';
+import type { PriceSource } from '@/lib/ending-inventory-price';
+
+type PlantInventoryAggregate = {
+  totalStock: number;
+  qualityStock: number;
+  stockValue: number;
+  qualityStockValue: number;
+  batches: InventoryBatch[];
+  info: SapInventory;
+};
+
+type FbhInventoryAggregate = {
+  totalStock: number;
+  batches: InventoryBatch[];
+  info: FbhInventory;
+};
 
 const THRESHOLDS = {
   IMMINENT_DAYS: 30, 
@@ -103,7 +120,8 @@ export function analyzeSnopData(
   productionList: SapProduction[],
   fbhList: FbhInventory[],
   startDateStr: string,
-  endDateStr: string
+  endDateStr: string,
+  priceAsOfLabel: string = ''
 ): DashboardAnalysis {
   
   const filterStart = startDateStr.replace(/-/g, '');
@@ -116,20 +134,29 @@ export function analyzeSnopData(
   const date60DaysAgo = format(subDays(today, 60), 'yyyyMMdd');
   const date90DaysAgo = format(subDays(today, 90), 'yyyyMMdd');
 
-  const invAggMap = new Map<string, { totalStock: number, qualityStock: number, batches: InventoryBatch[], info: SapInventory }>();
+  const invAggMap = new Map<string, PlantInventoryAggregate>();
   
   inventoryList.forEach(inv => {
     if (!invAggMap.has(inv.MATNR)) {
-      invAggMap.set(inv.MATNR, { totalStock: 0, qualityStock: 0, batches: [], info: inv });
+      invAggMap.set(inv.MATNR, {
+        totalStock: 0,
+        qualityStock: 0,
+        stockValue: 0,
+        qualityStockValue: 0,
+        batches: [],
+        info: inv,
+      });
     }
     const target = invAggMap.get(inv.MATNR)!;
     target.totalStock += Number(inv.CLABS || 0);
     target.qualityStock += Number(inv.CINSM || 0);
+    target.stockValue += Number(inv.STOCK_VALUE || 0);
+    target.qualityStockValue += Number(inv.QUALITY_STOCK_VALUE || 0);
     
     let rawRate = Number(inv.remain_rate || 0);
     if (Math.abs(rawRate) <= 10) rawRate = rawRate * 100; 
 
-    if (Number(inv.CLABS) > 0) {
+    if (Number(inv.CLABS) > 0 || Number(inv.CINSM) > 0) {
       let expDate = safeExtractDateStr(inv.VFDAT);
       let calcRemainDays = 9999;
       
@@ -151,16 +178,24 @@ export function analyzeSnopData(
 
       target.batches.push({
         quantity: Number(inv.CLABS || 0),
+        qualityQuantity: Number(inv.CINSM || 0),
         expirationDate: expDate,
         remainDays: calcRemainDays,
         remainRate: rawRate, 
         location: inv.LGOBE || 'Plant',
-        source: 'PLANT'
+        source: 'PLANT',
+        werks: inv.WERKS,
+        dispo: inv.DISPO,
+        stockType: classifyInventoryStock(inv.MATNR, inv.DISPO),
+        productionLine: getProductionLine(inv.DISPO),
+        valuationUnitPrice: Number(inv.VALUATION_UNIT_PRICE || 0),
+        stockValue: Number(inv.STOCK_VALUE || 0),
+        priceSource: inv.PRICE_SOURCE || 'UNKNOWN',
       });
     }
   });
 
-  const fbhAggMap = new Map<string, { totalStock: number, batches: InventoryBatch[], info: FbhInventory }>();
+  const fbhAggMap = new Map<string, FbhInventoryAggregate>();
 
   fbhList.forEach(fbh => {
     if (!fbhAggMap.has(fbh.SKU_CD)) {
@@ -194,11 +229,17 @@ export function analyzeSnopData(
     if (qty > 0) {
       target.batches.push({
         quantity: qty,
+        qualityQuantity: 0,
         expirationDate: expDate, 
         remainDays: calcRemainDays,
         remainRate: rate,
         location: 'FBH',
-        source: 'FBH'
+        source: 'FBH',
+        stockType: classifyInventoryStock(fbh.SKU_CD),
+        productionLine: null,
+        valuationUnitPrice: Number(fbh.VALUATION_UNIT_PRICE || 0),
+        stockValue: qty * Number(fbh.VALUATION_UNIT_PRICE || 0),
+        priceSource: fbh.PRICE_SOURCE || 'UNKNOWN',
       });
     }
   });
@@ -419,7 +460,8 @@ export function analyzeSnopData(
     },
     integratedArray,
     fulfillment: { summary: fulfillmentSummary, byCustomer: customerStats },
-    productionList: processedProductionList
+    productionList: processedProductionList,
+    priceAsOfLabel
   };
 }
 
@@ -428,8 +470,8 @@ function initializeItem(
   map: Map<string, IntegratedItem>,
   code: string,
   nameHint: string,
-  invMap: Map<string, { totalStock: number, qualityStock: number, batches: InventoryBatch[], info: SapInventory }>,
-  fbhMap: Map<string, { totalStock: number, batches: InventoryBatch[], info: FbhInventory }>,
+  invMap: Map<string, PlantInventoryAggregate>,
+  fbhMap: Map<string, FbhInventoryAggregate>,
   unit: string,
   umrezBox: number
 ) {
@@ -440,10 +482,61 @@ function initializeItem(
   const fbhStock = fbhData?.totalStock || 0;
   const qualityStock = plantData?.qualityStock || 0;
   const totalStock = plantStock + fbhStock;
+  const plantStockValue = plantData?.stockValue || 0;
+  const qualityStockValue = plantData?.qualityStockValue || 0;
+  const valuationUnitPrice =
+    Number(plantData?.info.VALUATION_UNIT_PRICE || 0) ||
+    Number(fbhData?.info.VALUATION_UNIT_PRICE || 0);
 
   const plantBatches = plantData?.batches || [];
-  const fbhBatches = fbhData?.batches || [];
-  
+  const plantStockTypes = Array.from(new Set(plantBatches.map((batch) => batch.stockType)));
+  const plantDispoCodes = Array.from(
+    new Set(plantBatches.map((batch) => batch.dispo).filter((value): value is string => Boolean(value)))
+  ).sort();
+  const plantProductionLines = Array.from(
+    new Set(
+      plantBatches
+        .map((batch) => batch.productionLine)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  const fallbackStockType = plantStockTypes[0] || classifyInventoryStock(code);
+  const fallbackDispo = plantDispoCodes[0];
+  const fallbackProductionLine = getProductionLine(fallbackDispo);
+  const fbhBatches = (fbhData?.batches || []).map((batch) => ({
+    ...batch,
+    dispo: fallbackDispo,
+    stockType: code.startsWith('6') ? classifyInventoryStock(code) : fallbackStockType,
+    productionLine: fallbackProductionLine,
+  }));
+  const fbhStockValue = fbhBatches.reduce((sum, batch) => sum + batch.stockValue, 0);
+  const stockValue = plantStockValue + fbhStockValue;
+  const stockTypes = Array.from(
+    new Set([...plantStockTypes, ...fbhBatches.map((batch) => batch.stockType)])
+  );
+  const dispoCodes = Array.from(
+    new Set(
+      [...plantDispoCodes, ...fbhBatches.map((batch) => batch.dispo)].filter(
+        (value): value is string => Boolean(value)
+      )
+    )
+  ).sort();
+  const productionLines = Array.from(
+    new Set(
+      [...plantProductionLines, ...fbhBatches.map((batch) => batch.productionLine)].filter(
+        (value): value is string => Boolean(value)
+      )
+    )
+  );
+
+  // 기말재고 단가가 하나라도 붙었으면 금액을 신뢰하고, 전혀 없으면 당월생산으로 본다.
+  const batchPriceSources = [...plantBatches, ...fbhBatches].map((batch) => batch.priceSource);
+  const priceSource: PriceSource = batchPriceSources.includes('ENDING_INVENTORY')
+    ? 'ENDING_INVENTORY'
+    : batchPriceSources.includes('CURRENT_MONTH')
+      ? 'CURRENT_MONTH'
+      : 'UNKNOWN';
+
   const statusBreakdown = { disposed: 0, imminent: 0, critical: 0, healthy: 0, no_expiry: 0 };
   const allBatches = [...plantBatches, ...fbhBatches];
   
@@ -504,6 +597,15 @@ function initializeItem(
       plantStock,      
       fbhStock,        
       qualityStock,
+      stockValue,
+      plantStockValue,
+      fbhStockValue,
+      qualityStockValue,
+      valuationUnitPrice,
+      priceSource,
+      stockTypes,
+      dispoCodes,
+      productionLines,
       usableStock: totalStock,
       plantBatches,
       fbhBatches,

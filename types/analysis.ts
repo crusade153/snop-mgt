@@ -1,13 +1,23 @@
 // types/analysis.ts
 import { SapOrder, SapInventory, SapProduction, FbhInventory } from './sap';
+import { InventoryStockType } from '@/lib/inventory-classification';
+import type { PriceSource } from '@/lib/ending-inventory-price';
 
 export interface InventoryBatch {
   quantity: number;       
+  qualityQuantity: number;
   expirationDate: string; 
   remainDays: number;     
   remainRate: number;     
   location: string;
   source: 'PLANT' | 'FBH';
+  werks?: string;
+  dispo?: string;
+  stockType: InventoryStockType;
+  productionLine: string | null;
+  valuationUnitPrice: number;
+  stockValue: number;
+  priceSource: PriceSource;
 }
 
 export interface UnfulfilledOrder {
@@ -57,6 +67,15 @@ export interface IntegratedItem {
 
     plantStock: number; 
     fbhStock: number;   
+    stockValue: number;
+    plantStockValue: number;
+    fbhStockValue: number;
+    qualityStockValue: number;
+    valuationUnitPrice: number;
+    priceSource: PriceSource;
+    stockTypes: InventoryStockType[];
+    dispoCodes: string[];
+    productionLines: string[];
 
     batches: InventoryBatch[]; 
     
@@ -143,6 +162,8 @@ export interface DashboardAnalysis {
     topCustomers: { name: string; value: number }[];  
   };
   integratedArray: IntegratedItem[];
-  fulfillment: FulfillmentAnalysis; 
-  productionList: ProductionRow[]; 
+  fulfillment: FulfillmentAnalysis;
+  productionList: ProductionRow[];
+  /** 재고금액에 쓰인 기말재고 단가의 기준월 (예: '2026년 6월 기말') */
+  priceAsOfLabel: string;
 }

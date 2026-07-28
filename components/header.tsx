@@ -5,10 +5,21 @@ import { useDateStore } from '@/store/date-store';
 import { useUiStore } from '@/store/ui-store';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFavorites } from '@/hooks/use-favorites';
+import { OnlineUsersBadge } from '@/components/online-users';
 
 export default function Header() {
   const { startDate, endDate, setRange } = useDateStore();
-  const { unitMode, setUnitMode, inventoryViewMode, setInventoryViewMode, setMobileMenuOpen, favoritesOnly, setFavoritesOnly } = useUiStore();
+  const {
+    unitMode,
+    setUnitMode,
+    inventoryViewMode,
+    setInventoryViewMode,
+    setMobileMenuOpen,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    favoritesOnly,
+    setFavoritesOnly,
+  } = useUiStore();
   const queryClient = useQueryClient();
   const { favorites } = useFavorites();
 
@@ -18,20 +29,35 @@ export default function Header() {
   };
 
   return (
-    <header className="fixed top-0 right-0 left-0 lg:left-[240px] h-[60px] z-40 flex items-center justify-between px-4 lg:px-6 bg-white border-b border-neutral-200">
+    <header className={`fixed top-0 right-0 left-0 h-[60px] z-40 flex items-center justify-between px-4 lg:px-6 bg-white border-b border-neutral-200 transition-[left] duration-300 ${
+      sidebarCollapsed ? 'lg:left-0' : 'lg:left-[240px]'
+    }`}>
       <div className="flex items-center gap-3">
         {/* 모바일 햄버거 버튼 */}
         <button
           onClick={() => setMobileMenuOpen(true)}
           className="lg:hidden p-2 rounded hover:bg-neutral-100 text-neutral-600"
+          aria-label="모바일 메뉴 열기"
         >
           <Menu size={20} />
         </button>
+        {sidebarCollapsed && (
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="hidden lg:flex p-2 rounded-md hover:bg-neutral-100 text-neutral-600 transition-colors"
+            aria-label="사이드바 펼치기"
+            title="사이드바 펼치기"
+          >
+            <Menu size={20} />
+          </button>
+        )}
         <h2 className="text-lg font-bold text-neutral-900 hidden sm:block">Biz-Control Tower</h2>
       </div>
 
       <div className="flex items-center gap-4">
-        
+
+        <OnlineUsersBadge />
+
         {/* 재고 뷰 모드 컨트롤러 (플랜트 / 물류센터) */}
         <div className="flex bg-neutral-100 p-1 rounded-lg border border-neutral-200">
             <button

@@ -3,10 +3,22 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
-import { Filter, HelpCircle, Star, TrendingUp, TrendingDown } from 'lucide-react';
+import {
+  AlertTriangle,
+  Building2,
+  ClipboardList,
+  Filter,
+  HelpCircle,
+  PackageCheck,
+  Star,
+  TrendingUp,
+  TrendingDown,
+  Trophy,
+} from 'lucide-react';
 import { DashboardAnalysis, IntegratedItem } from '@/types/analysis';
 import { useUiStore } from '@/store/ui-store';
 import { useFavorites } from '@/hooks/use-favorites';
+import { OnlineUsersPanel } from '@/components/online-users';
 import { getKpiTrend, getBillingRevenue } from '@/actions/dashboard-actions';
 import { useQuery } from '@tanstack/react-query';
 import { useDateStore } from '@/store/date-store';
@@ -104,12 +116,15 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
   return (
     <div className="space-y-6">
       {/* 1. Page Header */}
-      <div className="pb-4 border-b border-neutral-200">
-        <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
-        <p className="text-[12px] text-neutral-700 mt-1">
-          전사 S&OP 핵심 지표 모니터링
-          {favoritesOnly && <span className="ml-2 text-yellow-600 font-bold">— 관심제품 보기 중</span>}
-        </p>
+      <div className="pb-4 border-b border-neutral-200 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div>
+          <h1 className="text-[20px] font-bold text-neutral-900">종합 현황 Dashboard</h1>
+          <p className="text-[12px] text-neutral-700 mt-1">
+            전사 S&OP 핵심 지표 모니터링
+            {favoritesOnly && <span className="ml-2 text-yellow-600 font-bold">— 관심제품 보기 중</span>}
+          </p>
+        </div>
+        <OnlineUsersPanel />
       </div>
 
       {/* 2. KPI Cards */}
@@ -161,16 +176,25 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       {/* 3. Analysis Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <RankingCard
-          title={favoritesOnly ? "⭐ 즐겨찾기 제품 (매출순)" : "🏆 Top 5 베스트 제품 (매출)"}
+          title={
+            <span className="flex items-center gap-2">
+              {favoritesOnly ? <Star size={17} className="text-yellow-500" /> : <Trophy size={17} className="text-amber-500" />}
+              {favoritesOnly ? '즐겨찾기 제품 (매출순)' : 'Top 5 베스트 제품 (매출)'}
+            </span>
+          }
           data={displayTopProducts}
         />
-        <RankingCard title="🏢 Top 5 거래처 (매출)" data={data.salesAnalysis.topCustomers} />
+        <RankingCard
+          title={<span className="flex items-center gap-2"><Building2 size={17} className="text-blue-600" />Top 5 거래처 (매출)</span>}
+          data={data.salesAnalysis.topCustomers}
+        />
 
         {/* 재고 건전성 */}
         <div className="bg-white rounded p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-[16px] font-semibold text-neutral-900">
-              📦 재고 건전성
+            <h2 className="text-[16px] font-semibold text-neutral-900 flex items-center gap-2">
+              <PackageCheck size={17} className="text-emerald-600" />
+              재고 건전성
               {favoritesOnly && <span className="ml-2 text-xs text-yellow-600 font-normal">즐겨찾기 기준</span>}
             </h2>
           </div>
@@ -197,8 +221,9 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
       {/* 5. Table Section */}
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden mt-2">
         <div className="p-5 border-b border-neutral-200 flex justify-between items-center bg-white">
-          <h2 className="text-[16px] font-semibold text-neutral-900">
-            📋 {favoritesOnly ? '관심 제품 현황' : '통합 S&OP 상세 현황 (Top 20 주요 관리 항목)'}
+          <h2 className="text-[16px] font-semibold text-neutral-900 flex items-center gap-2">
+            <ClipboardList size={17} className="text-blue-600" />
+            {favoritesOnly ? '관심 제품 현황' : '통합 S&OP 상세 현황 (Top 20 주요 관리 항목)'}
           </h2>
           <button className="text-xs text-neutral-500 flex items-center gap-1 hover:text-primary-blue">
             <Filter size={12} /> 필터
@@ -302,7 +327,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                           {(item.inventory.statusBreakdown?.disposed || 0) > 0 && (
                             <div className="flex justify-center w-full">
                               <span className="flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 animate-pulse">
-                                🚨 폐기 {disposedQty.value} {disposedQty.unit}
+                                <AlertTriangle size={11} />
+                                폐기 {disposedQty.value} {disposedQty.unit}
                               </span>
                             </div>
                           )}

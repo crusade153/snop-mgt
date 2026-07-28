@@ -8,7 +8,7 @@ import { getDashboardData } from '@/actions/dashboard-actions';
 import { useUrlFilters } from '@/hooks/use-url-filters';
 import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useFavorites } from '@/hooks/use-favorites';
-import { Share2, Star } from 'lucide-react';
+import { Factory, PackageSearch, Share2, Star, TableProperties, Wallet } from 'lucide-react';
 import { 
   Search, Eye, EyeOff, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, BarChart3,
   ChevronLeft, ChevronRight, Download // Download 아이콘 추가
@@ -19,8 +19,16 @@ import { useUiStore } from '@/store/ui-store';
 import { useDateStore } from '@/store/date-store';
 import * as XLSX from 'xlsx'; // xlsx 라이브러리 추가
 import InfoTooltip from '@/components/info-tooltip';
+import InventoryClassificationFilter from '@/components/inventory-classification-filter';
+import {
+  INVENTORY_STOCK_TYPE_LABELS,
+  InventoryStockType,
+  InventoryStockTypeFilter,
+  getProductionLine,
+} from '@/lib/inventory-classification';
+import type { PriceSource } from '@/lib/ending-inventory-price';
 
-type SortKey = 'name' | 'usableStock' | 'wasteStock' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
+type SortKey = 'name' | 'usableStock' | 'wasteStock' | 'stockValue' | 'qualityStock' | 'turnoverDays' | 'bucket_under50' | 'bucket_50_70' | 'bucket_70_75' | 'bucket_75_85' | 'bucket_over85' | 'ads30' | 'ads60' | 'ads90' | 'future';
 type SortDirection = 'asc' | 'desc';
 
 interface SimulatedItem extends IntegratedItem {
@@ -32,7 +40,12 @@ interface SimulatedItem extends IntegratedItem {
     usableStock: number; 
     wasteStock: number;
     qualityStock: number;
-    turnoverDays: number; 
+    stockValue: number;
+    priceSource: PriceSource;
+    turnoverDays: number;
+    stockTypes: InventoryStockType[];
+    dispoCodes: string[];
+    productionLines: string[];
 
     buckets: { 
         under50: number;
@@ -72,6 +85,8 @@ function InventoryPageInner() {
   const currentPage = getIntParam('page', 1);
   const sortKey = (getParam('sort', 'usableStock') || 'usableStock') as SortKey;
   const sortDir = (getParam('dir', 'desc') || 'desc') as SortDirection;
+  const stockType = (getParam('stockType', 'ALL') || 'ALL') as InventoryStockTypeFilter;
+  const productionLine = getParam('line', 'ALL') || 'ALL';
   const sortConfig = { key: sortKey, direction: sortDir };
 
   const [showHiddenStock, setShowHiddenStock] = useState(false);
@@ -81,6 +96,14 @@ function InventoryPageInner() {
 
   const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
   const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
+  const setStockType = (value: InventoryStockTypeFilter) => setParams({
+    stockType: value === 'ALL' ? null : value,
+    page: null,
+  });
+  const setProductionLine = (value: string) => setParams({
+    line: value === 'ALL' ? null : value,
+    page: null,
+  });
   const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
 
   const handleSort = (key: SortKey) => {
@@ -108,7 +131,11 @@ function InventoryPageInner() {
   };
 
   const simulation = useMemo(() => {
-    if (!data) return { all: [], adsSummary: { totalAds30: 0, totalAds60: 0, totalAds90: 0 } };
+    if (!data) return {
+      all: [],
+      adsSummary: { totalAds30: 0, totalAds60: 0, totalAds90: 0 },
+      valueSummary: { totalValue: 0, pricedItemCount: 0, currentMonthItemCount: 0 },
+    };
 
     const targetDate = storeEndDate;
     const productionMap = new Map<string, number>();
@@ -130,7 +157,9 @@ function InventoryPageInner() {
         item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.code.includes(searchTerm);
       const matchesFav = !favoritesOnly || isFavorite(item.code);
-      return hasStock && matchesSearch && matchesFav;
+      const matchesStockType = stockType === 'ALL' || item.inventory.stockTypes.includes(stockType);
+      const matchesProductionLine = productionLine === 'ALL' || item.inventory.dispoCodes.includes(productionLine);
+      return hasStock && matchesSearch && matchesFav && matchesStockType && matchesProductionLine;
     });
 
     let totalAds30 = 0;
@@ -156,6 +185,12 @@ function InventoryPageInner() {
           targetBatches = item.inventory.batches;
       }
 
+      targetBatches = targetBatches.filter((batch) => {
+        const matchesStockType = stockType === 'ALL' || batch.stockType === stockType;
+        const matchesProductionLine = productionLine === 'ALL' || batch.dispo === productionLine;
+        return matchesStockType && matchesProductionLine;
+      });
+
       // ✅ [핵심 로직 수정] 가용재고와 폐기재고 분리 로직 (잔여일수 기준)
       let usableStock = 0;
       let wasteStock = 0;
@@ -171,12 +206,35 @@ function InventoryPageInner() {
           }
       });
 
+      const filteredQualityStock = targetBatches
+        .filter((batch) => batch.source === 'PLANT')
+        .reduce((sum, batch) => sum + batch.qualityQuantity, 0);
+
       if (includeQualityInSim && inventoryViewMode !== 'LOGISTICS') {
-        usableStock += item.inventory.qualityStock;
+        usableStock += filteredQualityStock;
       }
 
       const targetDatePlan = productionMap.get(item.code) || 0;
       const turnoverDays = ads90 > 0 ? usableStock / ads90 : (usableStock > 0 ? 99999 : 0);
+      const stockValue = targetBatches.reduce((sum, batch) => sum + batch.stockValue, 0);
+      // 필터링된 배치 중 하나라도 기말재고 단가가 붙었으면 금액을 표시하고, 없으면 당월생산으로 본다.
+      const batchPriceSources = targetBatches.map((batch) => batch.priceSource);
+      const priceSource: PriceSource = batchPriceSources.includes('ENDING_INVENTORY')
+        ? 'ENDING_INVENTORY'
+        : batchPriceSources.includes('CURRENT_MONTH')
+          ? 'CURRENT_MONTH'
+          : 'UNKNOWN';
+      const stockTypes = Array.from(new Set(targetBatches.map((batch) => batch.stockType)));
+      const dispoCodes = Array.from(
+        new Set(targetBatches.map((batch) => batch.dispo).filter((value): value is string => Boolean(value)))
+      ).sort();
+      const productionLines = Array.from(
+        new Set(
+          targetBatches
+            .map((batch) => batch.productionLine)
+            .filter((value): value is string => Boolean(value))
+        )
+      );
 
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
       targetBatches.forEach(b => {
@@ -198,15 +256,33 @@ function InventoryPageInner() {
         sim: { 
             ads30, ads60, ads90,
             usableStock, wasteStock, buckets,
-            qualityStock: (inventoryViewMode !== 'LOGISTICS') ? item.inventory.qualityStock : 0,
+            qualityStock: (inventoryViewMode !== 'LOGISTICS') ? filteredQualityStock : 0,
+            stockValue,
+            priceSource,
+            stockTypes,
+            dispoCodes,
+            productionLines,
             turnoverDays,
             targetDatePlan
         }
       };
     });
 
-    return { all: simulatedItems, adsSummary: { totalAds30, totalAds60, totalAds90 } };
-  }, [data, searchTerm, includeQualityInSim, storeEndDate, inventoryViewMode, favoritesOnly, isFavorite]); 
+    const valueSummary = simulatedItems.reduce(
+      (acc, item) => {
+        if (item.sim.priceSource === 'ENDING_INVENTORY') {
+          acc.totalValue += item.sim.stockValue;
+          acc.pricedItemCount += 1;
+        } else if (item.sim.priceSource === 'CURRENT_MONTH') {
+          acc.currentMonthItemCount += 1;
+        }
+        return acc;
+      },
+      { totalValue: 0, pricedItemCount: 0, currentMonthItemCount: 0 }
+    );
+
+    return { all: simulatedItems, adsSummary: { totalAds30, totalAds60, totalAds90 }, valueSummary };
+  }, [data, searchTerm, includeQualityInSim, storeEndDate, inventoryViewMode, favoritesOnly, isFavorite, stockType, productionLine]);
 
   // 페이지네이션 적용 전, 전체 정렬된 리스트
   const sortedFullList = useMemo(() => {
@@ -220,6 +296,7 @@ function InventoryPageInner() {
         case 'name': valA = a.name; valB = b.name; break;
         case 'usableStock': valA = a.sim.usableStock; valB = b.sim.usableStock; break;
         case 'wasteStock': valA = a.sim.wasteStock; valB = b.sim.wasteStock; break;
+        case 'stockValue': valA = a.sim.stockValue; valB = b.sim.stockValue; break;
         case 'qualityStock': valA = a.sim.qualityStock; valB = b.sim.qualityStock; break;
         case 'turnoverDays': valA = a.sim.turnoverDays; valB = b.sim.turnoverDays; break;
         case 'ads30': valA = a.sim.ads30; valB = b.sim.ads30; break;
@@ -273,6 +350,9 @@ function InventoryPageInner() {
       const rowData: any = {
         '제품명': item.name,
         '코드': item.code,
+        '재고구분': item.sim.stockTypes.map((type) => INVENTORY_STOCK_TYPE_LABELS[type]).join(', '),
+        'DISPO': item.sim.dispoCodes.join(', '),
+        '생산라인': item.sim.productionLines.join(', '),
         'ADS(30)': dAds30.rawValue,
         'ADS(60)': dAds60.rawValue,
         'ADS(90)': dAds90.rawValue,
@@ -285,6 +365,10 @@ function InventoryPageInner() {
 
       rowData['가용재고'] = dUsable.rawValue;
       rowData['폐기재고'] = item.sim.wasteStock > 0 ? dWaste.rawValue : 0;
+      rowData['재고금액(원)'] = item.sim.priceSource === 'ENDING_INVENTORY' ? Math.round(item.sim.stockValue) : null;
+      rowData['단가구분'] = item.sim.priceSource === 'ENDING_INVENTORY'
+        ? (data?.priceAsOfLabel || '기말재고 단가')
+        : item.sim.priceSource === 'CURRENT_MONTH' ? '당월생산' : '단가없음';
       rowData['회전일(90)'] = displayTurnover !== "-" ? Number(displayTurnover) : null;
       rowData['~50% (유효)'] = buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).rawValue : 0;
       rowData['50~70%'] = buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).rawValue : 0;
@@ -314,7 +398,8 @@ function InventoryPageInner() {
       <div className="pb-4 border-b border-neutral-200 flex flex-col md:flex-row justify-between items-end md:items-center gap-4">
         <div>
           <h1 className="text-[20px] font-bold text-neutral-900 flex items-center gap-2">
-            📦 재고 분석 리포트 (ADS Analysis)
+            <PackageSearch size={21} className="text-blue-600" />
+            재고 분석 리포트 (ADS Analysis)
           </h1>
           <p className="text-[12px] text-neutral-700 mt-1 flex items-center gap-2">
             <span>기간별 판매속도(ADS) 및 잔여율별 재고 분포</span>
@@ -381,7 +466,31 @@ function InventoryPageInner() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <InventoryClassificationFilter
+        stockType={stockType}
+        productionLine={productionLine}
+        onStockTypeChange={setStockType}
+        onProductionLineChange={setProductionLine}
+      />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="bg-white p-4 rounded border border-emerald-200 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+          <div className="text-[11px] font-bold text-emerald-700 flex items-center gap-1.5">
+            <Wallet size={13} />
+            재고금액 (현재 필터 기준)
+          </div>
+          <div className="text-[22px] font-bold text-neutral-900 mt-1">
+            {formatWon(simulation.valueSummary.totalValue)}
+          </div>
+          <div className="text-[11px] text-neutral-400 mt-1 break-keep">
+            {data?.priceAsOfLabel || '기말재고'} 단가 적용 · {simulation.valueSummary.pricedItemCount.toLocaleString()}개 품목
+            {simulation.valueSummary.currentMonthItemCount > 0 && (
+              <span className="text-amber-600 font-bold">
+                {' '}/ 당월생산 {simulation.valueSummary.currentMonthItemCount.toLocaleString()}개 제외
+              </span>
+            )}
+          </div>
+        </div>
         <AdsReportBox label="최근 30일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds30} unitMode={unitMode} />
         <AdsReportBox label="최근 60일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds60} unitMode={unitMode} />
         <AdsReportBox label="최근 90일 평균 판매 (Total ADS)" value={simulation.adsSummary.totalAds90} unitMode={unitMode} />
@@ -390,13 +499,14 @@ function InventoryPageInner() {
       <div className="bg-white rounded shadow-[0_1px_3px_rgba(0,0,0,0.08)] border border-neutral-200 overflow-hidden">
         <div className="p-4 bg-[#FAFAFA] border-b border-neutral-200 font-bold text-neutral-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <span>📋 재고 및 ADS 상세 현황</span>
+            <TableProperties size={17} className="text-blue-600" />
+            <span>재고 및 ADS 상세 현황</span>
           </div>
           <span className="text-[11px] font-normal text-neutral-500">단위: {unitMode === 'BOX' ? 'BOX (환산)' : '기준 (EA/KG)'}</span>
         </div>
         
         <div className="overflow-x-auto min-h-[400px]">
-          <table className="w-full text-sm text-left border-collapse">
+          <table className="w-full min-w-[1450px] text-sm text-left border-collapse">
             <thead className="bg-[#FAFAFA]">
               <tr>
                 <th className="px-2 py-3 border-b border-neutral-200 w-8 text-center"></th>
@@ -413,6 +523,7 @@ function InventoryPageInner() {
                 {/* ✅ [신설] 가용재고 및 폐기재고 컬럼 분리 */}
                 <SortableHeader label="가용재고" sortKey="usableStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-green-50/30 text-green-800" />
                 <SortableHeader label="폐기재고" sortKey="wasteStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-red-50/50 text-[#C62828]" />
+                <SortableHeader label="재고금액" sortKey="stockValue" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-emerald-50/40 text-emerald-800" tooltip={`${data?.priceAsOfLabel || '기말재고'} 단가 × 현재 재고수량. 단가가 없는 자재는 당월 첫 생산분이라 금액을 산정하지 않습니다.`} />
                 
                 <SortableHeader label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" className="text-red-700 bg-red-50/10" />
 
@@ -456,6 +567,18 @@ function InventoryPageInner() {
                       <Link href={`/product/${item.code}`} className="hover:text-[#1565C0] hover:underline">
                         <div className="font-medium text-neutral-900 truncate" title={item.name}>{item.name}</div>
                         <div className="text-[11px] text-neutral-500 font-mono">{item.code}</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {item.sim.stockTypes.map((type) => (
+                            <span key={type} className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">
+                              {INVENTORY_STOCK_TYPE_LABELS[type]}
+                            </span>
+                          ))}
+                          {item.sim.dispoCodes.map((dispo) => (
+                            <span key={dispo} className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-600">
+                              {dispo}{getProductionLine(dispo) ? ` · ${getProductionLine(dispo)}` : ''}
+                            </span>
+                          ))}
+                        </div>
                       </Link>
                     </td>
                     <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/20">{dAds30.value}</td>
@@ -470,13 +593,30 @@ function InventoryPageInner() {
                     </td>
                     {showHiddenStock && inventoryViewMode !== 'LOGISTICS' && (
                         <td className="px-2 py-3 text-right font-bold text-purple-700 bg-purple-50/30">
-                            {item.inventory.qualityStock > 0 ? dQuality.value : '-'}
+                            {item.sim.qualityStock > 0 ? dQuality.value : '-'}
                         </td>
                     )}
                     
                     {/* ✅ [신설] 분리된 가용재고 및 폐기재고 매핑 */}
                     <td className="px-2 py-3 text-right font-bold text-green-800 bg-green-50/10">{dUsable.value}</td>
                     <td className="px-2 py-3 text-right font-bold text-[#C62828] bg-red-50/30">{item.sim.wasteStock > 0 ? dWaste.value : '-'}</td>
+                    <td className="px-2 py-3 text-right bg-emerald-50/20 whitespace-nowrap">
+                      {item.sim.priceSource === 'ENDING_INVENTORY' ? (
+                        <span className="font-bold text-emerald-800">
+                          {Math.round(item.sim.stockValue).toLocaleString()}원
+                        </span>
+                      ) : item.sim.priceSource === 'CURRENT_MONTH' ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 border border-amber-200"
+                          title="직전 마감월 기말재고에 없던 자재입니다. 당월 첫 생산분이라 확정 단가가 아직 없습니다."
+                        >
+                          <Factory size={10} />
+                          당월생산
+                        </span>
+                      ) : (
+                        <span className="text-neutral-300">-</span>
+                      )}
+                    </td>
                     
                     <td className="px-2 py-3 text-right text-red-700 font-bold bg-red-50/10 text-xs">
                         {displayTurnover}
@@ -490,7 +630,7 @@ function InventoryPageInner() {
                   </tr>
                 );
               })}
-              {filteredAndPaginated.items.length === 0 && <tr><td colSpan={15} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>}
+              {filteredAndPaginated.items.length === 0 && <tr><td colSpan={16} className="p-10 text-center text-neutral-400">선택한 재고 구분에 해당하는 데이터가 없습니다.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -541,6 +681,14 @@ function AdsReportBox({ label, value, unitMode }: any) {
       <BarChart3 size={24} className="opacity-20 text-neutral-500" />
     </div>
   );
+}
+
+/** 억/만 단위로 접어서 보여준다. 재고금액은 자릿수가 커서 원 단위 그대로는 읽히지 않는다. */
+function formatWon(value: number) {
+  if (!value) return '0원';
+  if (value >= 100000000) return `${(value / 100000000).toLocaleString(undefined, { maximumFractionDigits: 1 })}억원`;
+  if (value >= 10000) return `${Math.round(value / 10000).toLocaleString()}만원`;
+  return `${Math.round(value).toLocaleString()}원`;
 }
 
 function LoadingSpinner() { return <div className="flex items-center justify-center h-[calc(100vh-100px)]"><div className="w-8 h-8 border-4 border-neutral-200 border-t-[#E53935] rounded-full animate-spin"></div></div>; }

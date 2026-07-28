@@ -8,7 +8,7 @@ import {
   LayoutDashboard, Truck, ClipboardList, FileText,
   Package, Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
-  Sun, X, Star, UserCog, Bot, Megaphone
+  Sun, X, Star, UserCog, Bot, Megaphone, PanelLeftClose
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 
@@ -30,7 +30,7 @@ const menuItems = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { mobileMenuOpen, setMobileMenuOpen } = useUiStore();
+  const { mobileMenuOpen, setMobileMenuOpen, sidebarCollapsed, setSidebarCollapsed } = useUiStore();
   const [isAdmin, setIsAdmin] = useState(false);
 
   const supabase = createBrowserClient(
@@ -89,8 +89,17 @@ export default function Sidebar() {
         <button
           onClick={() => setMobileMenuOpen(false)}
           className="lg:hidden p-1 rounded hover:bg-neutral-100 text-neutral-500"
+          aria-label="모바일 메뉴 닫기"
         >
           <X size={18} />
+        </button>
+        <button
+          onClick={() => setSidebarCollapsed(true)}
+          className="hidden lg:flex p-1.5 rounded-md hover:bg-neutral-100 text-neutral-500 transition-colors"
+          aria-label="사이드바 접기"
+          title="사이드바 접기"
+        >
+          <PanelLeftClose size={18} />
         </button>
       </div>
 
@@ -134,7 +143,9 @@ export default function Sidebar() {
   return (
     <>
       {/* 데스크톱: 고정 사이드바 */}
-      <div className="hidden lg:fixed lg:left-0 lg:top-0 lg:bottom-0 lg:z-50 lg:flex">
+      <div className={`hidden lg:fixed lg:left-0 lg:top-0 lg:bottom-0 lg:z-50 lg:flex transition-transform duration-300 ${
+        sidebarCollapsed ? 'lg:-translate-x-full' : 'lg:translate-x-0'
+      }`}>
         {sidebarContent}
       </div>
 

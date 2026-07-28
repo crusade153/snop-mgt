@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">S&amp;OP 운영 대시보드 사용 흐름</title>
+  <desc id="desc">로그인과 공통 조건 설정 후 일일 관리, 종합 현황, 세부 분석, ATP 시뮬레이션으로 이어지는 대시보드 사용 흐름도</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .kr { font-family: "Malgun Gothic", "Noto Sans KR", Arial, sans-serif; }
+      .title { font-size: 34px; font-weight: 800; fill: #ffffff; }
+      .subtitle { font-size: 17px; font-weight: 500; fill: #cbd5e1; }
+      .section { font-size: 16px; font-weight: 800; fill: #334155; letter-spacing: 0.4px; }
+      .box-title { font-size: 22px; font-weight: 800; fill: #0f172a; }
+      .box-sub { font-size: 15px; font-weight: 500; fill: #475569; }
+      .small { font-size: 14px; font-weight: 700; fill: #334155; }
+      .tiny { font-size: 13px; font-weight: 600; fill: #475569; }
+      .white-title { font-size: 25px; font-weight: 800; fill: #ffffff; }
+      .white-sub { font-size: 15px; font-weight: 500; fill: #dbeafe; }
+      .arrow-label { font-size: 13px; font-weight: 700; fill: #64748b; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#f8fafc"/>
+  <rect x="0" y="0" width="1600" height="150" fill="#0f172a"/>
+  <circle cx="86" cy="75" r="32" fill="#e53935"/>
+  <text x="86" y="85" text-anchor="middle" class="kr" font-size="27" font-weight="800" fill="#ffffff">H</text>
+  <text x="140" y="64" class="kr title">S&amp;OP 운영 대시보드</text>
+  <text x="140" y="99" class="kr subtitle">사용자 안내 · 현황 확인부터 공급 가능성 판단까지</text>
+  <rect x="1250" y="50" width="270" height="50" rx="25" fill="#1e293b" stroke="#334155"/>
+  <text x="1385" y="81" text-anchor="middle" class="kr" font-size="15" font-weight="700" fill="#bfdbfe">SAP SD · MM · PP 데이터 통합</text>
+
+  <text x="80" y="191" class="kr section">1. 접속 및 공통 조건 설정</text>
+  <g filter="url(#shadow)">
+    <rect x="80" y="218" width="250" height="120" rx="18" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+    <circle cx="120" cy="258" r="20" fill="#e2e8f0"/>
+    <text x="120" y="265" text-anchor="middle" class="kr" font-size="20" font-weight="800" fill="#334155">1</text>
+    <text x="155" y="260" class="kr box-title">로그인 및 접속</text>
+    <text x="155" y="287" class="kr box-sub">Biz-Control Tower 입장</text>
+    <text x="155" y="310" class="kr tiny">사용자 권한에 따라 메뉴 표시</text>
+
+    <rect x="390" y="218" width="510" height="120" rx="18" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+    <circle cx="430" cy="258" r="20" fill="#dbeafe"/>
+    <text x="430" y="265" text-anchor="middle" class="kr" font-size="20" font-weight="800" fill="#2563eb">2</text>
+    <text x="465" y="260" class="kr box-title">공통 조건 설정</text>
+    <text x="465" y="288" class="kr box-sub">조회 기간 · 사업장/물류센터 · 단위</text>
+    <text x="465" y="312" class="kr tiny">전체 보기 또는 즐겨찾기 보기 선택</text>
+  </g>
+  <path d="M330 278 H380" stroke="#64748b" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+
+  <text x="80" y="383" class="kr section">2. 오늘의 이슈를 빠르게 확인</text>
+  <g filter="url(#shadow)">
+    <rect x="80" y="410" width="420" height="145" rx="18" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+    <circle cx="125" cy="450" r="23" fill="#ffedd5"/>
+    <text x="125" y="458" text-anchor="middle" class="kr" font-size="22" font-weight="800" fill="#ea580c">3</text>
+    <text x="165" y="452" class="kr box-title">일일 관리 (Morning)</text>
+    <text x="165" y="480" class="kr box-sub">아침 업무 전 핵심 이슈 점검</text>
+    <g>
+      <rect x="105" y="505" width="85" height="28" rx="14" fill="#ffedd5"/>
+      <text x="147" y="524" text-anchor="middle" class="kr tiny" fill="#c2410c">수요 급변</text>
+      <rect x="198" y="505" width="85" height="28" rx="14" fill="#fee2e2"/>
+      <text x="240" y="524" text-anchor="middle" class="kr tiny" fill="#b91c1c">7일 내 결품</text>
+      <rect x="291" y="505" width="85" height="28" rx="14" fill="#fee2e2"/>
+      <text x="333" y="524" text-anchor="middle" class="kr tiny" fill="#b91c1c">소진 불가</text>
+      <rect x="384" y="505" width="85" height="28" rx="14" fill="#fef3c7"/>
+      <text x="426" y="524" text-anchor="middle" class="kr tiny" fill="#a16207">미납 발생</text>
+    </g>
+
+    <rect x="560" y="390" width="520" height="185" rx="22" fill="#1d4ed8" stroke="#1e40af" stroke-width="2"/>
+    <circle cx="615" cy="445" r="23" fill="#3b82f6"/>
+    <text x="615" y="453" text-anchor="middle" class="kr" font-size="22" font-weight="800" fill="#ffffff">4</text>
+    <text x="655" y="448" class="kr white-title">종합 현황</text>
+    <text x="655" y="479" class="kr white-sub">납품 · 미납 · 재고 · 생산을 한 화면에서 확인</text>
+    <line x1="610" y1="500" x2="1030" y2="500" stroke="#60a5fa" stroke-width="1" opacity="0.65"/>
+    <text x="615" y="532" class="kr" font-size="15" font-weight="700" fill="#dbeafe">문제 제품을 찾으면 아래 세부 메뉴로 이동</text>
+    <text x="615" y="555" class="kr" font-size="13" font-weight="600" fill="#bfdbfe">기간과 보기 조건은 모든 분석 화면에 이어집니다.</text>
+  </g>
+  <path d="M500 482 H550" stroke="#64748b" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+
+  <text x="80" y="625" class="kr section">3. 원인별 상세 분석</text>
+  <g filter="url(#shadow)">
+    <rect x="80" y="650" width="330" height="145" rx="18" fill="#ffffff" stroke="#bfdbfe" stroke-width="2"/>
+    <rect x="80" y="650" width="330" height="10" rx="5" fill="#2563eb"/>
+    <text x="108" y="695" class="kr box-title">납품·미납</text>
+    <text x="108" y="723" class="kr box-sub">납품 현황 → 미납 리스트</text>
+    <text x="108" y="748" class="kr box-sub">→ 미납 상세 분석</text>
+    <text x="108" y="777" class="kr tiny">거래처·제품·미납 원인 확인</text>
+
+    <rect x="440" y="650" width="330" height="145" rx="18" fill="#ffffff" stroke="#bbf7d0" stroke-width="2"/>
+    <rect x="440" y="650" width="330" height="10" rx="5" fill="#16a34a"/>
+    <text x="468" y="695" class="kr box-title">재고</text>
+    <text x="468" y="723" class="kr box-sub">재고 현황 → 재고 분석</text>
+    <text x="468" y="748" class="kr box-sub">ADS·잔여율·유통기한 확인</text>
+    <text x="468" y="777" class="kr tiny">플랜트 / 물류센터 재고 비교</text>
+
+    <rect x="800" y="650" width="330" height="145" rx="18" fill="#ffffff" stroke="#fed7aa" stroke-width="2"/>
+    <rect x="800" y="650" width="330" height="10" rx="5" fill="#ea580c"/>
+    <text x="828" y="695" class="kr box-title">생산</text>
+    <text x="828" y="723" class="kr box-sub">생산 계획 및 실적 상세</text>
+    <text x="828" y="748" class="kr box-sub">완제품 기준 생산 현황 확인</text>
+    <text x="828" y="777" class="kr tiny">계획 대비 실적과 공급 차질 점검</text>
+
+    <rect x="1160" y="650" width="360" height="145" rx="18" fill="#ffffff" stroke="#ddd6fe" stroke-width="2"/>
+    <rect x="1160" y="650" width="360" height="10" rx="5" fill="#7c3aed"/>
+    <text x="1188" y="695" class="kr box-title">수요</text>
+    <text x="1188" y="723" class="kr box-sub">수요 예측 → 머신러닝 예측 검증</text>
+    <text x="1188" y="748" class="kr box-sub">향후 수요와 예측 정확도 비교</text>
+    <text x="1188" y="777" class="kr tiny">계획·구매·생산 판단의 참고자료</text>
+  </g>
+  <path d="M820 575 V610 H245 V640" stroke="#2563eb" stroke-width="2.5" fill="none" marker-end="url(#arrow-blue)"/>
+  <path d="M820 575 V640" stroke="#2563eb" stroke-width="2.5" fill="none" marker-end="url(#arrow-blue)"/>
+  <path d="M820 575 V610 H965 V640" stroke="#2563eb" stroke-width="2.5" fill="none" marker-end="url(#arrow-blue)"/>
+  <path d="M820 575 V610 H1340 V640" stroke="#2563eb" stroke-width="2.5" fill="none" marker-end="url(#arrow-blue)"/>
+
+  <text x="80" y="862" class="kr section">4. 공급 가능성 판단 및 공유</text>
+  <g filter="url(#shadow)">
+    <rect x="80" y="885" width="750" height="85" rx="18" fill="#fff7ed" stroke="#fb923c" stroke-width="2"/>
+    <text x="112" y="920" class="kr box-title" font-size="21">시뮬레이션 (ATP)</text>
+    <text x="112" y="947" class="kr box-sub">제품·조건 입력 → 납품 가능/부족 진단 → 예상 재고·수불 내역 확인</text>
+
+    <rect x="870" y="885" width="650" height="85" rx="18" fill="#f0fdf4" stroke="#86efac" stroke-width="2"/>
+    <text x="902" y="920" class="kr box-title" font-size="21">판단·공유</text>
+    <text x="902" y="947" class="kr box-sub">관심 제품 등록 · Excel 다운로드 · 필터 URL 공유 · 업무 조치</text>
+  </g>
+  <path d="M245 795 V840 H455 V875" stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M605 795 V875" stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M965 795 V840 H455 V875" stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M1340 795 V840 H1195 V875" stroke="#64748b" stroke-width="2.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M830 927 H860" stroke="#64748b" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+
+  <text x="80" y="992" class="kr" font-size="12" font-weight="600" fill="#94a3b8">※ 관리자에게는 별도로 회원관리·공지관리 메뉴가 표시됩니다.</text>
+</svg>

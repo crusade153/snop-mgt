@@ -3,6 +3,7 @@
 import bigqueryClient from '@/lib/bigquery';
 import { analyzeSnopData } from '@/lib/analysis';
 import { SapOrder, SapInventory, SapProduction, FbhInventory } from '@/types/sap';
+import { getEndingInventoryPrices, resolveUnitPrice } from '@/lib/ending-inventory-price';
 import { unstable_cache } from 'next/cache';
 import { gzipSync, gunzipSync } from 'zlib';
 import { addMonths, format, subDays } from 'date-fns'; 
@@ -56,18 +57,38 @@ async function fetchRawData(sDate: string, eDate: string) {
 
   // 3. 사내 플랜트 재고 
   const inventoryQuery = `
-    SELECT 
-      MATNR, MATNR_T, MEINS, LGOBE, LGORT,
-      IFNULL(SUBSTR(REPLACE(CAST(VFDAT AS STRING), '-', ''), 1, 8), '') AS VFDAT,
-      CLABS, 
-      IFNULL(CINSM, 0) as CINSM, 
-      IFNULL(UMREZ_BOX, 1) as UMREZ_BOX, 
-      remain_day, remain_rate, 
-      PRDHA_1_T, PRDHA_2_T, PRDHA_3_T
-    FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB_ALL\`
-    WHERE (CLABS > 0 OR CINSM > 0)
-      AND LGORT NOT IN ('1110', '2141', '2143', '2240', '2243', '3000', '3300', '9000', '9100')
-      AND MATNR BETWEEN '50000000' AND '69999999'
+    WITH batch_master AS (
+      SELECT
+        MATNR,
+        LGORT,
+        CHARG,
+        ARRAY_AGG(
+          STRUCT(CAST(WERKS AS STRING) AS WERKS, DISPO)
+          ORDER BY WERKS
+          LIMIT 1
+        )[OFFSET(0)] AS master
+      FROM \`harimfood-361004.harim_sap_bi.MM_MCHB\`
+      WHERE MATNR BETWEEN '50000000' AND '69999999'
+      GROUP BY MATNR, LGORT, CHARG
+    )
+    SELECT
+      I.MATNR, I.MATNR_T, I.MEINS, I.LGOBE, I.LGORT,
+      B.master.WERKS AS WERKS,
+      B.master.DISPO AS DISPO,
+      IFNULL(SUBSTR(REPLACE(CAST(I.VFDAT AS STRING), '-', ''), 1, 8), '') AS VFDAT,
+      I.CLABS,
+      IFNULL(I.CINSM, 0) AS CINSM,
+      IFNULL(I.UMREZ_BOX, 1) AS UMREZ_BOX,
+      I.remain_day, I.remain_rate,
+      I.PRDHA_1_T, I.PRDHA_2_T, I.PRDHA_3_T
+    FROM \`harimfood-361004.harim_sap_bi_user.V_MM_MCHB_ALL\` AS I
+    LEFT JOIN batch_master AS B
+      ON I.MATNR = B.MATNR
+      AND I.LGORT = B.LGORT
+      AND IFNULL(I.CHARG, '') = IFNULL(B.CHARG, '')
+    WHERE (I.CLABS > 0 OR I.CINSM > 0)
+      AND I.LGORT NOT IN ('1110', '2141', '2143', '2240', '2243', '3000', '3300', '9000', '9100')
+      AND I.MATNR BETWEEN '50000000' AND '69999999'
   `;
 
   // 4. FBH 외부 창고 재고
@@ -102,11 +123,37 @@ async function fetchRawData(sDate: string, eDate: string) {
       fbhRows = []; 
     }
 
+    // 재고 평가금액은 SAP 표준가가 아니라 원가팀 기말재고 단가로 계산한다.
+    // (표준가에는 미사용 자재의 5천만원/EA 같은 값이 남아 있어 금액이 30배 이상 튀었다)
+    const prices = await getEndingInventoryPrices();
+    const inventory = (invRes[0] as SapInventory[]).map((row) => {
+      const { unitPrice, source } = resolveUnitPrice(prices, row.MATNR, row.WERKS);
+      return {
+        ...row,
+        VALUATION_UNIT_PRICE: unitPrice,
+        STOCK_VALUE: Number(row.CLABS || 0) * unitPrice,
+        QUALITY_STOCK_VALUE: Number(row.CINSM || 0) * unitPrice,
+        PRICE_SOURCE: source,
+      };
+    });
+
+    // FBH 는 플랜트 정보가 없으므로 자재코드 폴백으로만 단가를 잡는다.
+    const fbhInventory = fbhRows.map((row) => {
+      const { unitPrice, source } = resolveUnitPrice(prices, row.SKU_CD);
+      return {
+        ...row,
+        VALUATION_UNIT_PRICE: unitPrice,
+        STOCK_VALUE: Number(row.AVLB_QTY || 0) * unitPrice,
+        PRICE_SOURCE: source,
+      };
+    });
+
     return {
       orders: orderRes[0] as SapOrder[],
       production: prodRes[0] as SapProduction[],
-      inventory: invRes[0] as SapInventory[],
-      fbhInventory: fbhRows
+      inventory,
+      fbhInventory,
+      priceAsOfLabel: prices.asOfLabel,
     };
   } catch (e: any) {
     console.error("🚨 BigQuery Critical Error:", e.message);
@@ -115,12 +162,12 @@ async function fetchRawData(sDate: string, eDate: string) {
 }
 
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 🚨 캐시 무효화를 위해 버전 v5.5로 상향
-    const cacheKey = `dashboard-analysis-v5.5-${sDate}-${eDate}`;
-    
+    // 단가 소스를 기말재고(ending_inventory)로 교체하면서 캐시 버전을 상향합니다.
+    const cacheKey = `dashboard-analysis-v7-${sDate}-${eDate}`;
+
     return await unstable_cache(
       async () => {
-        const { orders, production, inventory, fbhInventory } = await fetchRawData(sDate, eDate);
+        const { orders, production, inventory, fbhInventory, priceAsOfLabel } = await fetchRawData(sDate, eDate);
 
         if ((!orders || orders.length === 0) && (!inventory || inventory.length === 0) && (!fbhInventory || fbhInventory.length === 0)) {
             const emptyData = analyzeSnopData([], [], [], [], startDateStr, endDateStr);
@@ -128,12 +175,13 @@ const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr:
         }
 
         const analyzedData = analyzeSnopData(
-          orders || [], 
-          inventory || [], 
-          production || [], 
-          fbhInventory || [], 
-          startDateStr, 
-          endDateStr
+          orders || [],
+          inventory || [],
+          production || [],
+          fbhInventory || [],
+          startDateStr,
+          endDateStr,
+          priceAsOfLabel
         );
 
         const compressed = gzipSync(JSON.stringify({ success: true, data: analyzedData })).toString('base64');

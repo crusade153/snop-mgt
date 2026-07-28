@@ -44,6 +44,74 @@ async function ensureAdmin() {
   return { ok: true as const, message: "", userId: context.user.id };
 }
 
+/**
+ * snop_profiles 에 행이 없는 auth 계정을 되살린다.
+ *
+ * auth.users 는 5개 대시보드가 공유하므로 "프로필이 없는 계정"은 두 가지다.
+ *   1) 구 profiles 에만 남은 우리 회원  → 그 값을 그대로 복원한다.
+ *   2) 애초에 다른 대시보드 전용 계정   → 우리 회원이 아니므로 거절한다.
+ */
+async function repairMissingProfile(userId: string, status: string): Promise<ActionResult> {
+  const admin = createAdminSupabaseClient();
+
+  const { data: authUser, error: authError } = await admin.auth.admin.getUserById(userId);
+  if (authError || !authUser?.user) {
+    return { ok: false, message: "인증 계정을 찾을 수 없습니다. 목록을 새로고침해주세요." };
+  }
+
+  const metadata = (authUser.user.user_metadata ?? {}) as Record<string, unknown>;
+  const { data: legacy } = await admin
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const authEmail = authUser.user.email ?? "";
+  const loginId =
+    (legacy?.login_id as string | undefined) ||
+    (typeof metadata.login_id === "string" ? metadata.login_id : "") ||
+    authEmail.split("@")[0];
+
+  if (!loginId) {
+    return {
+      ok: false,
+      message:
+        "이 계정은 이 대시보드의 회원 정보가 없어 승인할 수 없습니다. 다른 대시보드 전용 계정으로 보입니다.",
+    };
+  }
+
+  const { error: insertError } = await admin.from("snop_profiles").insert({
+    id: userId,
+    login_id: loginId,
+    full_name:
+      (legacy?.full_name as string | undefined) ||
+      (typeof metadata.full_name === "string" ? metadata.full_name : "") ||
+      loginId,
+    team:
+      (legacy?.team as string | undefined) ||
+      (typeof metadata.team === "string" ? metadata.team : "") ||
+      "",
+    email: (legacy?.email as string | undefined) ?? null,
+    company_email: (legacy?.company_email as string | undefined) ?? null,
+    auth_email: (legacy?.auth_email as string | undefined) || authEmail,
+    role: (legacy?.role as string | undefined) === "admin" ? "admin" : "user",
+    status,
+    failed_attempts: 0,
+    locked_until: null,
+  });
+
+  if (insertError) {
+    return {
+      ok: false,
+      message: insertError.message.includes("snop_profiles_login_id_key")
+        ? `로그인 ID "${loginId}" 가 이미 다른 회원에게 있습니다. 로그인 ID를 정리한 뒤 다시 시도해주세요.`
+        : insertError.message,
+    };
+  }
+
+  return { ok: true, message: "" };
+}
+
 export async function updateUserStatus(
   userId: string,
   status: string,
@@ -60,12 +128,22 @@ export async function updateUserStatus(
   }
 
   const admin = createAdminSupabaseClient();
-  const { error } = await admin
+
+  // .update() 는 대상 행이 없어도 오류를 내지 않는다. 그대로 두면 "승인했습니다"만 뜨고
+  // 상태는 그대로인 조용한 실패가 된다. 실제로 바뀐 행을 돌려받아 확인한다.
+  const { data: updated, error } = await admin
     .from("snop_profiles")
     .update({ status, failed_attempts: 0, locked_until: null })
-    .eq("id", userId);
+    .eq("id", userId)
+    .select("id");
 
   if (error) return { ok: false, message: error.message };
+
+  if (!updated || updated.length === 0) {
+    // snop_profiles 에 행이 없는 계정이다. auth 정보로 프로필을 만들어 복구한다.
+    const repaired = await repairMissingProfile(userId, status);
+    if (!repaired.ok) return repaired;
+  }
 
   revalidatePath("/admin/users");
 
@@ -96,9 +174,20 @@ export async function updateUserRole(
   }
 
   const admin = createAdminSupabaseClient();
-  const { error } = await admin.from("snop_profiles").update({ role }).eq("id", userId);
+  const { data: updated, error } = await admin
+    .from("snop_profiles")
+    .update({ role })
+    .eq("id", userId)
+    .select("id");
 
   if (error) return { ok: false, message: error.message };
+
+  if (!updated || updated.length === 0) {
+    return {
+      ok: false,
+      message: "이 계정은 아직 이 대시보드의 회원이 아닙니다. 먼저 승인해주세요.",
+    };
+  }
 
   revalidatePath("/admin/users");
   return {

@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Ban,
   CheckCircle2,
   Clock3,
@@ -29,6 +30,8 @@ import {
 
 export type ManagedUser = {
   id: string;
+  /** snop_profiles 에 행이 있는지. false 면 이 대시보드 회원으로 등록되지 않은 계정이다. */
+  hasProfile: boolean;
   loginId: string;
   name: string;
   team: string;
@@ -114,9 +117,10 @@ export default function UserManagementClient({ users, configError, currentUserId
           else if (user.status === "pending") acc.pending += 1;
           else acc.blocked += 1;
           if (user.isAdmin) acc.admins += 1;
+          if (!user.hasProfile) acc.noProfile += 1;
           return acc;
         },
-        { total: 0, active: 0, pending: 0, blocked: 0, admins: 0 },
+        { total: 0, active: 0, pending: 0, blocked: 0, admins: 0, noProfile: 0 },
       ),
     [users],
   );
@@ -216,6 +220,16 @@ export default function UserManagementClient({ users, configError, currentUserId
       {message && (
         <div className="rounded border border-blue-200 bg-blue-50 p-4 text-sm font-medium text-blue-700">
           {message}
+        </div>
+      )}
+
+      {counts.noProfile > 0 && (
+        <div className="rounded border border-orange-300 bg-orange-50 p-4 text-sm text-orange-800">
+          <b>회원 정보가 없는 계정이 {counts.noProfile}명 있습니다.</b>{" "}
+          인증 계정은 있는데 이 대시보드의 회원 행(snop_profiles)이 없는 상태입니다. 이 회원들은
+          로그인할 수 없습니다. 승인을 누르면 인증 정보로 회원 등록까지 함께 처리되며, 한 번에
+          되살리려면 <code className="mx-1">supabase/restore-missing-snop-profiles.sql</code>을
+          Supabase SQL Editor에서 실행해주세요.
         </div>
       )}
 
@@ -404,14 +418,24 @@ export default function UserManagementClient({ users, configError, currentUserId
 
                     <td className="px-4 py-4">
                       <div className="space-y-2">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs font-bold ${
-                            statusClasses[user.status] ?? statusClasses.pending
-                          }`}
-                        >
-                          {user.status === "active" ? <CheckCircle2 size={13} /> : <Clock3 size={13} />}
-                          {statusLabels[user.status] ?? user.status}
-                        </span>
+                        {user.hasProfile ? (
+                          <span
+                            className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs font-bold ${
+                              statusClasses[user.status] ?? statusClasses.pending
+                            }`}
+                          >
+                            {user.status === "active" ? <CheckCircle2 size={13} /> : <Clock3 size={13} />}
+                            {statusLabels[user.status] ?? user.status}
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-700"
+                            title="이 대시보드의 회원 정보(snop_profiles)가 없는 계정입니다. 승인을 누르면 인증 정보로 회원 등록까지 함께 처리합니다."
+                          >
+                            <AlertTriangle size={13} />
+                            프로필 없음
+                          </span>
+                        )}
                         {user.isAdmin ? (
                           <div className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-xs font-bold text-red-700">
                             <ShieldCheck size={13} />

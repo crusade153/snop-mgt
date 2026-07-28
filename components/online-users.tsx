@@ -69,7 +69,6 @@ export function OnlineUsersPanel() {
             title={user.team || undefined}
           >
             {user.name}
-            {user.tabs > 1 && <span className="ml-1 text-emerald-500">×{user.tabs}</span>}
           </li>
         ))}
       </ul>
@@ -81,10 +80,7 @@ function UserRow({ user }: { user: OnlineUser }) {
   return (
     <li className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-neutral-50">
       <span className="text-xs font-medium text-neutral-700 truncate">{user.name}</span>
-      <span className="text-[10px] text-neutral-400 shrink-0">
-        {user.team}
-        {user.tabs > 1 && ` ·${user.tabs}`}
-      </span>
+      <span className="text-[10px] text-neutral-400 shrink-0">{user.team}</span>
     </li>
   );
 }

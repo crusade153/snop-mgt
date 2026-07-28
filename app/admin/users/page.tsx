@@ -61,6 +61,9 @@ async function getManagedUsers(): Promise<ManagedUser[]> {
 
     return {
       id: user.id,
+      // 프로필 행이 아예 없는 계정과 "승인 대기"는 완전히 다른 상황이다.
+      // 구분하지 않으면 승인을 눌러도 아무 일이 안 일어나는 이유를 알 수 없다.
+      hasProfile: profile !== null,
       loginId: readString(profile, "login_id", "-"),
       name: readString(profile, "full_name", String(metadata.full_name ?? "이름 없음")),
       team: readString(profile, "team", String(metadata.team ?? "-")),

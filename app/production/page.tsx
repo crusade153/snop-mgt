@@ -3,13 +3,20 @@
 import { useState, useMemo, Suspense } from 'react';
 import { useDashboardData } from '@/hooks/use-dashboard';
 import { ProductionRow } from '@/types/analysis';
-import { Search, ChevronLeft, ChevronRight, Calendar, Factory, Share2, Download, Star } from 'lucide-react';
+import { AlertTriangle, Search, ChevronLeft, ChevronRight, Calendar, Factory, Share2, Download, Star } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 import { useUrlFilters } from '@/hooks/use-url-filters';
 import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useFavorites } from '@/hooks/use-favorites';
 import { exportToExcel } from '@/lib/excel-export';
 import InfoTooltip from '@/components/info-tooltip';
+
+const STATUS_LABELS: Record<string, string> = {
+  completed: '완료',
+  progress: '진행',
+  poor: '부진',
+  pending: '대기',
+};
 
 function ProductionPageInner() {
   const { data, isLoading } = useDashboardData();
@@ -19,10 +26,12 @@ function ProductionPageInner() {
 
   const searchTerm = getParam('search', '');
   const selectedPlant = getParam('plant', 'ALL') || 'ALL';
+  const poorOnly = getParam('poor', '') === '1';
   const currentPage = getIntParam('page', 1);
 
   const setSearchTerm = (v: string) => setParams({ search: v || null, page: null });
   const setSelectedPlant = (v: string) => setParams({ plant: v !== 'ALL' ? v : null, page: null });
+  const togglePoorOnly = () => setParams({ poor: poorOnly ? null : '1', page: null });
   const searchInputProps = useKoreanInput(searchTerm, setSearchTerm);
   const setCurrentPage = (p: number) => setParams({ page: p > 1 ? String(p) : null });
 
@@ -40,14 +49,22 @@ function ProductionPageInner() {
     return { value: val.toLocaleString(), unit: baseUnit };
   };
 
-  const { filteredList, kpi, plantOptions } = useMemo(() => {
-    if (!data || !data.productionList) return { filteredList: [], kpi: { EA: {}, BOX: {}, KG: {} }, plantOptions: [] as string[] };
+  const { filteredList, kpi, plantOptions, poorSummary } = useMemo(() => {
+    const empty = {
+      filteredList: [] as ProductionRow[],
+      kpi: { EA: {}, BOX: {}, KG: {} } as any,
+      plantOptions: [] as string[],
+      poorSummary: { count: 0, total: 0, ratio: 0 },
+    };
+    if (!data || !data.productionList) return empty;
 
     const plants = Array.from(new Set(data.productionList.map((item: ProductionRow) => item.plant))).sort() as string[];
 
-    let items = data.productionList.filter((item: ProductionRow) => {
+    // 부진 필터를 뺀 기준 목록. KPI 는 항상 이쪽으로 계산해야
+    // "부진만 보기"를 켜도 전체 대비 부진 건수를 계속 확인할 수 있다.
+    const baseItems = data.productionList.filter((item: ProductionRow) => {
       const isFinishedGood = item.code.startsWith('5');
-      const matchPlant = selectedPlant === 'ALL' || item.plant === selectedPlant;
+      const matchPlant = selectedPlant === 'ALL' || String(item.plant) === selectedPlant;
       const matchSearch = searchTerm === '' ||
         item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         item.code.includes(searchTerm);
@@ -61,18 +78,35 @@ function ProductionPageInner() {
       KG: { plan: 0, actual: 0, poor: 0 }
     };
 
-    items.forEach((item: ProductionRow) => {
+    let poorCount = 0;
+    baseItems.forEach((item: ProductionRow) => {
       const u = item.unit.toUpperCase();
       if (!kpiMap[u]) kpiMap[u] = { plan: 0, actual: 0, poor: 0 };
       kpiMap[u].plan += item.planQty;
       kpiMap[u].actual += item.actualQty;
-      if (item.status === 'poor') kpiMap[u].poor += 1;
+      if (item.status === 'poor') {
+        kpiMap[u].poor += 1;
+        poorCount += 1;
+      }
     });
+
+    const items = poorOnly
+      ? baseItems.filter((item: ProductionRow) => item.status === 'poor')
+      : baseItems;
 
     items.sort((a: ProductionRow, b: ProductionRow) => b.date.localeCompare(a.date));
 
-    return { filteredList: items, kpi: kpiMap, plantOptions: plants };
-  }, [data, searchTerm, selectedPlant, favoritesOnly, isFavorite]);
+    return {
+      filteredList: items,
+      kpi: kpiMap,
+      plantOptions: plants,
+      poorSummary: {
+        count: poorCount,
+        total: baseItems.length,
+        ratio: baseItems.length > 0 ? (poorCount / baseItems.length) * 100 : 0,
+      },
+    };
+  }, [data, searchTerm, selectedPlant, favoritesOnly, isFavorite, poorOnly]);
 
   const paginatedItems = useMemo(() => {
     const startIdx = (currentPage - 1) * itemsPerPage;
@@ -99,9 +133,10 @@ function ProductionPageInner() {
         [`계획량(${unitMode === 'BOX' ? 'BOX' : item.unit})`]: Math.round(planDisplay),
         [`실적량(${unitMode === 'BOX' ? 'BOX' : item.unit})`]: Math.round(actualDisplay),
         '달성률(%)': item.planQty > 0 ? (item.rate).toFixed(1) : '-',
+        '상태': STATUS_LABELS[item.status] ?? item.status,
       };
     });
-    exportToExcel(rows, '생산분석');
+    exportToExcel(rows, poorOnly ? '생산분석_부진품목' : '생산분석');
   };
 
   if (isLoading) return <LoadingSpinner />;
@@ -122,7 +157,7 @@ function ProductionPageInner() {
             <Factory className="absolute left-3 top-2.5 text-neutral-500" size={16} />
             <select 
               value={selectedPlant} 
-              onChange={(e) => { setSelectedPlant(e.target.value); setCurrentPage(1); }}
+              onChange={(e) => setSelectedPlant(e.target.value)}
               className="pl-9 pr-8 py-2 border border-neutral-300 rounded text-sm focus:outline-none focus:border-primary-blue bg-white appearance-none h-[38px] cursor-pointer"
             >
               <option value="ALL">전체 플랜트</option>
@@ -155,7 +190,48 @@ function ProductionPageInner() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <button
+          type="button"
+          onClick={togglePoorOnly}
+          aria-pressed={poorOnly}
+          className={`p-4 rounded shadow border text-left transition-all ${
+            poorOnly
+              ? 'bg-[#FFEBEE] border-[#E53935] ring-2 ring-[#E53935]/30'
+              : 'bg-white border-neutral-200 hover:border-[#E53935] hover:bg-red-50/40'
+          }`}
+        >
+          <div className="flex justify-between items-center mb-2">
+            <span className="flex items-center gap-1.5 text-xs font-bold text-[#C62828] bg-[#FFEBEE] px-2 py-0.5 rounded">
+              <AlertTriangle size={12} />
+              부진 품목
+            </span>
+            <span className="text-xs font-bold text-[#C62828]">
+              {poorSummary.ratio.toFixed(1)}%
+            </span>
+          </div>
+          <div className="flex justify-between items-end">
+            <div>
+              <div className="text-[10px] text-neutral-400">달성률 90% 미만</div>
+              <div className="text-lg font-bold text-[#C62828]">
+                {poorSummary.count.toLocaleString()} 건
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] text-neutral-400">전체</div>
+              <div className="text-lg font-bold text-neutral-800">
+                {poorSummary.total.toLocaleString()} 건
+              </div>
+            </div>
+          </div>
+          <div className="mt-2 pt-2 border-t border-neutral-100 text-[11px] flex justify-between items-center">
+            <span className={poorOnly ? 'font-bold text-[#C62828]' : 'text-neutral-500'}>
+              {poorOnly ? '부진 품목만 보는 중' : '클릭하면 부진 품목만 보기'}
+            </span>
+            {poorOnly && <span className="font-bold text-[#C62828]">해제 ✕</span>}
+          </div>
+        </button>
+
         {['EA', 'BOX', 'KG'].map(unit => {
           const stats = kpi[unit] || { plan: 0, actual: 0, poor: 0 };
           const rate = stats.plan > 0 ? (stats.actual / stats.plan) * 100 : 0;
@@ -250,7 +326,13 @@ function ProductionPageInner() {
                   </tr>
                 );
               })}
-              {paginatedItems.length === 0 && (<tr><td colSpan={8} className="p-10 text-center text-neutral-400">데이터가 없습니다.</td></tr>)}
+              {paginatedItems.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="p-10 text-center text-neutral-400">
+                    {poorOnly ? '선택한 조건에 부진 품목이 없습니다.' : '데이터가 없습니다.'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

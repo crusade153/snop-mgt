@@ -18,6 +18,19 @@ function isAdminEmail(email?: string | null) {
 }
 
 export async function middleware(request: NextRequest) {
+  // 🔌 [MCP] OAuth 자동 탐색 경로는 반드시 404 로 끊는다.
+  // MCP 클라이언트(Claude 앱 등)는 커넥터를 붙이기 전에 /.well-known/oauth-* 를 먼저 조회해
+  // 인증 서버가 있는지 확인한다. 404 가 오면 "인증 없는 서버"로 보고 그냥 연결하지만,
+  // 여기서 로그인 페이지로 리다이렉트(307→200 HTML)하면 OAuth 서버가 있는 줄 알고
+  // 클라이언트 등록(DCR)을 시도하다 "로그인 서비스에 등록할 수 없습니다" 로 실패한다.
+  // 우리 MCP 는 URL 토큰/Bearer 토큰으로 인증하므로 OAuth 는 제공하지 않는다.
+  if (
+    request.nextUrl.pathname.startsWith('/.well-known/oauth-') ||
+    request.nextUrl.pathname === '/.well-known/openid-configuration'
+  ) {
+    return new NextResponse(null, { status: 404 });
+  }
+
   let response = NextResponse.next({
     request: { headers: request.headers },
   });

@@ -19,6 +19,7 @@ import {
   InventoryStockType,
   InventoryStockTypeFilter,
 } from '@/lib/inventory-classification';
+import { classifyInventoryStatus, isNoExpiry } from '@/lib/inventory-status';
 import type { PriceSource } from '@/lib/ending-inventory-price';
 import { Coins, Factory, Layers, Wallet } from 'lucide-react';
 
@@ -91,13 +92,9 @@ function StockStatusPageInner() {
         targetBatches.forEach(b => {
             if (b.quantity <= 0) return;
 
-            const isNoExpiry = !b.expirationDate || b.expirationDate === '-' || b.expirationDate === '' || b.expirationDate === '기한없음';
-            let status = 'healthy';
-            
-            if (isNoExpiry) status = 'no_expiry';
-            else if (b.remainDays <= 0) status = 'disposed';
-            else if (b.remainDays <= 30) status = 'imminent';
-            else if (b.remainDays <= 60) status = 'critical';
+            // 판정 기준은 lib/inventory-status.ts 한 곳에만 둔다 (MCP 툴과 동일 기준 유지)
+            const noExpiry = isNoExpiry(b.expirationDate);
+            const status: string = classifyInventoryStatus(b.expirationDate, b.remainDays);
 
             // ✅ 백엔드에서 넘어오는 lgobe 속성을 매핑 (대소문자 방어 코드 포함)
             const lgobeValue = (b as any).LGOBE || (b as any).lgobe || (b as any).location || '-';
@@ -105,9 +102,9 @@ function StockStatusPageInner() {
             rows.push({
                 ...item,
                 batchQty: b.quantity,
-                expirationDateStr: isNoExpiry ? '-' : b.expirationDate,
-                remainDaysNum: isNoExpiry ? '-' : b.remainDays,
-                remainRateNum: isNoExpiry ? null : b.remainRate,
+                expirationDateStr: noExpiry ? '-' : b.expirationDate,
+                remainDaysNum: noExpiry ? '-' : b.remainDays,
+                remainRateNum: noExpiry ? null : b.remainRate,
                 status: status,
                 isQuality: false,
                 location: lgobeValue,

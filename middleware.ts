@@ -53,11 +53,14 @@ export async function middleware(request: NextRequest) {
   // - /auth: 소셜 로그인 등 콜백
   // - /favicon.ico, /_next: 정적 파일 (이미지, 스타일 등)
   // - /api/notice: 로그인 못 한 사용자에게 안내 팝업을 띄우기 위한 공개 API
+  // - /api/mcp: MCP 클라이언트는 브라우저 쿠키가 없다. 쿠키 대신 Bearer 토큰(MCP_TOKEN)으로
+  //             라우트 자체에서 인증하므로 여기서는 통과시킨다. (막으면 로그인 HTML만 반환됨)
   const isPublicPath =
     path.startsWith('/login') ||
     path.startsWith('/reset-password') ||
     path.startsWith('/unauthorized') ||
     path.startsWith('/api/notice') ||
+    path.startsWith('/api/mcp') ||
     path.startsWith('/auth') ||
     path.startsWith('/_next') ||
     path.startsWith('/favicon.ico') ||

@@ -19,6 +19,7 @@ import {
   getInventoryOverview,
   getInventoryRiskItems,
 } from '@/lib/mcp/inventory-insights';
+import { getInventoryMorningBriefing } from '@/lib/inventory-daily-snapshot';
 
 const SERVER_INFO = { name: 'snop-inventory', version: '1.0.0' };
 const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -31,6 +32,7 @@ const SERVER_INSTRUCTIONS = [
   '제공하지 않는 것: 매출/수주/생산실적/원가/고객 정보. 이 서버 툴로는 답할 수 없으니 추측하지 말 것.',
   '상태 판정 기준은 고정이다 — 폐기=잔여 0일 이하, 임박=1~30일, 긴급=31~60일, 양호=61일 이상.',
   '넓은 질문에는 inventory_group_summary 로 먼저 그룹 순위를 보고, 이어서 inventory_risk_items 로 품목을 좁히는 순서를 권장한다.',
+  '매일 아침 브리핑에는 inventory_morning_briefing 을 사용한다. 이 도구는 일별 스냅샷 기준의 전일 대비·신규 진입·임박에서 폐기로 이동한 품목을 반환한다.',
   '금액은 원가팀 기말재고 단가 기준이며 단가가 없는 품목은 0으로 잡히므로, 금액과 수량을 함께 확인할 것.',
 ].join(' ');
 
@@ -113,6 +115,13 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'inventory_morning_briefing',
+    description:
+      '매일 아침 재고 관리 브리핑용 요약을 반환한다. 최신 일별 스냅샷 기준으로 폐기·임박·긴급 버킷의 수량/금액/품목수, 전일 대비, 신규 임박 진입, 임박에서 폐기로 이동한 품목 수, 상위 5개 집중도와 액션 그룹별 소계를 준다. ' +
+      '세부 품목은 웹앱에서 확인하도록 하고, 이 결과만 간결하게 한국어 브리핑으로 요약한다. 인자는 없다.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
 ];
 
 // ---------------------------------------------------------------- 인증
@@ -163,6 +172,8 @@ async function callTool(name: string, args: Record<string, any>) {
       return toolResult(await getInventoryGroupSummary(args));
     case 'inventory_risk_items':
       return toolResult(await getInventoryRiskItems(args));
+    case 'inventory_morning_briefing':
+      return toolResult(await getInventoryMorningBriefing());
     default:
       throw new Error(`알 수 없는 툴: ${name}`);
   }

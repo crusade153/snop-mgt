@@ -74,6 +74,8 @@ export async function middleware(request: NextRequest) {
     path.startsWith('/unauthorized') ||
     path.startsWith('/api/notice') ||
     path.startsWith('/api/mcp') ||
+    // Vercel Cron 은 브라우저 세션 대신 CRON_SECRET 으로 route 내부에서 인증한다.
+    path.startsWith('/api/cron') ||
     path.startsWith('/auth') ||
     path.startsWith('/_next') ||
     path.startsWith('/favicon.ico') ||

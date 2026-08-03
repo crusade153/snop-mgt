@@ -54,6 +54,13 @@ interface SimulatedItem extends IntegratedItem {
         r75_85: number;
         over85: number;
     };
+    bucketValues: {
+        under50: number;
+        r50_70: number;
+        r70_75: number;
+        r75_85: number;
+        over85: number;
+    };
     targetDatePlan: number;
   }
 }
@@ -237,17 +244,29 @@ function InventoryPageInner() {
       );
 
       const buckets = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
+      const bucketValues = { under50: 0, r50_70: 0, r70_75: 0, r75_85: 0, over85: 0 };
       targetBatches.forEach(b => {
           const r = b.remainRate;
           const days = b.remainDays; 
 
           // 폐기가 아닌 유효 재고만 % 구간에 집계
           if (days > 0) {
-            if (r < 50) buckets.under50 += b.quantity;
-            else if (r < 70) buckets.r50_70 += b.quantity;
-            else if (r < 75) buckets.r70_75 += b.quantity;
-            else if (r < 85) buckets.r75_85 += b.quantity;
-            else buckets.over85 += b.quantity;
+            if (r < 50) {
+              buckets.under50 += b.quantity;
+              bucketValues.under50 += b.stockValue;
+            } else if (r < 70) {
+              buckets.r50_70 += b.quantity;
+              bucketValues.r50_70 += b.stockValue;
+            } else if (r < 75) {
+              buckets.r70_75 += b.quantity;
+              bucketValues.r70_75 += b.stockValue;
+            } else if (r < 85) {
+              buckets.r75_85 += b.quantity;
+              bucketValues.r75_85 += b.stockValue;
+            } else {
+              buckets.over85 += b.quantity;
+              bucketValues.over85 += b.stockValue;
+            }
           }
       });
 
@@ -255,7 +274,7 @@ function InventoryPageInner() {
         ...item,
         sim: { 
             ads30, ads60, ads90,
-            usableStock, wasteStock, buckets,
+            usableStock, wasteStock, buckets, bucketValues,
             qualityStock: (inventoryViewMode !== 'LOGISTICS') ? filteredQualityStock : 0,
             stockValue,
             priceSource,
@@ -371,10 +390,15 @@ function InventoryPageInner() {
         : item.sim.priceSource === 'CURRENT_MONTH' ? '당월생산' : '단가없음';
       rowData['회전일(90)'] = displayTurnover !== "-" ? Number(displayTurnover) : null;
       rowData['~50% (유효)'] = buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).rawValue : 0;
+      rowData['~50% 금액(원)'] = item.sim.priceSource === 'ENDING_INVENTORY' ? Math.round(item.sim.bucketValues.under50) : null;
       rowData['50~70%'] = buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).rawValue : 0;
+      rowData['50~70% 금액(원)'] = item.sim.priceSource === 'ENDING_INVENTORY' ? Math.round(item.sim.bucketValues.r50_70) : null;
       rowData['70~75%'] = buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).rawValue : 0;
+      rowData['70~75% 금액(원)'] = item.sim.priceSource === 'ENDING_INVENTORY' ? Math.round(item.sim.bucketValues.r70_75) : null;
       rowData['75~85%'] = buckets.r75_85 > 0 ? formatQty(buckets.r75_85, item.umrezBox, item.unit).rawValue : 0;
+      rowData['75~85% 금액(원)'] = item.sim.priceSource === 'ENDING_INVENTORY' ? Math.round(item.sim.bucketValues.r75_85) : null;
       rowData['85%~'] = buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).rawValue : 0;
+      rowData['85%~ 금액(원)'] = item.sim.priceSource === 'ENDING_INVENTORY' ? Math.round(item.sim.bucketValues.over85) : null;
       
       return rowData;
     });
@@ -502,7 +526,9 @@ function InventoryPageInner() {
             <TableProperties size={17} className="text-blue-600" />
             <span>재고 및 ADS 상세 현황</span>
           </div>
-          <span className="text-[11px] font-normal text-neutral-500">단위: {unitMode === 'BOX' ? 'BOX (환산)' : '기준 (EA/KG)'}</span>
+          <span className="text-[11px] font-normal text-neutral-500">
+            구간별 상단 수량 · 하단 재고금액(원) / 수량 단위: {unitMode === 'BOX' ? 'BOX (환산)' : '기준 (EA/KG)'}
+          </span>
         </div>
         
         <div className="overflow-x-auto min-h-[400px]">
@@ -527,11 +553,11 @@ function InventoryPageInner() {
                 
                 <SortableHeader label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" className="text-red-700 bg-red-50/10" />
 
-                <SortableHeader label="~50% (유효)" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" />
-                <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" />
-                <SortableHeader label="70~75%" sortKey="bucket_70_75" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#F57F17] bg-yellow-50/50" />
-                <SortableHeader label="75~85%" sortKey="bucket_75_85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#1565C0] bg-blue-50/30" />
-                <SortableHeader label="85%~" sortKey="bucket_over85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#2E7D32] bg-green-50/30" />
+                <SortableHeader label="~50% (유효)" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
+                <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
+                <SortableHeader label="70~75%" sortKey="bucket_70_75" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#F57F17] bg-yellow-50/50" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
+                <SortableHeader label="75~85%" sortKey="bucket_75_85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#1565C0] bg-blue-50/30" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
+                <SortableHeader label="85%~" sortKey="bucket_over85" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#2E7D32] bg-green-50/30" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200">
@@ -622,11 +648,11 @@ function InventoryPageInner() {
                         {displayTurnover}
                     </td>
 
-                    <td className="px-2 py-3 text-right text-[#C62828] bg-red-50/30 font-medium">{buckets.under50 > 0 ? formatQty(buckets.under50, item.umrezBox, item.unit).value : '-'}</td>
-                    <td className="px-2 py-3 text-right text-[#E65100] bg-orange-50/30 font-medium">{buckets.r50_70 > 0 ? formatQty(buckets.r50_70, item.umrezBox, item.unit).value : '-'}</td>
-                    <td className="px-2 py-3 text-right text-[#F57F17] bg-yellow-50/50 font-medium">{buckets.r70_75 > 0 ? formatQty(buckets.r70_75, item.umrezBox, item.unit).value : '-'}</td>
-                    <td className="px-2 py-3 text-right text-[#1565C0] bg-blue-50/30 font-medium">{buckets.r75_85 > 0 ? formatQty(buckets.r75_85, item.umrezBox, item.unit).value : '-'}</td>
-                    <td className="px-2 py-3 text-right text-[#2E7D32] bg-green-50/30 font-medium">{buckets.over85 > 0 ? formatQty(buckets.over85, item.umrezBox, item.unit).value : '-'}</td>
+                    <InventoryAgeBucketCell quantity={buckets.under50} stockValue={item.sim.bucketValues.under50} priceSource={item.sim.priceSource} displayQuantity={formatQty(buckets.under50, item.umrezBox, item.unit).value} className="text-[#C62828] bg-red-50/30" />
+                    <InventoryAgeBucketCell quantity={buckets.r50_70} stockValue={item.sim.bucketValues.r50_70} priceSource={item.sim.priceSource} displayQuantity={formatQty(buckets.r50_70, item.umrezBox, item.unit).value} className="text-[#E65100] bg-orange-50/30" />
+                    <InventoryAgeBucketCell quantity={buckets.r70_75} stockValue={item.sim.bucketValues.r70_75} priceSource={item.sim.priceSource} displayQuantity={formatQty(buckets.r70_75, item.umrezBox, item.unit).value} className="text-[#F57F17] bg-yellow-50/50" />
+                    <InventoryAgeBucketCell quantity={buckets.r75_85} stockValue={item.sim.bucketValues.r75_85} priceSource={item.sim.priceSource} displayQuantity={formatQty(buckets.r75_85, item.umrezBox, item.unit).value} className="text-[#1565C0] bg-blue-50/30" />
+                    <InventoryAgeBucketCell quantity={buckets.over85} stockValue={item.sim.bucketValues.over85} priceSource={item.sim.priceSource} displayQuantity={formatQty(buckets.over85, item.umrezBox, item.unit).value} className="text-[#2E7D32] bg-green-50/30" />
                   </tr>
                 );
               })}
@@ -657,6 +683,42 @@ function SortableHeader({ label, sortKey, currentSort, onSort, align = 'left', w
         {isActive ? (currentSort.direction === 'asc' ? <ArrowUp size={12} className="text-primary-blue"/> : <ArrowDown size={12} className="text-primary-blue"/>) : <ArrowUpDown size={12} className="text-neutral-300"/>}
       </div>
     </th>
+  );
+}
+
+function InventoryAgeBucketCell({
+  quantity,
+  stockValue,
+  priceSource,
+  displayQuantity,
+  className,
+}: {
+  quantity: number;
+  stockValue: number;
+  priceSource: PriceSource;
+  displayQuantity: string;
+  className: string;
+}) {
+  if (quantity <= 0) {
+    return <td className={`px-2 py-3 text-right font-medium ${className}`}>-</td>;
+  }
+
+  return (
+    <td className={`px-2 py-2 text-right font-medium whitespace-nowrap ${className}`}>
+      <div>{displayQuantity}</div>
+      {priceSource === 'ENDING_INVENTORY' ? (
+        <div className="mt-0.5 text-[10px] font-normal leading-none text-neutral-500">
+          {Math.round(stockValue).toLocaleString('ko-KR')}원
+        </div>
+      ) : (
+        <div
+          className="mt-0.5 text-[10px] font-normal leading-none text-amber-700"
+          title={priceSource === 'CURRENT_MONTH' ? '당월 첫 생산분으로 기말재고 단가가 아직 없습니다.' : '적용 가능한 기말재고 단가가 없습니다.'}
+        >
+          금액 미산정
+        </div>
+      )}
+    </td>
   );
 }
 

@@ -4,8 +4,8 @@ import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  AlertTriangle, Ban, ChevronLeft, ChevronRight, Clock, Download, Info, Layers, Link2,
-  PackageX, Search, TrendingUp, X,
+  AlertTriangle, Ban, CheckCircle2, ChevronLeft, ChevronRight, Clock, Download, Info, Layers,
+  Link2, PackageX, Search, SlidersHorizontal, TrendingUp, X,
 } from 'lucide-react';
 import {
   getMaterialDetail,
@@ -14,7 +14,12 @@ import {
 } from '@/actions/material-insight-actions';
 import { FILTERABLE_MATERIAL_CLASSES, MATERIAL_CLASS_LABEL } from '@/lib/bom/explosion-sql';
 import { exportToExcel } from '@/lib/excel-export';
-import { UNASSIGNED_OWNER_ID, type MaterialInsight, type MaterialRiskKind } from '@/types/material';
+import {
+  classifyMaterialInventory,
+  clampSimulationMonths,
+  describeMaterialStatuses,
+} from '@/lib/material/inventory-status';
+import { UNASSIGNED_OWNER_ID, type MaterialInsight, type MaterialStockStatus } from '@/types/material';
 
 const PLANT_NAME: Record<string, string> = {
   '1021': '1공장',
@@ -23,21 +28,27 @@ const PLANT_NAME: Record<string, string> = {
   '1031': '온라인물류',
 };
 
-const RISK_ICON: Record<MaterialRiskKind, typeof Ban> = {
-  DISCONTINUED_ONLY: Ban,
-  DEAD: PackageX,
+const STATUS_ICON: Record<MaterialStockStatus, typeof Ban> = {
+  ACTIVE: CheckCircle2,
   EXCESS: TrendingUp,
-  OVER_ORDERED: Clock,
+  SLOW_MOVING: Clock,
+  OBSOLETE: PackageX,
 };
 
-const RISK_TONE: Record<MaterialRiskKind, string> = {
-  DISCONTINUED_ONLY: 'text-red-700 bg-red-50 ring-red-200',
-  DEAD: 'text-orange-700 bg-orange-50 ring-orange-200',
+const STATUS_TONE: Record<MaterialStockStatus, string> = {
+  ACTIVE: 'text-emerald-700 bg-emerald-50 ring-emerald-200',
   EXCESS: 'text-amber-700 bg-amber-50 ring-amber-200',
-  OVER_ORDERED: 'text-sky-700 bg-sky-50 ring-sky-200',
+  SLOW_MOVING: 'text-orange-700 bg-orange-50 ring-orange-200',
+  OBSOLETE: 'text-red-700 bg-red-50 ring-red-200',
 };
 
-const RISK_ORDER: MaterialRiskKind[] = ['DISCONTINUED_ONLY', 'DEAD', 'EXCESS', 'OVER_ORDERED'];
+const STATUS_ORDER: MaterialStockStatus[] = ['ACTIVE', 'EXCESS', 'SLOW_MOVING', 'OBSOLETE'];
+const STATUS_SORT_ORDER: Record<MaterialStockStatus, number> = {
+  OBSOLETE: 0,
+  SLOW_MOVING: 1,
+  EXCESS: 2,
+  ACTIVE: 3,
+};
 
 const PAGE_SIZE = 30;
 
@@ -65,8 +76,12 @@ export default function MaterialsClient({
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [search, setSearch] = useState(initialSearch);
-  const [riskFilter, setRiskFilter] = useState<MaterialRiskKind | null>(null);
+  const [statusFilter, setStatusFilter] = useState<MaterialStockStatus | null>(null);
   const [classFilter, setClassFilter] = useState<string | null>(null);
+  const [usageMonths, setUsageMonths] = useState(3);
+  const [excessMonths, setExcessMonths] = useState(() =>
+    clampSimulationMonths(payload.thresholds.excessMonths),
+  );
   const [page, setPage] = useState(1);
   const [showCriteria, setShowCriteria] = useState(false);
   const [detail, setDetail] = useState<MaterialDetailPayload | null>(null);
@@ -74,7 +89,10 @@ export default function MaterialsClient({
 
   const buildAgeDays = daysSince(payload.build?.finishedAt ?? payload.build?.startedAt ?? null);
   const stale = buildAgeDays !== null && buildAgeDays > 14;
-  const criteria = payload.criteria;
+  const criteria = useMemo(
+    () => describeMaterialStatuses({ usageMonths, excessMonths }),
+    [usageMonths, excessMonths],
+  );
 
   // 자재 구분별 건수 — 필터 칩에 그대로 띄운다.
   const classCounts = useMemo(() => {
@@ -94,44 +112,50 @@ export default function MaterialsClient({
     [payload.insights, classFilter],
   );
 
-  const riskTotals = useMemo(() => {
-    const totals: Record<MaterialRiskKind, { count: number; value: number }> = {
-      DISCONTINUED_ONLY: { count: 0, value: 0 },
-      DEAD: { count: 0, value: 0 },
+  const classified = useMemo(
+    () =>
+      classScoped.map((insight) => ({
+        insight,
+        result: classifyMaterialInventory(insight, { usageMonths, excessMonths }),
+      })),
+    [classScoped, usageMonths, excessMonths],
+  );
+
+  const statusTotals = useMemo(() => {
+    const totals: Record<MaterialStockStatus, { count: number; value: number }> = {
+      ACTIVE: { count: 0, value: 0 },
       EXCESS: { count: 0, value: 0 },
-      OVER_ORDERED: { count: 0, value: 0 },
+      SLOW_MOVING: { count: 0, value: 0 },
+      OBSOLETE: { count: 0, value: 0 },
     };
-    for (const insight of classScoped) {
-      for (const kind of insight.risks) {
-        totals[kind].count += 1;
-        totals[kind].value += kind === 'OVER_ORDERED' ? insight.openPoValue : insight.stockValue;
-      }
+    for (const { result } of classified) {
+      totals[result.status].count += 1;
+      totals[result.status].value += result.statusValue;
     }
     return totals;
-  }, [classScoped]);
+  }, [classified]);
 
   const rows = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    return classScoped
-      .filter((insight) => (riskFilter ? insight.risks.includes(riskFilter) : true))
-      .filter((insight) =>
+    return classified
+      .filter(({ result }) => (statusFilter ? result.status === statusFilter : true))
+      .filter(({ insight }) =>
         keyword
           ? insight.materialCode.toLowerCase().includes(keyword) ||
             insight.materialName.toLowerCase().includes(keyword)
           : true,
       )
       .sort((a, b) => {
-        // 위험이 있는 것부터, 그 안에서 금액 큰 순.
-        const risk = (b.risks.length > 0 ? 1 : 0) - (a.risks.length > 0 ? 1 : 0);
-        if (risk !== 0) return risk;
-        return b.stockValue - a.stockValue;
+        const status = STATUS_SORT_ORDER[a.result.status] - STATUS_SORT_ORDER[b.result.status];
+        if (status !== 0) return status;
+        return b.result.statusValue - a.result.statusValue;
       });
-  }, [classScoped, riskFilter, search]);
+  }, [classified, statusFilter, search]);
 
   // 필터가 바뀌면 첫 페이지로. 안 그러면 3페이지를 보던 중 필터를 바꿨을 때 빈 화면이 뜬다.
   // effect 로 되돌리면 한 번 잘못 그린 뒤에 다시 그리게 되므로 렌더 중에 맞춘다
   // (React 가 권장하는 "props 가 바뀔 때 state 조정" 패턴).
-  const filterKey = `${riskFilter}|${classFilter}|${search}`;
+  const filterKey = `${statusFilter}|${classFilter}|${usageMonths}|${excessMonths}|${search}`;
   const [lastFilterKey, setLastFilterKey] = useState(filterKey);
   if (lastFilterKey !== filterKey) {
     setLastFilterKey(filterKey);
@@ -156,25 +180,32 @@ export default function MaterialsClient({
 
   const handleExport = () => {
     exportToExcel(
-      rows.map((row) => ({
+      rows.map(({ insight: row, result }) => ({
         자재코드: row.materialCode,
         자재명: row.materialName,
         자재구분: MATERIAL_CLASS_LABEL[row.materialClass] ?? row.materialClass,
         공장: PLANT_NAME[row.werks] ?? row.werks,
+        재고상태: criteria[result.status].label,
+        판정사유: result.reason,
+        BOM등록: row.bomRegistered ? '등록' : '미등록',
         전용공용: row.kind === 'DEDICATED' ? '전용' : '공용',
         담당자: row.owners.map((o) => `${o.ownerName}(${Math.round(o.share * 100)}%)`).join(', '),
-        재고수량: row.onHand,
+        가용재고: row.onHand,
+        품질검사재고: row.qualityStock,
+        보류재고: row.blockedStock,
         단위: row.unit,
         재고금액: Math.round(row.stockValue),
         귀속금액: Math.round(row.owners[0]?.allocatedValue ?? 0),
-        월평균소요: Math.round(row.monthlyUse),
-        재고월수: row.stockMonths === null ? '' : Number(row.stockMonths.toFixed(1)),
-        입고후재고월수: row.stockMonthsWithPo === null ? '' : Number(row.stockMonthsWithPo.toFixed(1)),
+        사용이력기간개월: usageMonths,
+        기간소요량: Math.round(result.usage),
+        월평균소요: Math.round(result.monthlyUse),
+        과잉기준개월: excessMonths,
+        예상소요량: Math.round(result.expectedUse),
+        재고월수: result.stockMonths === null ? '' : Number(result.stockMonths.toFixed(1)),
         미입고발주수량: row.openPoQty,
         미입고발주금액: Math.round(row.openPoValue),
         납기경과건: row.overduePoCount,
         사용완제품수: row.productCount,
-        위험: row.risks.map((r) => criteria[r].label).join(', '),
         데이터경고: row.dataWarnings.join(' / '),
       })),
       '자재연결_귀속현황',
@@ -202,7 +233,15 @@ export default function MaterialsClient({
   }
 
   const summary = payload.summary;
-  const n = payload.thresholds.usageLookbackMonths;
+  const n = usageMonths;
+  const summaryOwnerId = activeOwnerId ?? payload.viewerOwnerId;
+  const simulatedRiskValue = classified.reduce((total, { insight, result }) => {
+    if (result.status === 'ACTIVE') return total;
+    const share = summaryOwnerId
+      ? (insight.owners.find((owner) => owner.ownerId === summaryOwnerId)?.share ?? 0)
+      : 1;
+    return total + result.statusValue * share;
+  }, 0);
 
   return (
     <div className="space-y-5">
@@ -214,7 +253,7 @@ export default function MaterialsClient({
           <h1 className="mt-1 text-2xl font-bold text-neutral-950">내 제품이 쓰는 원부포장재</h1>
           <p className="mt-1 text-sm text-neutral-600">
             담당 제품 → BOM 전개 → 그 제품을 만드는 자재의 재고·발주까지 이어서 봅니다.
-            모든 수치는 최근 <strong>{n}개월</strong> 생산실적 기준입니다.
+            사용 이력과 예상 소요 기간을 3~12개월로 바꾸면 서버 재조회 없이 즉시 재분류됩니다.
           </p>
         </div>
 
@@ -271,7 +310,7 @@ export default function MaterialsClient({
               {summary.materialCount.toLocaleString()}
               <span className="ml-1 text-sm font-medium text-neutral-500">종</span>
             </div>
-            <div className="mt-2 text-xs text-neutral-600">최근 {n}개월 소요비중으로 배분</div>
+            <div className="mt-2 text-xs text-neutral-600">담당 지분은 기준정보 설정값으로 배분</div>
           </div>
           <div className="rounded border border-neutral-200 bg-white p-4">
             <div className="text-xs font-semibold text-neutral-500">미입고 발주 (내 몫)</div>
@@ -279,30 +318,49 @@ export default function MaterialsClient({
             <div className="mt-2 text-xs text-neutral-600">발주했지만 아직 안 들어온 금액</div>
           </div>
           <div className="rounded border border-neutral-200 bg-white p-4">
-            <div className="text-xs font-semibold text-neutral-500">위험 금액 합계</div>
+            <div className="text-xs font-semibold text-neutral-500">시뮬레이션 위험금액</div>
             <div className="mt-1 text-2xl font-bold text-red-600">
-              {won(
-                summary.riskValue.DISCONTINUED_ONLY +
-                  summary.riskValue.DEAD +
-                  summary.riskValue.EXCESS,
-              )}
+              {won(simulatedRiskValue)}
             </div>
-            <div className="mt-2 text-xs text-neutral-600">단종·사장·과잉 재고 귀속분</div>
+            <div className="mt-2 text-xs text-neutral-600">과잉·부진·불용 재고 귀속분</div>
           </div>
         </section>
       ) : null}
 
+      <section className="rounded border border-neutral-200 bg-white p-4">
+        <div className="flex items-center gap-2 text-sm font-bold text-neutral-800">
+          <SlidersHorizontal className="h-4 w-4" /> 재고 분류 시뮬레이션
+        </div>
+        <div className="mt-4 grid gap-5 md:grid-cols-2">
+          <SimulationSlider
+            label="사용 이력 판정 (N)"
+            value={usageMonths}
+            onChange={setUsageMonths}
+            description={`최근 ${usageMonths}개월 내 연결 완제품 생산실적으로 정상/부진을 나눕니다.`}
+          />
+          <SimulationSlider
+            label="과잉 기준 예상 소요 (M)"
+            value={excessMonths}
+            onChange={setExcessMonths}
+            description={`현재고가 향후 ${excessMonths}개월 예상 소요를 넘으면 과잉입니다.`}
+          />
+        </div>
+        <div className="mt-3 text-[11px] text-neutral-500">
+          사용량 = 완제품 생산실적 × BOM 소요량. 품질검사재고는 불용으로 단정하지 않고 별도 표시합니다.
+        </div>
+      </section>
+
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {RISK_ORDER.map((kind) => {
-          const meta = criteria[kind];
-          const Icon = RISK_ICON[kind];
-          const total = riskTotals[kind];
-          const active = riskFilter === kind;
+        {STATUS_ORDER.map((status) => {
+          const meta = criteria[status];
+          const Icon = STATUS_ICON[status];
+          const total = statusTotals[status];
+          const active = statusFilter === status;
           return (
             <button
-              key={kind}
+              key={status}
               type="button"
-              onClick={() => setRiskFilter(active ? null : kind)}
+              onClick={() => setStatusFilter(active ? null : status)}
               className={`rounded border p-4 text-left transition ${
                 active
                   ? 'border-neutral-900 bg-neutral-900 text-white'
@@ -312,7 +370,7 @@ export default function MaterialsClient({
               <div className="flex items-center justify-between">
                 <div
                   className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-semibold ring-1 ${
-                    active ? 'bg-white/10 text-white ring-white/20' : RISK_TONE[kind]
+                    active ? 'bg-white/10 text-white ring-white/20' : STATUS_TONE[status]
                   }`}
                 >
                   <Icon className="h-3 w-3" /> {meta.label}
@@ -344,17 +402,17 @@ export default function MaterialsClient({
         </button>
         {showCriteria ? (
           <div className="grid gap-3 border-t border-neutral-200 p-4 md:grid-cols-2">
-            {RISK_ORDER.map((kind) => (
-              <div key={kind} className="rounded bg-neutral-50 p-3">
+            {STATUS_ORDER.map((status) => (
+              <div key={status} className="rounded bg-neutral-50 p-3">
                 <div
-                  className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-semibold ring-1 ${RISK_TONE[kind]}`}
+                  className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-semibold ring-1 ${STATUS_TONE[status]}`}
                 >
-                  {criteria[kind].label}
+                  {criteria[status].label}
                 </div>
                 <div className="mt-2 font-mono text-[12px] leading-5 text-neutral-800">
-                  {criteria[kind].formula}
+                  {criteria[status].formula}
                 </div>
-                <p className="mt-1.5 text-xs leading-5 text-neutral-600">{criteria[kind].detail}</p>
+                <p className="mt-1.5 text-xs leading-5 text-neutral-600">{criteria[status].detail}</p>
               </div>
             ))}
             <div className="rounded bg-neutral-50 p-3 md:col-span-2">
@@ -365,16 +423,16 @@ export default function MaterialsClient({
                   반제품을 거쳐 들어가는 자재도 단계를 곱해 역산합니다.
                 </li>
                 <li>
-                  · <strong>월평균소요</strong> = 소요량 ÷ {n}. 소요량이 0이면 재고월수는 계산하지
-                  않고 &lsquo;사장&rsquo; 또는 &lsquo;단종 전용&rsquo;으로 분류합니다.
+                  · <strong>월평균소요</strong> = 소요량 ÷ {n}. 현재고와 월평균소요 × {excessMonths}개월을
+                  비교해 정상/과잉을 나눕니다.
                 </li>
                 <li>
-                  · <strong>귀속</strong>: 담당자가 한 명이면 전용(100%), 여럿이면 최근 {n}개월
-                  소요비중으로 나눕니다. 소요가 전혀 없으면 쓰는 완제품 수로 나눕니다.
+                  · <strong>귀속</strong>: 담당자가 한 명이면 전용(100%), 여럿이면 기준정보의 최근{' '}
+                  {payload.thresholds.usageLookbackMonths}개월 소요비중으로 나눕니다.
                 </li>
                 <li>
-                  · <strong>재고금액</strong> = 재고수량 × 이동평균가(VERPR). 단가가 없는 자재는 0원으로
-                  잡히니 수량과 함께 보세요.
+                  · <strong>불용 판정</strong>: BOM 미등록 또는 가용·품질검사재고 없이 SAP 보류재고만
+                  있는 경우입니다. 품질검사재고는 합격 가능성이 있어 자동 불용 처리하지 않습니다.
                 </li>
               </ul>
             </div>
@@ -410,13 +468,13 @@ export default function MaterialsClient({
                 {MATERIAL_CLASS_LABEL[code]} {(classCounts.get(code) ?? 0).toLocaleString()}
               </button>
             ))}
-            {riskFilter ? (
+            {statusFilter ? (
               <button
                 type="button"
-                onClick={() => setRiskFilter(null)}
+                onClick={() => setStatusFilter(null)}
                 className="ml-1 rounded bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 ring-1 ring-red-200"
               >
-                {criteria[riskFilter].label} ✕
+                {criteria[statusFilter].label} ✕
               </button>
             ) : null}
           </div>
@@ -440,11 +498,11 @@ export default function MaterialsClient({
                 <th className="px-3 py-2 text-left font-semibold">공장</th>
                 <th className="px-3 py-2 text-left font-semibold">담당</th>
                 <th className="px-3 py-2 text-right font-semibold">재고</th>
-                <th className="px-3 py-2 text-right font-semibold">재고금액</th>
+                <th className="px-3 py-2 text-right font-semibold">판정금액</th>
                 <th className="px-3 py-2 text-right font-semibold">재고월수</th>
                 <th className="px-3 py-2 text-right font-semibold">미입고발주</th>
                 <th className="px-3 py-2 text-right font-semibold">쓰는 제품</th>
-                <th className="px-3 py-2 text-left font-semibold">위험</th>
+                <th className="px-3 py-2 text-left font-semibold">재고상태</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
@@ -455,7 +513,7 @@ export default function MaterialsClient({
                   </td>
                 </tr>
               ) : (
-                pageRows.map((row) => (
+                pageRows.map(({ insight: row, result }) => (
                   <tr
                     key={`${row.werks}|${row.materialCode}`}
                     onClick={() => openDetail(row)}
@@ -479,12 +537,14 @@ export default function MaterialsClient({
                     <td className="px-3 py-2">
                       <span
                         className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${
-                          row.kind === 'DEDICATED'
-                            ? 'bg-neutral-900 text-white'
-                            : 'bg-neutral-100 text-neutral-600'
+                          !row.bomRegistered
+                            ? 'bg-red-50 text-red-700 ring-1 ring-red-200'
+                            : row.kind === 'DEDICATED'
+                              ? 'bg-neutral-900 text-white'
+                              : 'bg-neutral-100 text-neutral-600'
                         }`}
                       >
-                        {row.kind === 'DEDICATED' ? '전용' : '공용'}
+                        {!row.bomRegistered ? 'BOM 미등록' : row.kind === 'DEDICATED' ? '전용' : '공용'}
                       </span>
                       {row.owners[0] && row.owners[0].ownerId !== UNASSIGNED_OWNER_ID ? (
                         <div className="mt-0.5 text-[11px] text-neutral-500">
@@ -501,15 +561,19 @@ export default function MaterialsClient({
                     <td className="px-3 py-2 text-right tabular-nums">
                       {qty(row.onHand)}
                       <span className="ml-1 text-xs text-neutral-400">{row.unit}</span>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{won(row.stockValue)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {months(row.stockMonths)}
-                      {row.stockMonthsWithPo !== null && row.openPoQty > 0 ? (
-                        <div className="text-[11px] text-neutral-500">
-                          입고후 {row.stockMonthsWithPo.toFixed(1)}
-                        </div>
+                      {row.qualityStock > 0 ? (
+                        <div className="text-[11px] text-purple-600">품질 {qty(row.qualityStock)}</div>
                       ) : null}
+                      {row.blockedStock > 0 ? (
+                        <div className="text-[11px] text-red-600">보류 {qty(row.blockedStock)}</div>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{won(result.statusValue)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {months(result.stockMonths)}
+                      <div className="text-[11px] text-neutral-500">
+                        예상 {qty(result.expectedUse)}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {row.openPoQty > 0 ? (
@@ -527,16 +591,14 @@ export default function MaterialsClient({
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{row.productCount}</td>
                     <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
-                        {row.risks.map((kind) => (
-                          <span
-                            key={kind}
-                            title={criteria[kind].formula}
-                            className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ring-1 ${RISK_TONE[kind]}`}
-                          >
-                            {criteria[kind].label}
-                          </span>
-                        ))}
+                      <span
+                        title={`${criteria[result.status].formula} · ${result.reason}`}
+                        className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ring-1 ${STATUS_TONE[result.status]}`}
+                      >
+                        {criteria[result.status].label}
+                      </span>
+                      <div className="mt-1 max-w-52 text-[11px] leading-4 text-neutral-500">
+                        {result.reason}
                       </div>
                     </td>
                   </tr>
@@ -589,6 +651,58 @@ export default function MaterialsClient({
         />
       )}
     </div>
+  );
+}
+
+function SimulationSlider({
+  label,
+  value,
+  onChange,
+  description,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  description: string;
+}) {
+  return (
+    <label className="block">
+      <span className="flex items-center justify-between gap-3 text-xs font-semibold text-neutral-700">
+        {label}
+        <strong className="rounded bg-neutral-900 px-2 py-0.5 text-sm text-white">{value}개월</strong>
+      </span>
+      <input
+        type="range"
+        min={3}
+        max={12}
+        step={1}
+        value={value}
+        onChange={(event) => onChange(clampSimulationMonths(Number(event.target.value)))}
+        onInput={(event) =>
+          onChange(clampSimulationMonths(Number((event.currentTarget as HTMLInputElement).value)))
+        }
+        className="mt-3 w-full accent-neutral-900"
+        aria-label={label}
+      />
+      <span className="mt-2 flex items-center justify-between gap-1">
+        {[3, 6, 9, 12].map((months) => (
+          <button
+            key={months}
+            type="button"
+            onClick={() => onChange(months)}
+            className={`rounded px-2 py-0.5 text-[10px] font-semibold transition ${
+              value === months
+                ? 'bg-neutral-900 text-white'
+                : 'bg-neutral-100 text-neutral-500 hover:bg-neutral-200'
+            }`}
+            aria-label={`${label} ${months}개월`}
+          >
+            {months}개월
+          </button>
+        ))}
+      </span>
+      <span className="mt-1 block text-[11px] leading-4 text-neutral-500">{description}</span>
+    </label>
   );
 }
 

@@ -24,6 +24,7 @@ import {
   toMaterialRequirements,
   toProductUsage,
   PO_OVERDUE_CUTOFF_DAYS,
+  MATERIAL_SIMULATION_MONTHS,
 } from '@/lib/material/queries';
 import type { MaterialFact, MaterialRequirementRow, ProductUsage } from '@/types/material';
 
@@ -52,7 +53,7 @@ async function fetchMaterialFactsUncached(): Promise<MaterialFact[]> {
 }
 
 export async function getMaterialFacts(): Promise<MaterialFact[]> {
-  return unstable_cache(fetchMaterialFactsUncached, ['material-facts-v1'], {
+  return unstable_cache(fetchMaterialFactsUncached, ['material-facts-v2-stock-status'], {
     revalidate: 600,
     tags: ['report-data'],
   })();
@@ -86,14 +87,15 @@ export async function getProductUsage(months = 3): Promise<ProductUsage[]> {
  * ⚠️ 전개가 무거워(실측 11초) 캐시가 비면 그 요청은 느리다. 자재 화면이 서버
  *    렌더링이라 사용자에겐 첫 로딩으로 보인다.
  */
-async function fetchMaterialRequirementsCompressed(months: number): Promise<string> {
+async function fetchMaterialRequirementsCompressed(): Promise<string> {
   const today = new Date();
+  const maxMonths = MATERIAL_SIMULATION_MONTHS.at(-1) ?? 12;
   const [rows] = await bigqueryClient.query({
     query: buildMaterialRequirementQuery('RAW_AND_PACKAGING'),
     params: {
       maxLevel: MAX_BOM_LEVEL,
       plants: [],
-      fromDate: ymd(subMonths(today, months)),
+      fromDate: ymd(subMonths(today, maxMonths)),
       toDate: ymd(today),
     },
     types: {
@@ -104,13 +106,13 @@ async function fetchMaterialRequirementsCompressed(months: number): Promise<stri
     },
   });
   const parsed = toMaterialRequirements(rows as Record<string, unknown>[]);
-  return gzipSync(JSON.stringify(parsed)).toString('base64');
+  return gzipSync(JSON.stringify(parsed), { level: 9 }).toString('base64');
 }
 
-export async function getMaterialRequirements(months = 3): Promise<MaterialRequirementRow[]> {
+export async function getMaterialRequirements(): Promise<MaterialRequirementRow[]> {
   const compressed = await unstable_cache(
-    () => fetchMaterialRequirementsCompressed(months),
-    [`material-requirements-v1-${months}`],
+    fetchMaterialRequirementsCompressed,
+    ['material-requirements-v2-3-to-12-months'],
     { revalidate: 600, tags: ['report-data'] },
   )();
   return JSON.parse(gunzipSync(Buffer.from(compressed, 'base64')).toString());

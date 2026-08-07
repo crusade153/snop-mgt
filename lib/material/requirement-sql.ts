@@ -19,7 +19,28 @@ import {
   materialScopeFilter,
   type BomScope,
 } from '@/lib/bom/explosion-sql';
-import { DATASET } from '@/lib/material/queries';
+import { DATASET, MATERIAL_SIMULATION_MONTHS } from '@/lib/material/queries';
+
+const usageWindowColumns = MATERIAL_SIMULATION_MONTHS.map(
+  (months) =>
+    `SUM(IF(PROD_DATE >= DATE_SUB(PARSE_DATE('%Y%m%d', @toDate), INTERVAL ${months} MONTH), QTY, 0)) AS QTY_${months}`,
+).join(',\n      ');
+
+const requirementWindowColumns = MATERIAL_SIMULATION_MONTHS.map(
+  (months) => `SUM(
+    IF(
+      l.FIXED_FLAG = 0 AND l.BAD_QTY_FLAG = 0 AND l.LOT_BASIS_FLAG = 0
+        AND l.UOM_MISMATCH = 0 AND l.QTY_PER_FG > 0,
+      l.QTY_PER_FG * IFNULL(u.QTY_${months}, 0),
+      0
+    )
+  ) AS requirement_${months}`,
+).join(',\n  ');
+
+const activeProductWindowColumns = MATERIAL_SIMULATION_MONTHS.map(
+  (months) =>
+    `COUNT(DISTINCT IF(IFNULL(t.QTY_${months}, 0) > 0, l.ROOT, NULL)) AS active_product_count_${months}`,
+).join(',\n  ');
 
 /**
  * 쿼리 파라미터
@@ -37,9 +58,10 @@ WITH RECURSIVE${buildBomExplosionCte()},
   -- ⚠️ 오더당 행이 대부분 1행이지만 공정별로 갈리는 경우가 있어 AUFNR 로 먼저 접는다.
   orders AS (
     SELECT
-      P.AUFNR,
-      ANY_VALUE(P.MATNR) AS MATNR,
-      ANY_VALUE(P.WERKS) AS WERKS,
+        P.AUFNR,
+        ANY_VALUE(P.MATNR) AS MATNR,
+        ANY_VALUE(P.WERKS) AS WERKS,
+        ANY_VALUE(SAFE.PARSE_DATE('%Y%m%d', CAST(P.GSTRP AS STRING))) AS PROD_DATE,
       MAX(
         CASE
           WHEN P.MEINS = 'BOX' AND M.MEINS <> 'BOX' THEN P.LMNGA * IFNULL(M.UMREZ_BOX, 1)
@@ -53,12 +75,20 @@ WITH RECURSIVE${buildBomExplosionCte()},
     GROUP BY P.AUFNR
   ),
   usage_by_plant AS (
-    SELECT MATNR, WERKS, SUM(QTY) AS QTY FROM orders WHERE QTY > 0 GROUP BY MATNR, WERKS
+    SELECT MATNR, WERKS,
+      ${usageWindowColumns}
+    FROM orders
+    WHERE QTY > 0
+    GROUP BY MATNR, WERKS
   ),
   -- 전 공장 합계. "이 완제품이 아예 안 만들어지고 있는가"(단종) 판정에 쓴다.
   -- 공장별 실적만 보면 다른 공장으로 생산이 옮겨간 제품을 단종으로 오판한다.
   usage_total AS (
-    SELECT MATNR, SUM(QTY) AS QTY FROM orders WHERE QTY > 0 GROUP BY MATNR
+    SELECT MATNR,
+      ${usageWindowColumns}
+    FROM orders
+    WHERE QTY > 0
+    GROUP BY MATNR
   ),
 
   -- (완제품 × 자재 × 공장) 리프. 마트에 적재되는 것과 같은 값이어야 한다.
@@ -92,20 +122,13 @@ SELECT
   l.BRAND                       AS root_brand,
   l.CATEGORY                    AS root_category,
   l.FAMILY                      AS root_family,
-  -- 소요량은 계산 가능한 행만 더한다. 고정수량·파싱실패·기준수량 오등록·단위 불일치는
-  -- 값 자체가 틀리므로 넣으면 안 되고, 대신 플래그로 화면에 경고를 띄운다.
-  SUM(
-    IF(
-      l.FIXED_FLAG = 0 AND l.BAD_QTY_FLAG = 0 AND l.LOT_BASIS_FLAG = 0
-        AND l.UOM_MISMATCH = 0 AND l.QTY_PER_FG > 0,
-      l.QTY_PER_FG * IFNULL(u.QTY, 0),
-      0
-    )
-  )                             AS requirement,
+  -- 3~12개월 누계를 한 번에 가져온다. 슬라이더를 움직일 때 BigQuery를 다시 호출하지 않는다.
+  -- 계산 가능한 행만 더하고, 고정수량·파싱실패·기준수량 오등록·단위불일치는 제외한다.
+  ${requirementWindowColumns},
   COUNT(DISTINCT l.ROOT)        AS product_count,
   -- 전 공장 기준으로 최근에 한 번이라도 만들어진 완제품 수. 0 이면 이 계층의 제품이
   -- 전부 생산 중단이라는 뜻이고, 그 자재는 사실상 폐기 후보다.
-  COUNT(DISTINCT IF(IFNULL(t.QTY, 0) > 0, l.ROOT, NULL)) AS active_product_count,
+  ${activeProductWindowColumns},
   MAX(l.QTY_PER_FG)             AS max_qty_per_fg,
   MAX(l.FIXED_FLAG) = 1         AS has_fixed_qty,
   MAX(l.BAD_QTY_FLAG) = 1       AS has_bad_qty,

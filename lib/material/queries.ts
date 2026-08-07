@@ -12,6 +12,7 @@ export const DATASET = 'harimfood-361004.harim_sap_bi';
 
 /** 납기가 이만큼 넘게 지난 미입고 발주는 미정리 잔재로 보고 제외한다(purchase 관례). */
 export const PO_OVERDUE_CUTOFF_DAYS = 30;
+export const MATERIAL_SIMULATION_MONTHS = Array.from({ length: 10 }, (_, index) => index + 3);
 
 /**
  * 다루는 자재 대역 — 1=원재료 2=부재료 3=포장재.
@@ -31,6 +32,10 @@ export function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toRequirementQuantity(value: unknown): number {
+  return Math.round(toNumber(value) * 1_000_000) / 1_000_000;
+}
+
 /**
  * 자재 재고 + 마스터 단가.
  * ⚠️ MM_MARD 에는 단위 컬럼이 없어 MM_ZMMR1140.MEINS 로 보완한다.
@@ -44,7 +49,9 @@ export function buildMaterialStockQuery(): string {
         WERKS,
         MATNR,
         ANY_VALUE(MATNR_T) AS MATNR_T,
-        SUM(IFNULL(LABST, 0)) AS ON_HAND
+        SUM(IFNULL(LABST, 0)) AS ON_HAND,
+        SUM(IFNULL(INSME, 0)) AS QUALITY_STOCK,
+        SUM(IFNULL(SPEME, 0)) AS BLOCKED_STOCK
       FROM \`${DATASET}.MM_MARD\`
       WHERE SUBSTR(MATNR, 1, 1) IN (${CLASS_IN})
       GROUP BY WERKS, MATNR
@@ -61,13 +68,13 @@ export function buildMaterialStockQuery(): string {
       GROUP BY 1, 2
     )
     SELECT
-      s.WERKS, s.MATNR, s.MATNR_T, s.ON_HAND,
+      s.WERKS, s.MATNR, s.MATNR_T, s.ON_HAND, s.QUALITY_STOCK, s.BLOCKED_STOCK,
       IFNULL(m.MEINS, '') AS MEINS,
       IFNULL(m.VERPR, 0) AS VERPR,
       IFNULL(m.PLIFZ, 0) AS PLIFZ
     FROM stock s
     LEFT JOIN master m ON m.MATNR = s.MATNR AND m.WERKS = s.WERKS
-    WHERE s.ON_HAND != 0
+    WHERE s.ON_HAND != 0 OR s.QUALITY_STOCK != 0 OR s.BLOCKED_STOCK != 0
   `;
 }
 
@@ -160,6 +167,8 @@ export function mergeMaterialFacts(
     const werks = String(row.WERKS ?? '');
     const materialCode = String(row.MATNR ?? '');
     const onHand = toNumber(row.ON_HAND);
+    const qualityStock = toNumber(row.QUALITY_STOCK);
+    const blockedStock = toNumber(row.BLOCKED_STOCK);
     const unitPrice = toNumber(row.VERPR);
     const leadTime = toNumber(row.PLIFZ);
     facts.set(keyOf(werks, materialCode), {
@@ -167,6 +176,8 @@ export function mergeMaterialFacts(
       materialName: String(row.MATNR_T ?? ''),
       werks,
       onHand,
+      qualityStock,
+      blockedStock,
       unit: String(row.MEINS ?? '') || 'EA',
       unitPrice,
       stockValue: onHand * unitPrice,
@@ -200,6 +211,8 @@ export function mergeMaterialFacts(
       materialName: '',
       werks,
       onHand: 0,
+      qualityStock: 0,
+      blockedStock: 0,
       unit: 'EA',
       unitPrice: 0,
       stockValue: 0,
@@ -226,9 +239,25 @@ export function toMaterialRequirements(rows: Record<string, unknown>[]): Materia
     rootBrand: String(row.root_brand ?? ''),
     rootCategory: String(row.root_category ?? ''),
     rootFamily: String(row.root_family ?? ''),
-    requirement: toNumber(row.requirement),
+    requirementsByMonths: Object.assign(
+      Array<number>(13).fill(0),
+      Object.fromEntries(
+        MATERIAL_SIMULATION_MONTHS.map((months) => [
+          months,
+          toRequirementQuantity(row[`requirement_${months}`]),
+        ]),
+      ),
+    ),
     productCount: toNumber(row.product_count),
-    activeProductCount: toNumber(row.active_product_count),
+    activeProductCountsByMonths: Object.assign(
+      Array<number>(13).fill(0),
+      Object.fromEntries(
+        MATERIAL_SIMULATION_MONTHS.map((months) => [
+          months,
+          Math.round(toNumber(row[`active_product_count_${months}`])),
+        ]),
+      ),
+    ),
     maxQtyPerFg: toNumber(row.max_qty_per_fg),
     hasFixedQty: Boolean(row.has_fixed_qty),
     hasBadQty: Boolean(row.has_bad_qty),

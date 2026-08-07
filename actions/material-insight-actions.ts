@@ -107,7 +107,7 @@ export async function getMaterialInsights(options: {
   }
 
   const [requirements, facts] = await Promise.all([
-    getMaterialRequirements(thresholds.usageLookbackMonths),
+    getMaterialRequirements(),
     getMaterialFacts(),
   ]);
 

@@ -60,11 +60,13 @@ const { buildBomExplosionQuery, MAX_BOM_LEVEL, MATERIAL_CLASS_LABEL } = await im
 const { toBomLeafRow } = await import('@/lib/bom/leaf');
 const { allocateMaterials, buildableQuantity, describeRiskCriteria, DEFAULT_THRESHOLDS } =
   await import('@/lib/material/allocation');
+const { classifyMaterialInventory, describeMaterialStatuses } =
+  await import('@/lib/material/inventory-status');
 const { buildMaterialRequirementQuery } = await import('@/lib/material/requirement-sql');
 const queries = await import('@/lib/material/queries');
 
 const bq = new BigQuery({
-  projectId: process.env.GOOGLE_PROJECT_ID,
+  projectId: process.env.GOOGLE_PROJECT_ID || 'harimfood-361004',
   credentials: {
     client_email: process.env.GOOGLE_CLIENT_EMAIL,
     private_key: String(process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, '\n'),
@@ -86,7 +88,7 @@ const today = new Date();
 const poCutoff = new Date(today);
 poCutoff.setDate(poCutoff.getDate() - queries.PO_OVERDUE_CUTOFF_DAYS);
 const usageFrom = new Date(today);
-usageFrom.setMonth(usageFrom.getMonth() - 3);
+usageFrom.setMonth(usageFrom.getMonth() - 12);
 
 console.log('\n■ 1. BOM 전개');
 const startedAt = Date.now();
@@ -229,7 +231,7 @@ const reqMaterials = new Set(requirements.map((row) => `${row.werks}|${row.mater
 // ⚠️ 이 집계는 unstable_cache 에 gzip 해서 넣는다. 항목 2MB 를 넘으면 저장이 조용히
 //    실패하고 매 요청 BigQuery 전개를 다시 때린다(purchase 가 3개월간 당한 버그).
 const rawBytes = JSON.stringify(requirements).length;
-const gzBytes = gzipSync(JSON.stringify(requirements)).toString('base64').length;
+const gzBytes = gzipSync(JSON.stringify(requirements), { level: 9 }).toString('base64').length;
 console.log(
   `  소요량 집계 ${requirements.length.toLocaleString()}행 (자재×공장×제품계층) · ` +
     `원본 ${(rawBytes / 1024 / 1024).toFixed(2)} MB → gzip+base64 ${(gzBytes / 1024 / 1024).toFixed(2)} MB`,
@@ -280,6 +282,46 @@ for (const kind of ['DISCONTINUED_ONLY', 'DEAD', 'EXCESS', 'OVER_ORDERED']) {
     `  ${criteria[kind].label.padEnd(6)} ${String(hit.length).padStart(5)}건 ${won(value).padStart(16)}  ← ${criteria[kind].formula}`,
   );
 }
+
+const simulationSettings = { usageMonths: 3, excessMonths: 3 };
+const statusCriteria = describeMaterialStatuses(simulationSettings);
+const classified = insights.map((item) => ({
+  item,
+  result: classifyMaterialInventory(item, simulationSettings),
+}));
+for (const status of ['ACTIVE', 'EXCESS', 'SLOW_MOVING', 'OBSOLETE']) {
+  const hit = classified.filter(({ result }) => result.status === status);
+  console.log(
+    `  ${statusCriteria[status].label.padEnd(6)} ${String(hit.length).padStart(5)}건 ${won(sum(hit, ({ result }) => result.statusValue)).padStart(16)}  ← ${statusCriteria[status].formula}`,
+  );
+}
+check(
+  '모든 자재가 정상·과잉·부진·불용 중 정확히 하나로 분류된다',
+  classified.length === insights.length && classified.every(({ result }) => Boolean(statusCriteria[result.status])),
+);
+check(
+  'BOM 미등록 자재는 모두 불용으로 분류된다',
+  classified.every(({ item, result }) => item.bomRegistered || result.status === 'OBSOLETE'),
+);
+const classified12 = insights.map((item) =>
+  classifyMaterialInventory(item, { usageMonths: 12, excessMonths: 12 }),
+);
+const changedBySlider = classified12.filter((result, index) => result.status !== classified[index].result.status);
+check(
+  '3개월→12개월 슬라이더 변경이 실데이터 분류에 반영된다',
+  changedBySlider.length > 0,
+  `${changedBySlider.length.toLocaleString()}건 상태 변경`,
+);
+check(
+  '사용 이력 기간을 늘리면 부진재고가 늘어나지 않는다',
+  classified12.filter((result) => result.status === 'SLOW_MOVING').length <=
+    classified.filter(({ result }) => result.status === 'SLOW_MOVING').length,
+);
+check(
+  '예상 소요 기간을 늘리면 과잉재고가 늘어나지 않는다',
+  classified12.filter((result) => result.status === 'EXCESS').length <=
+    classified.filter(({ result }) => result.status === 'EXCESS').length,
+);
 // 단종과 사장은 배타여야 한다. 둘 다 붙으면 판정이 겹쳐 금액이 이중 계상된다.
 check(
   '단종 전용과 사장 재고가 겹치지 않는다',

@@ -52,6 +52,10 @@ export interface MaterialFact {
   werks: string;
   /** MM_MARD 가용재고 합계 */
   onHand: number;
+  /** MM_MARD 품질검사 재고. 판정에서 가용/불용으로 단정하지 않고 별도 표시한다. */
+  qualityStock: number;
+  /** MM_MARD 보류재고. 가용재고가 없고 이 수량만 있으면 사용불가 재고로 본다. */
+  blockedStock: number;
   unit: string;
   /** MM_ZMMR1140 이동평균가 */
   unitPrice: number;
@@ -80,12 +84,12 @@ export interface MaterialRequirementRow {
   rootBrand: string;
   rootCategory: string;
   rootFamily: string;
-  /** Σ (완제품 생산실적 × 완제품 1개당 소요량). 계산 불가 행은 빠져 있다. */
-  requirement: number;
+  /** 3~12개월별 Σ(완제품 생산실적 × 완제품 1개당 BOM 소요량). 배열 인덱스=개월. */
+  requirementsByMonths: number[];
   /** 이 계층에서 이 자재를 쓰는 완제품 수 */
   productCount: number;
-  /** 그중 최근 기간에 전 공장 기준 한 번이라도 생산된 완제품 수. 0이면 전부 단종. */
-  activeProductCount: number;
+  /** 3~12개월별 전 공장 기준 생산 이력이 있는 완제품 수. 배열 인덱스=개월. */
+  activeProductCountsByMonths: number[];
   maxQtyPerFg: number;
   hasFixedQty: boolean;
   hasBadQty: boolean;
@@ -141,6 +145,9 @@ export type MaterialRiskKind =
   /** 재고 + 미입고 발주가 소요 대비 과다 */
   | 'OVER_ORDERED';
 
+/** 자재연결 화면의 상호 배타적인 재고 분류. */
+export type MaterialStockStatus = 'ACTIVE' | 'EXCESS' | 'SLOW_MOVING' | 'OBSOLETE';
+
 /** 자재 1건의 최종 분석 결과. 화면 한 행. */
 export interface MaterialInsight {
   materialCode: string;
@@ -150,6 +157,8 @@ export interface MaterialInsight {
   werks: string;
   unit: string;
   onHand: number;
+  qualityStock: number;
+  blockedStock: number;
   unitPrice: number;
   stockValue: number;
   openPoQty: number;
@@ -157,6 +166,8 @@ export interface MaterialInsight {
   overduePoCount: number;
   /** 이 자재를 쓰는 완제품 수 */
   productCount: number;
+  /** 현재 BOM 전개 결과에 포함되는 자재인지 여부. */
+  bomRegistered: boolean;
   /** 담당자가 1명이면 전용, 2명 이상이면 공용 */
   kind: 'DEDICATED' | 'SHARED';
   owners: OwnerShare[];
@@ -166,6 +177,10 @@ export interface MaterialInsight {
   stockMonths: number | null;
   /** (onHand + openPoQty) / monthlyUse */
   stockMonthsWithPo: number | null;
+  /** 3~12개월별 환산 소요량. 배열 인덱스=개월. */
+  requirementsByMonths: number[];
+  /** 3~12개월별 생산 이력 완제품 수. 배열 인덱스=개월. */
+  activeProductCountsByMonths: number[];
   risks: MaterialRiskKind[];
   /** 계산에서 제외된 이유. 있으면 화면에 경고 뱃지가 뜬다. */
   dataWarnings: string[];

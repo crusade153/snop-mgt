@@ -133,6 +133,7 @@ export function createOwnerResolver(owners: ProductOwner[]) {
 }
 
 const keyOf = (werks: string, code: string) => `${werks}|${code}`;
+const SIMULATION_MONTHS = Array.from({ length: 10 }, (_, index) => index + 3);
 
 /**
  * 소요량 계산에서 빠진 이유. 있으면 화면에 경고 뱃지로 뜬다.
@@ -158,6 +159,7 @@ export interface AllocationResult {
 
 export function allocateMaterials(input: AllocationInput): AllocationResult {
   const thresholds = { ...DEFAULT_THRESHOLDS, ...input.thresholds };
+  const usageMonths = Math.min(12, Math.max(3, Math.round(thresholds.usageLookbackMonths)));
   const resolveOwner = createOwnerResolver(input.owners);
   const factByKey = new Map(input.facts.map((fact) => [keyOf(fact.werks, fact.materialCode), fact]));
 
@@ -185,6 +187,8 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
     let totalReq = 0;
     let totalProducts = 0;
     let activeProducts = 0;
+    const requirementsByMonths = Array<number>(13).fill(0);
+    const activeProductCountsByMonths = Array<number>(13).fill(0);
 
     for (const row of rows) {
       const owner = resolveOwner(row);
@@ -203,16 +207,21 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       }
 
       collectWarnings(row, thresholds.suspectQtyPerFg).forEach((warning) => warnings.add(warning));
-      totalReq += row.requirement;
+      for (const months of SIMULATION_MONTHS) {
+        requirementsByMonths[months] += row.requirementsByMonths[months] ?? 0;
+        activeProductCountsByMonths[months] += row.activeProductCountsByMonths[months] ?? 0;
+      }
+      totalReq += row.requirementsByMonths[usageMonths] ?? 0;
       totalProducts += row.productCount;
-      activeProducts += row.activeProductCount;
+      activeProducts += row.activeProductCountsByMonths[usageMonths] ?? 0;
 
       const entry = perOwner.get(owner.ownerId);
+      const rowRequirement = row.requirementsByMonths[usageMonths] ?? 0;
       if (entry) {
-        entry.req += row.requirement;
+        entry.req += rowRequirement;
         entry.products += row.productCount;
       } else {
-        perOwner.set(owner.ownerId, { owner, req: row.requirement, products: row.productCount });
+        perOwner.set(owner.ownerId, { owner, req: rowRequirement, products: row.productCount });
       }
     }
 
@@ -263,12 +272,15 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       werks: first.werks,
       unit: fact?.unit || first.baseUom || first.bomUom || 'EA',
       onHand,
+      qualityStock: fact?.qualityStock ?? 0,
+      blockedStock: fact?.blockedStock ?? 0,
       unitPrice: fact?.unitPrice ?? 0,
       stockValue: fact?.stockValue ?? 0,
       openPoQty,
       openPoValue: fact?.openPoValue ?? 0,
       overduePoCount: fact?.overduePoCount ?? 0,
       productCount: totalProducts,
+      bomRegistered: true,
       // 전용/공용은 현업 용어 그대로 "이 자재를 한 담당 영역만 쓰는가"이며 BOM 사실로
       // 판정한다. 최근 실적으로 판정하면 이번 분기에 안 만든 브랜드가 빠지면서
       // 공용 자재가 전용으로 보이는 왜곡이 생긴다. 지분(owners)은 별개로 실적 기준이라
@@ -278,8 +290,56 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       monthlyUse,
       stockMonths,
       stockMonthsWithPo,
+      requirementsByMonths,
+      activeProductCountsByMonths,
       risks,
       dataWarnings: [...warnings],
+    });
+  }
+
+  // BOM에 없지만 가용·품질·보류재고 또는 미입고 발주가 있는 자재도 숨기지 않는다.
+  // 이 행이 빠지면 "BOM 미등록 = 불용" 기준을 화면에서 판정할 방법이 없다.
+  for (const fact of input.facts) {
+    const id = keyOf(fact.werks, fact.materialCode);
+    if (byMaterial.has(id)) continue;
+    const hasStake =
+      fact.onHand !== 0 || fact.qualityStock !== 0 || fact.blockedStock !== 0 || fact.openPoQty > 0;
+    if (!hasStake) continue;
+
+    insights.push({
+      materialCode: fact.materialCode,
+      materialName: fact.materialName,
+      materialClass: fact.materialCode.slice(0, 1),
+      werks: fact.werks,
+      unit: fact.unit || 'EA',
+      onHand: fact.onHand,
+      qualityStock: fact.qualityStock,
+      blockedStock: fact.blockedStock,
+      unitPrice: fact.unitPrice,
+      stockValue: fact.stockValue,
+      openPoQty: fact.openPoQty,
+      openPoValue: fact.openPoValue,
+      overduePoCount: fact.overduePoCount,
+      productCount: 0,
+      bomRegistered: false,
+      kind: 'DEDICATED',
+      owners: [
+        {
+          ownerId: UNASSIGNED_OWNER_ID,
+          ownerName: UNASSIGNED_OWNER_NAME,
+          ownerTeam: null,
+          share: 1,
+          allocatedValue: fact.stockValue,
+          allocatedQty: fact.onHand,
+        },
+      ],
+      monthlyUse: 0,
+      stockMonths: null,
+      stockMonthsWithPo: null,
+      requirementsByMonths: Array<number>(13).fill(0),
+      activeProductCountsByMonths: Array<number>(13).fill(0),
+      risks: ['DISCONTINUED_ONLY'],
+      dataWarnings: ['BOM 미등록'],
     });
   }
 

@@ -8,7 +8,8 @@ import {
   LayoutDashboard, Truck, ClipboardList, FileText,
   Package, Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
-  Sun, X, Star, UserCog, Bot, Megaphone, PanelLeftClose
+  Sun, X, Star, UserCog, Bot, Megaphone, PanelLeftClose,
+  Link2, Network
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 
@@ -21,6 +22,7 @@ const menuItems = [
   { name: '미납 상세', href: '/unfulfilled-detail', icon: FileText },
   { name: '재고 현황', href: '/stock', icon: Boxes },
   { name: '재고 분석', href: '/inventory', icon: Package },
+  { name: '자재 연결', href: '/materials', icon: Link2 },
   { name: '생산 분석', href: '/production', icon: Factory },
   { name: '수요 예측', href: '/forecast', icon: BrainCircuit },
   { name: '머신러닝 예측 검증', href: '/ml-forecast', icon: Bot },
@@ -70,6 +72,8 @@ export default function Sidebar() {
         ...menuItems,
         { name: '회원관리', href: '/admin/users', icon: UserCog },
         { name: '공지관리', href: '/admin/notices', icon: Megaphone },
+        { name: '자재 담당자', href: '/admin/owners', icon: UserCog },
+        { name: 'BOM 마트', href: '/admin/bom', icon: Network },
       ]
     : menuItems;
 

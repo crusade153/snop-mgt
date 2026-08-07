@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Package, TrendingUp, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import CanvasLineChart from '@/components/charts/canvas-line-chart';
+import ProductMaterialsSection from '@/components/product-materials-section';
 import { useUiStore } from '@/store/ui-store';
 import { ProductDetailData } from '@/actions/product-actions';
 
@@ -242,6 +243,9 @@ export default function ProductDetailClient({ data }: Props) {
           </>
         )}
       </div>
+
+      {/* 완제품 → 자재. /materials 의 자재 → 완제품과 짝을 이룬다. */}
+      <ProductMaterialsSection matnr={data.code} />
     </div>
   );
 }

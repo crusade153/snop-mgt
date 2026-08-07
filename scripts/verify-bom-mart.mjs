@@ -205,7 +205,11 @@ check('입고문서별 행 중복이 실재한다 (GROUP BY 가 필요하다)', 
 
 console.log('\n■ 4. 자재 사실 + 귀속');
 const [[stockRows], [poRows], [reqRows]] = await Promise.all([
-  bq.query({ query: queries.buildMaterialStockQuery() }),
+  bq.query({
+    query: queries.buildMaterialStockQuery(),
+    params: { fromDate: ymd(usageFrom), toDate: ymd(today) },
+    types: { fromDate: 'STRING', toDate: 'STRING' },
+  }),
   bq.query({
     query: queries.buildOpenPoQuery(),
     params: { todayInt: Number(ymd(today)), overdueCutoff: Number(ymd(poCutoff)) },
@@ -224,6 +228,18 @@ const [[stockRows], [poRows], [reqRows]] = await Promise.all([
 ]);
 const facts = queries.mergeMaterialFacts(stockRows, poRows);
 const requirements = queries.toMaterialRequirements(reqRows);
+const factsBytes = Buffer.byteLength(JSON.stringify(facts));
+check(
+  'MB51 사용량을 포함한 자재 사실 캐시가 2MB 제한 안에 든다',
+  factsBytes < 2 * 1024 * 1024,
+  `${(factsBytes / 1024 / 1024).toFixed(2)} MB`,
+);
+const beefTrim = facts.find((row) => row.werks === '1021' && row.materialCode === '10000437');
+check(
+  '한우잡육(10000437) 최근 3개월 MB51 261-262 사용량이 반영된다',
+  Math.abs((beefTrim?.actualUsageByMonths?.[3] ?? 0) - 379.7) < 0.001,
+  `${beefTrim?.actualUsageByMonths?.[3] ?? 0} KG`,
+);
 
 // 집계본이 리프와 같은 모수를 보는지 — 두 쿼리가 갈리면 화면끼리 숫자가 어긋난다.
 const leafMaterials = new Set(bomLeaf.map((row) => `${row.werks}|${row.materialCode}`));
@@ -289,6 +305,14 @@ const classified = insights.map((item) => ({
   item,
   result: classifyMaterialInventory(item, simulationSettings),
 }));
+const beefTrimClassified = classified.find(
+  ({ item }) => item.werks === '1021' && item.materialCode === '10000437',
+);
+check(
+  '한우잡육(10000437)은 최근 사용 이력이 있어 부진재고가 아니다',
+  Boolean(beefTrimClassified && beefTrimClassified.result.status !== 'SLOW_MOVING'),
+  beefTrimClassified?.result.status ?? '미조회',
+);
 for (const status of ['ACTIVE', 'EXCESS', 'SLOW_MOVING', 'OBSOLETE']) {
   const hit = classified.filter(({ result }) => result.status === status);
   console.log(

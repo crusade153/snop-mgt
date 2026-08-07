@@ -36,8 +36,7 @@ export function classifyMaterialInventory(
 ): MaterialStatusResult {
   const usageMonths = clampSimulationMonths(settings.usageMonths);
   const excessMonths = clampSimulationMonths(settings.excessMonths);
-  const usage = Math.max(0, insight.requirementsByMonths[usageMonths] ?? 0);
-  const activeProducts = Math.max(0, insight.activeProductCountsByMonths[usageMonths] ?? 0);
+  const usage = Math.max(0, insight.actualUsageByMonths[usageMonths] ?? 0);
   const monthlyUse = usage / usageMonths;
   const expectedUse = monthlyUse * excessMonths;
   const stockMonths = monthlyUse > 0 ? insight.onHand / monthlyUse : null;
@@ -70,7 +69,7 @@ export function classifyMaterialInventory(
     };
   }
 
-  if (activeProducts <= 0) {
+  if (usage <= 0) {
     return {
       status: 'SLOW_MOVING',
       usage,
@@ -79,7 +78,7 @@ export function classifyMaterialInventory(
       stockMonths,
       statusQuantity: insight.onHand,
       statusValue: insight.stockValue,
-      reason: `최근 ${usageMonths}개월간 연결 완제품의 생산 이력이 없습니다.`,
+      reason: `최근 ${usageMonths}개월간 MB51 생산투입(261-262) 이력이 없습니다.`,
     };
   }
 
@@ -107,7 +106,7 @@ export function classifyMaterialInventory(
     reason:
       monthlyUse > 0
         ? `최근 ${usageMonths}개월 사용 이력이 있고 재고가 ${excessMonths}개월 예상 소요 이내입니다.`
-        : '사용 이력은 있으나 BOM 단위 경고로 예상 소요량을 계산할 수 없습니다.',
+        : 'MB51 생산투입 이력은 있으나 순사용량을 계산할 수 없습니다.',
   };
 }
 
@@ -126,12 +125,12 @@ export function describeMaterialStatuses(settings: MaterialSimulationSettings): 
     EXCESS: {
       label: '과잉재고',
       formula: `BOM 등록 + 최근 ${usageMonths}개월 사용 + 현재고 > ${excessMonths}개월 예상 소요`,
-      detail: `예상 소요는 최근 ${usageMonths}개월 BOM 환산 소요의 월평균 × ${excessMonths}개월입니다.`,
+      detail: `예상 소요는 최근 ${usageMonths}개월 MB51 순사용량(261-262)의 월평균 × ${excessMonths}개월입니다.`,
     },
     SLOW_MOVING: {
       label: '부진재고',
       formula: `BOM 등록 + 최근 ${usageMonths}개월 사용 이력 없음`,
-      detail: '연결 완제품의 생산실적이 선택한 기간 동안 한 건도 없는 품목입니다.',
+      detail: 'MB51 생산투입(261)에서 취소(262)를 뺀 순사용량이 선택한 기간 동안 없는 품목입니다.',
     },
     OBSOLETE: {
       label: '불용재고',

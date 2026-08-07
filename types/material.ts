@@ -56,6 +56,8 @@ export interface MaterialFact {
   qualityStock: number;
   /** MM_MARD 보류재고. 가용재고가 없고 이 수량만 있으면 사용불가 재고로 본다. */
   blockedStock: number;
+  /** MM_MB51 261 투입 - 262 취소 순사용량. 배열 인덱스가 조회 개월이다. */
+  actualUsageByMonths: number[];
   unit: string;
   /** MM_ZMMR1140 이동평균가 */
   unitPrice: number;
@@ -159,6 +161,8 @@ export interface MaterialInsight {
   onHand: number;
   qualityStock: number;
   blockedStock: number;
+  /** MM_MB51 261 투입 - 262 취소 순사용량. 배열 인덱스가 조회 개월이다. */
+  actualUsageByMonths: number[];
   unitPrice: number;
   stockValue: number;
   openPoQty: number;

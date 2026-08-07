@@ -336,7 +336,7 @@ export default function MaterialsClient({
             label="사용 이력 판정 (N)"
             value={usageMonths}
             onChange={setUsageMonths}
-            description={`최근 ${usageMonths}개월 내 연결 완제품 생산실적으로 정상/부진을 나눕니다.`}
+            description={`최근 ${usageMonths}개월 MB51 생산투입(261-262)으로 정상/부진을 나눕니다.`}
           />
           <SimulationSlider
             label="과잉 기준 예상 소요 (M)"
@@ -346,7 +346,7 @@ export default function MaterialsClient({
           />
         </div>
         <div className="mt-3 text-[11px] text-neutral-500">
-          사용량 = 완제품 생산실적 × BOM 소요량. 품질검사재고는 불용으로 단정하지 않고 별도 표시합니다.
+          사용량 = MB51 생산투입 261 - 취소 262 순사용량. 품질검사재고는 불용으로 단정하지 않고 별도 표시합니다.
         </div>
       </section>
 
@@ -419,8 +419,8 @@ export default function MaterialsClient({
               <div className="text-xs font-semibold text-neutral-700">공통 정의</div>
               <ul className="mt-1.5 space-y-1 text-xs leading-5 text-neutral-600">
                 <li>
-                  · <strong>소요량</strong> = Σ(완제품 최근 {n}개월 생산실적 × 완제품 1개당 BOM 소요량).
-                  반제품을 거쳐 들어가는 자재도 단계를 곱해 역산합니다.
+                  · <strong>소요량</strong> = 최근 {n}개월 MB51 생산투입(261) - 취소(262) 순사용량입니다.
+                  생산오더 실적 누락 여부와 관계없이 실제 자재 이동을 기준으로 계산합니다.
                 </li>
                 <li>
                   · <strong>월평균소요</strong> = 소요량 ÷ {n}. 현재고와 월평균소요 × {excessMonths}개월을

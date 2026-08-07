@@ -34,8 +34,13 @@ function ymd(date: Date) {
 
 async function fetchMaterialFactsUncached(): Promise<MaterialFact[]> {
   const today = new Date();
+  const maxMonths = MATERIAL_SIMULATION_MONTHS.at(-1) ?? 12;
   const [[stockRows], [poRows]] = await Promise.all([
-    bigqueryClient.query({ query: buildMaterialStockQuery() }),
+    bigqueryClient.query({
+      query: buildMaterialStockQuery(),
+      params: { fromDate: ymd(subMonths(today, maxMonths)), toDate: ymd(today) },
+      types: { fromDate: 'STRING', toDate: 'STRING' },
+    }),
     bigqueryClient.query({
       query: buildOpenPoQuery(),
       params: {
@@ -53,7 +58,7 @@ async function fetchMaterialFactsUncached(): Promise<MaterialFact[]> {
 }
 
 export async function getMaterialFacts(): Promise<MaterialFact[]> {
-  return unstable_cache(fetchMaterialFactsUncached, ['material-facts-v2-stock-status'], {
+  return unstable_cache(fetchMaterialFactsUncached, ['material-facts-v3-mb51-usage'], {
     revalidate: 600,
     tags: ['report-data'],
   })();

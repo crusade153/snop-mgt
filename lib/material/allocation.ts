@@ -247,7 +247,9 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       .sort((a, b) => b.share - a.share);
 
     // ── 3. 위험 판정 (기준은 describeRiskCriteria 가 화면에 그대로 노출한다) ──
-    const monthlyUse = totalReq / thresholds.usageLookbackMonths;
+    const actualUsageByMonths = fact?.actualUsageByMonths ?? Array<number>(13).fill(0);
+    const actualUsage = actualUsageByMonths[usageMonths] ?? 0;
+    const monthlyUse = actualUsage / thresholds.usageLookbackMonths;
     const onHand = fact?.onHand ?? 0;
     const openPoQty = fact?.openPoQty ?? 0;
     const stockMonths = monthlyUse > 0 ? onHand / monthlyUse : null;
@@ -274,6 +276,7 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       onHand,
       qualityStock: fact?.qualityStock ?? 0,
       blockedStock: fact?.blockedStock ?? 0,
+      actualUsageByMonths,
       unitPrice: fact?.unitPrice ?? 0,
       stockValue: fact?.stockValue ?? 0,
       openPoQty,
@@ -315,6 +318,7 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       onHand: fact.onHand,
       qualityStock: fact.qualityStock,
       blockedStock: fact.blockedStock,
+      actualUsageByMonths: fact.actualUsageByMonths,
       unitPrice: fact.unitPrice,
       stockValue: fact.stockValue,
       openPoQty: fact.openPoQty,

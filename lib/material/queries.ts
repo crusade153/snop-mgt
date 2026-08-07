@@ -43,6 +43,14 @@ function toRequirementQuantity(value: unknown): number {
  * ⚠️ 같은 테이블의 NAME1 은 공급업체가 아니라 플랜트명("하림산업 1공장")이다. 쓰지 않는다.
  */
 export function buildMaterialStockQuery(): string {
+  const actualUsageColumns = MATERIAL_SIMULATION_MONTHS.map(
+    (months) => `GREATEST(SUM(IF(
+          BUDAT >= FORMAT_DATE('%Y%m%d', DATE_SUB(PARSE_DATE('%Y%m%d', @toDate), INTERVAL ${months} MONTH)),
+          CASE WHEN BWART = '261' THEN ABS(IFNULL(ERFMG, 0)) ELSE -ABS(IFNULL(ERFMG, 0)) END,
+          0
+        )), 0) AS ACTUAL_USAGE_${months}`,
+  ).join(',\n        ');
+
   return `
     WITH stock AS (
       SELECT
@@ -54,6 +62,17 @@ export function buildMaterialStockQuery(): string {
         SUM(IFNULL(SPEME, 0)) AS BLOCKED_STOCK
       FROM \`${DATASET}.MM_MARD\`
       WHERE SUBSTR(MATNR, 1, 1) IN (${CLASS_IN})
+      GROUP BY WERKS, MATNR
+    ),
+    usage AS (
+      SELECT
+        WERKS,
+        MATNR,
+        ${actualUsageColumns}
+      FROM \`${DATASET}.MM_MB51\`
+      WHERE BWART IN ('261', '262')
+        AND BUDAT BETWEEN @fromDate AND @toDate
+        AND SUBSTR(MATNR, 1, 1) IN (${CLASS_IN})
       GROUP BY WERKS, MATNR
     ),
     master AS (
@@ -71,9 +90,11 @@ export function buildMaterialStockQuery(): string {
       s.WERKS, s.MATNR, s.MATNR_T, s.ON_HAND, s.QUALITY_STOCK, s.BLOCKED_STOCK,
       IFNULL(m.MEINS, '') AS MEINS,
       IFNULL(m.VERPR, 0) AS VERPR,
-      IFNULL(m.PLIFZ, 0) AS PLIFZ
+      IFNULL(m.PLIFZ, 0) AS PLIFZ,
+      ${MATERIAL_SIMULATION_MONTHS.map((months) => `IFNULL(u.ACTUAL_USAGE_${months}, 0) AS ACTUAL_USAGE_${months}`).join(',\n      ')}
     FROM stock s
     LEFT JOIN master m ON m.MATNR = s.MATNR AND m.WERKS = s.WERKS
+    LEFT JOIN usage u ON u.MATNR = s.MATNR AND u.WERKS = s.WERKS
     WHERE s.ON_HAND != 0 OR s.QUALITY_STOCK != 0 OR s.BLOCKED_STOCK != 0
   `;
 }
@@ -178,6 +199,15 @@ export function mergeMaterialFacts(
       onHand,
       qualityStock,
       blockedStock,
+      actualUsageByMonths: Object.assign(
+        Array<number>(13).fill(0),
+        Object.fromEntries(
+          MATERIAL_SIMULATION_MONTHS.map((months) => [
+            months,
+            toRequirementQuantity(row[`ACTUAL_USAGE_${months}`]),
+          ]),
+        ),
+      ),
       unit: String(row.MEINS ?? '') || 'EA',
       unitPrice,
       stockValue: onHand * unitPrice,
@@ -213,6 +243,7 @@ export function mergeMaterialFacts(
       onHand: 0,
       qualityStock: 0,
       blockedStock: 0,
+      actualUsageByMonths: Array<number>(13).fill(0),
       unit: 'EA',
       unitPrice: 0,
       stockValue: 0,

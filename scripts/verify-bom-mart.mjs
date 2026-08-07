@@ -89,6 +89,8 @@ const poCutoff = new Date(today);
 poCutoff.setDate(poCutoff.getDate() - queries.PO_OVERDUE_CUTOFF_DAYS);
 const usageFrom = new Date(today);
 usageFrom.setMonth(usageFrom.getMonth() - 12);
+const recentProductionFrom = new Date(today);
+recentProductionFrom.setMonth(recentProductionFrom.getMonth() - 3);
 
 console.log('\n■ 1. BOM 전개');
 const startedAt = Date.now();
@@ -204,7 +206,7 @@ console.log(
 check('입고문서별 행 중복이 실재한다 (GROUP BY 가 필요하다)', dupFactor > 1.5);
 
 console.log('\n■ 4. 자재 사실 + 귀속');
-const [[stockRows], [poRows], [reqRows]] = await Promise.all([
+const [[stockRows], [poRows], [reqRows], [productUsageRows]] = await Promise.all([
   bq.query({
     query: queries.buildMaterialStockQuery(),
     params: { fromDate: ymd(usageFrom), toDate: ymd(today) },
@@ -225,9 +227,27 @@ const [[stockRows], [poRows], [reqRows]] = await Promise.all([
     },
     types: { maxLevel: 'INT64', plants: ['STRING'], fromDate: 'STRING', toDate: 'STRING' },
   }),
+  bq.query({
+    query: queries.buildProductUsageQuery(),
+    params: { fromDate: ymd(recentProductionFrom), toDate: ymd(today) },
+    types: { fromDate: 'STRING', toDate: 'STRING' },
+  }),
 ]);
 const facts = queries.mergeMaterialFacts(stockRows, poRows);
 const requirements = queries.toMaterialRequirements(reqRows);
+const productUsage = queries.toProductUsage(productUsageRows);
+const traderRiceBox = productUsage.find((row) => row.werks === '1021' && row.matnr === '50005706');
+const traderRiceInner = productUsage.find((row) => row.werks === '1021' && row.matnr === '50005715');
+check(
+  '완제품 50005706 최근 생산오더 입고가 BOX→EA 환산되어 집계된다',
+  traderRiceBox?.actualQty === 7758,
+  `${traderRiceBox?.actualQty ?? 0} EA`,
+);
+check(
+  '완제품 50005715 최근 생산오더 입고가 집계된다',
+  traderRiceInner?.actualQty === 38790,
+  `${traderRiceInner?.actualQty ?? 0} EA`,
+);
 const factsBytes = Buffer.byteLength(JSON.stringify(facts));
 check(
   'MB51 사용량을 포함한 자재 사실 캐시가 2MB 제한 안에 든다',

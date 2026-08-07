@@ -55,6 +55,14 @@ const PAGE_SIZE = 30;
 const won = (value: number) => `₩${Math.round(value).toLocaleString()}`;
 const qty = (value: number) =>
   value >= 1000 ? Math.round(value).toLocaleString() : value.toFixed(value < 10 ? 2 : 0);
+const perUnitQty = (value: number) => {
+  const absolute = Math.abs(value);
+  const maximumFractionDigits =
+    absolute === 0 || absolute >= 0.01
+      ? 3
+      : Math.min(9, Math.max(4, Math.ceil(-Math.log10(absolute)) + 1));
+  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits }).format(value);
+};
 const months = (value: number | null) => (value === null ? '—' : `${value.toFixed(1)}개월`);
 
 function daysSince(iso: string | null) {
@@ -808,9 +816,7 @@ function MaterialDetailSheet({
                       </td>
                       <td className="px-3 py-2 text-xs text-neutral-600">{entry.ownerName}</td>
                       <td className="px-3 py-2 text-right tabular-nums">
-                        {entry.qtyPerFg < 0.01
-                          ? entry.qtyPerFg.toExponential(1)
-                          : entry.qtyPerFg.toFixed(3)}
+                        {perUnitQty(entry.qtyPerFg)}
                       </td>
                       <td className="px-3 py-2 text-right font-semibold tabular-nums">
                         {entry.buildable === null ? (
@@ -820,7 +826,7 @@ function MaterialDetailSheet({
                         )}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums text-neutral-600">
-                        {entry.recentProduced > 0 ? qty(entry.recentProduced) : '—'}
+                        {entry.recentProduced > 0 ? `${qty(entry.recentProduced)} EA` : '—'}
                       </td>
                     </tr>
                   ))}

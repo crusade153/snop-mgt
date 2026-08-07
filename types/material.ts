@@ -99,11 +99,11 @@ export interface MaterialRequirementRow {
   uomMismatch: boolean;
 }
 
-/** 완제품별 최근 생산실적. 드릴다운에서 "최근 생산" 표시에 쓴다. 단위는 EA 정규화 값. */
+/** 완제품별 최근 생산오더 입고실적(101-102). 드릴다운에서 "최근 생산" 표시에 쓴다. */
 export interface ProductUsage {
   matnr: string;
   werks: string;
-  /** 조회 기간 전체 실적 (EA) */
+  /** 조회 기간 생산오더 순입고실적. BOX는 완제품 기본단위(EA)로 환산한다. */
   actualQty: number;
   /** 원본 단위. BOX/KG 였다면 정규화 전 값을 추적하기 위해 남긴다. */
   sourceUnit: string;

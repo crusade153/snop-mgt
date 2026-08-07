@@ -77,7 +77,7 @@ async function fetchProductUsageUncached(months: number): Promise<ProductUsage[]
 export async function getProductUsage(months = 3): Promise<ProductUsage[]> {
   return unstable_cache(
     () => fetchProductUsageUncached(months),
-    [`product-usage-v1-${months}`],
+    [`product-usage-v2-mb51-receipt-${months}`],
     { revalidate: 600, tags: ['report-data'] },
   )();
 }

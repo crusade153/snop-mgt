@@ -135,43 +135,33 @@ export function buildOpenPoQuery(): string {
 }
 
 /**
- * 완제품별 생산실적. 자재 소요비중과 월평균소요의 분모다.
+ * 완제품별 최근 생산오더 입고실적.
  *
- * ⚠️ 수량 단위가 EA/KG/BOX 로 섞여 있다(실측: 2공장은 셋 다 나온다).
- *    BOM 의 qty_per_fg 는 완제품 기본단위(SD_MARA.MEINS) 1개당 값이므로 BOX 로 기록된
- *    실적을 EA 로 정규화하지 않으면 소요량이 박스 배수만큼 어긋난다. 정규화 식은
- *    actions/dashboard-actions.ts:43-49 와 동일하게 맞춘다(자재 기본단위 자체가 BOX 인
- *    제품은 곱하지 않는 조건까지 포함).
- * ⚠️ 오더당 행은 실측상 거의 1행이지만(6,856건 중 52건만 2행) 공정별로 갈리는 경우가
- *    있어 AUFNR 로 접는다. 접기 전후 합계 차이는 1.00005 배 수준이다.
+ * PP_ZASPPR1110은 일부 최근 생산오더가 누락되어 화면의 생산실적 근거로 쓰지 않는다.
+ * 실제 자재 입출고 원장인 MM_MB51에서 생산입고 101 - 취소 102를 합산한다.
+ * BOX 입고는 SD_MARA.UMREZ_BOX로 완제품 기본단위(EA)에 맞춘다.
  */
 export function buildProductUsageQuery(): string {
   return `
-    WITH orders AS (
-      SELECT
-        P.AUFNR,
-        ANY_VALUE(P.MATNR) AS MATNR,
-        ANY_VALUE(P.WERKS) AS WERKS,
-        ANY_VALUE(P.MEINS) AS SRC_UNIT,
-        MAX(
-          CASE
-            WHEN P.MEINS = 'BOX' AND M.MEINS <> 'BOX' THEN P.LMNGA * IFNULL(M.UMREZ_BOX, 1)
-            ELSE P.LMNGA
-          END
-        ) AS QTY
-      FROM \`${DATASET}.PP_ZASPPR1110\` AS P
-      LEFT JOIN \`${DATASET}.SD_MARA\` AS M ON M.MATNR = P.MATNR
-      WHERE P.GSTRP BETWEEN @fromDate AND @toDate
-        AND P.MATNR BETWEEN '50000000' AND '69999999'
-      GROUP BY P.AUFNR
-    )
     SELECT
-      MATNR, WERKS,
-      SUM(QTY) AS ACTUAL_QTY,
-      STRING_AGG(DISTINCT SRC_UNIT) AS UNITS
-    FROM orders
-    WHERE QTY > 0
-    GROUP BY MATNR, WERKS
+      B.MATNR,
+      B.WERKS,
+      GREATEST(SUM(
+        (CASE WHEN B.BWART = '101' THEN 1 ELSE -1 END) * ABS(IFNULL(B.ERFMG, 0)) *
+        (CASE
+          WHEN B.ERFME = 'BOX' AND IFNULL(M.MEINS, '') <> 'BOX' THEN IFNULL(M.UMREZ_BOX, 1)
+          ELSE 1
+        END)
+      ), 0) AS ACTUAL_QTY,
+      STRING_AGG(DISTINCT B.ERFME) AS UNITS
+    FROM \`${DATASET}.MM_MB51\` AS B
+    LEFT JOIN \`${DATASET}.SD_MARA\` AS M ON M.MATNR = B.MATNR
+    WHERE B.BUDAT BETWEEN @fromDate AND @toDate
+      AND B.BWART IN ('101', '102')
+      AND B.AUFNR IS NOT NULL
+      AND B.MATNR BETWEEN '50000000' AND '69999999'
+    GROUP BY B.MATNR, B.WERKS
+    HAVING ACTUAL_QTY > 0
   `;
 }
 

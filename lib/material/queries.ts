@@ -6,7 +6,12 @@
  * 'use server' 파일은 Next 런타임 밖에서 로드되지 않기 때문이다.
  */
 
-import type { MaterialFact, MaterialRequirementRow, ProductUsage } from '@/types/material';
+import type {
+  DirectBomParent,
+  MaterialFact,
+  MaterialRequirementRow,
+  ProductUsage,
+} from '@/types/material';
 
 export const DATASET = 'harimfood-361004.harim_sap_bi';
 
@@ -75,6 +80,18 @@ export function buildMaterialStockQuery(): string {
         AND SUBSTR(MATNR, 1, 1) IN (${CLASS_IN})
       GROUP BY WERKS, MATNR
     ),
+    bom_usage AS (
+      SELECT
+        WERKS,
+        IDNRK AS MATNR,
+        COUNT(DISTINCT MATNR) AS DIRECT_BOM_PARENT_COUNT
+      FROM \`${DATASET}.PP_STPO\`
+      WHERE IDNRK IS NOT NULL
+        AND TRIM(IDNRK) != ''
+        AND SUBSTR(IDNRK, 1, 1) IN (${CLASS_IN})
+        AND (DATUV IS NULL OR DATUV <= @toDate)
+      GROUP BY WERKS, IDNRK
+    ),
     master AS (
       SELECT
         CAST(WERKS AS STRING) AS WERKS,
@@ -91,10 +108,12 @@ export function buildMaterialStockQuery(): string {
       IFNULL(m.MEINS, '') AS MEINS,
       IFNULL(m.VERPR, 0) AS VERPR,
       IFNULL(m.PLIFZ, 0) AS PLIFZ,
+      IFNULL(b.DIRECT_BOM_PARENT_COUNT, 0) AS DIRECT_BOM_PARENT_COUNT,
       ${MATERIAL_SIMULATION_MONTHS.map((months) => `IFNULL(u.ACTUAL_USAGE_${months}, 0) AS ACTUAL_USAGE_${months}`).join(',\n      ')}
     FROM stock s
     LEFT JOIN master m ON m.MATNR = s.MATNR AND m.WERKS = s.WERKS
     LEFT JOIN usage u ON u.MATNR = s.MATNR AND u.WERKS = s.WERKS
+    LEFT JOIN bom_usage b ON b.MATNR = s.MATNR AND b.WERKS = s.WERKS
     WHERE s.ON_HAND != 0 OR s.QUALITY_STOCK != 0 OR s.BLOCKED_STOCK != 0
   `;
 }
@@ -165,6 +184,36 @@ export function buildProductUsageQuery(): string {
   `;
 }
 
+/** 자재의 PP_STPO 직접 사용처. 완제품 루트 연결 여부와 무관한 SAP BOM 등록 사실이다. */
+export function buildDirectBomUsageQuery(): string {
+  return `
+    WITH parent_usage AS (
+      SELECT
+        MATNR,
+        WERKS,
+        STLAL,
+        SUM(IFNULL(SAFE_DIVIDE(SAFE_CAST(MENGE AS FLOAT64), NULLIF(BMENG, 0)), 0)) AS QTY_PER,
+        ANY_VALUE(MEINS) AS UNIT
+      FROM \`${DATASET}.PP_STPO\`
+      WHERE IDNRK = @materialCode
+        AND WERKS = @werks
+        AND (DATUV IS NULL OR DATUV <= @asOfDate)
+      GROUP BY MATNR, WERKS, STLAL
+    )
+    SELECT
+      p.MATNR AS PARENT_MATNR,
+      ANY_VALUE(COALESCE(m.MATNR_T, '')) AS PARENT_NAME,
+      p.WERKS,
+      MAX(p.QTY_PER) AS QTY_PER_PARENT,
+      ANY_VALUE(p.UNIT) AS UNIT,
+      COUNT(DISTINCT p.STLAL) AS ALTERNATIVE_COUNT
+    FROM parent_usage p
+    LEFT JOIN \`${DATASET}.SD_MARA\` m ON m.MATNR = p.MATNR
+    GROUP BY p.MATNR, p.WERKS
+    ORDER BY p.MATNR
+  `;
+}
+
 const keyOf = (werks: string, code: string) => `${werks}|${code}`;
 
 /** 재고 행과 발주 행을 자재×공장 키로 합친다. */
@@ -198,6 +247,7 @@ export function mergeMaterialFacts(
           ]),
         ),
       ),
+      directBomParentCount: Math.round(toNumber(row.DIRECT_BOM_PARENT_COUNT)),
       unit: String(row.MEINS ?? '') || 'EA',
       unitPrice,
       stockValue: onHand * unitPrice,
@@ -234,6 +284,7 @@ export function mergeMaterialFacts(
       qualityStock: 0,
       blockedStock: 0,
       actualUsageByMonths: Array<number>(13).fill(0),
+      directBomParentCount: 0,
       unit: 'EA',
       unitPrice: 0,
       stockValue: 0,
@@ -293,5 +344,16 @@ export function toProductUsage(rows: Record<string, unknown>[]): ProductUsage[] 
     werks: String(row.WERKS ?? ''),
     actualQty: toNumber(row.ACTUAL_QTY),
     sourceUnit: String(row.UNITS ?? ''),
+  }));
+}
+
+export function toDirectBomParents(rows: Record<string, unknown>[]): DirectBomParent[] {
+  return rows.map((row) => ({
+    parentMatnr: String(row.PARENT_MATNR ?? ''),
+    parentName: String(row.PARENT_NAME ?? ''),
+    werks: String(row.WERKS ?? ''),
+    qtyPerParent: toRequirementQuantity(row.QTY_PER_PARENT),
+    unit: String(row.UNIT ?? ''),
+    alternativeCount: Math.round(toNumber(row.ALTERNATIVE_COUNT)),
   }));
 }

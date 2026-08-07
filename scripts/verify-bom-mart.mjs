@@ -260,6 +260,12 @@ check(
   Math.abs((beefTrim?.actualUsageByMonths?.[3] ?? 0) - 379.7) < 0.001,
   `${beefTrim?.actualUsageByMonths?.[3] ?? 0} KG`,
 );
+const usBeefCut = facts.find((row) => row.werks === '1021' && row.materialCode === '10000585');
+check(
+  '조각정육 미국산(10000585)은 PP_STPO 직접 BOM 9개에 등록되어 있다',
+  usBeefCut?.directBomParentCount === 9,
+  `${usBeefCut?.directBomParentCount ?? 0}개`,
+);
 
 // 집계본이 리프와 같은 모수를 보는지 — 두 쿼리가 갈리면 화면끼리 숫자가 어긋난다.
 const leafMaterials = new Set(bomLeaf.map((row) => `${row.werks}|${row.materialCode}`));
@@ -333,6 +339,21 @@ check(
   Boolean(beefTrimClassified && beefTrimClassified.result.status !== 'SLOW_MOVING'),
   beefTrimClassified?.result.status ?? '미조회',
 );
+const usBeefCutClassified = classified.find(
+  ({ item }) => item.werks === '1021' && item.materialCode === '10000585',
+);
+check(
+  '조각정육 미국산(10000585)은 BOM 등록 자재로 판정된다',
+  Boolean(
+    usBeefCutClassified?.item.bomRegistered && usBeefCutClassified.item.productCount === 9,
+  ),
+  `${usBeefCutClassified?.item.productCount ?? 0}개 사용처`,
+);
+check(
+  '조각정육 미국산(10000585)은 최근 사용이 없어 불용이 아닌 부진재고다',
+  usBeefCutClassified?.result.status === 'SLOW_MOVING',
+  usBeefCutClassified?.result.status ?? '미조회',
+);
 for (const status of ['ACTIVE', 'EXCESS', 'SLOW_MOVING', 'OBSOLETE']) {
   const hit = classified.filter(({ result }) => result.status === status);
   console.log(
@@ -346,6 +367,14 @@ check(
 check(
   'BOM 미등록 자재는 모두 불용으로 분류된다',
   classified.every(({ item, result }) => item.bomRegistered || result.status === 'OBSOLETE'),
+);
+const directOnly = classified.filter(({ item }) =>
+  item.dataWarnings.includes('활성 완제품 경로 없음'),
+);
+check(
+  '직접 BOM은 있으나 활성 완제품 경로가 없는 자재도 BOM 등록으로 유지된다',
+  directOnly.length > 0 && directOnly.every(({ item }) => item.bomRegistered),
+  `${directOnly.length.toLocaleString()}건`,
 );
 const classified12 = insights.map((item) =>
   classifyMaterialInventory(item, { usageMonths: 12, excessMonths: 12 }),

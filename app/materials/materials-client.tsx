@@ -213,7 +213,7 @@ export default function MaterialsClient({
         미입고발주수량: row.openPoQty,
         미입고발주금액: Math.round(row.openPoValue),
         납기경과건: row.overduePoCount,
-        사용완제품수: row.productCount,
+        사용처수: row.productCount,
         데이터경고: row.dataWarnings.join(' / '),
       })),
       '자재연결_귀속현황',
@@ -509,7 +509,7 @@ export default function MaterialsClient({
                 <th className="px-3 py-2 text-right font-semibold">판정금액</th>
                 <th className="px-3 py-2 text-right font-semibold">재고월수</th>
                 <th className="px-3 py-2 text-right font-semibold">미입고발주</th>
-                <th className="px-3 py-2 text-right font-semibold">쓰는 제품</th>
+                <th className="px-3 py-2 text-right font-semibold">사용처</th>
                 <th className="px-3 py-2 text-left font-semibold">재고상태</th>
               </tr>
             </thead>
@@ -547,12 +547,20 @@ export default function MaterialsClient({
                         className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${
                           !row.bomRegistered
                             ? 'bg-red-50 text-red-700 ring-1 ring-red-200'
+                            : row.dataWarnings.includes('활성 완제품 경로 없음')
+                              ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
                             : row.kind === 'DEDICATED'
                               ? 'bg-neutral-900 text-white'
                               : 'bg-neutral-100 text-neutral-600'
                         }`}
                       >
-                        {!row.bomRegistered ? 'BOM 미등록' : row.kind === 'DEDICATED' ? '전용' : '공용'}
+                        {!row.bomRegistered
+                          ? 'BOM 미등록'
+                          : row.dataWarnings.includes('활성 완제품 경로 없음')
+                            ? '완제품 경로 없음'
+                            : row.kind === 'DEDICATED'
+                              ? '전용'
+                              : '공용'}
                       </span>
                       {row.owners[0] && row.owners[0].ownerId !== UNASSIGNED_OWNER_ID ? (
                         <div className="mt-0.5 text-[11px] text-neutral-500">
@@ -725,6 +733,7 @@ function MaterialDetailSheet({
 }) {
   const [page, setPage] = useState(1);
   const entries = detail?.entries ?? [];
+  const directParents = detail?.directParents ?? [];
 
   // 다른 자재를 열면 1페이지부터. 위와 같은 이유로 렌더 중에 맞춘다.
   const [lastCode, setLastCode] = useState(detail?.materialCode);
@@ -745,7 +754,7 @@ function MaterialDetailSheet({
         <div className="sticky top-0 flex items-start justify-between border-b border-neutral-200 bg-white px-6 py-4">
           <div>
             <div className="flex items-center gap-2 text-xs font-bold text-neutral-500">
-              <Layers className="h-3.5 w-3.5" /> 역전개 — 이 자재를 쓰는 완제품
+              <Layers className="h-3.5 w-3.5" /> 역전개 — 이 자재를 쓰는 BOM
             </div>
             <h2 className="mt-1 text-lg font-bold text-neutral-950">
               {detail?.materialName || detail?.materialCode || '불러오는 중…'}
@@ -754,7 +763,8 @@ function MaterialDetailSheet({
               <div className="mt-1 text-sm text-neutral-600">
                 {detail.materialCode} · {PLANT_NAME[detail.werks] ?? detail.werks} · 재고{' '}
                 <strong className="tabular-nums">{qty(detail.onHand)}</strong> {detail.unit} ·
-                완제품 {entries.length.toLocaleString()}종
+                완제품 {entries.length.toLocaleString()}종 · 직접 BOM{' '}
+                {directParents.length.toLocaleString()}종
               </div>
             ) : null}
           </div>
@@ -772,13 +782,51 @@ function MaterialDetailSheet({
 
           {loading ? (
             <div className="py-16 text-center text-sm text-neutral-500">불러오는 중…</div>
-          ) : !entries.length ? (
+          ) : !entries.length && !directParents.length ? (
             <div className="py-16 text-center text-sm text-neutral-500">
-              이 자재를 쓰는 완제품을 찾지 못했습니다.
+              이 자재가 등록된 BOM을 찾지 못했습니다.
             </div>
           ) : (
             <>
-              <table className="mt-4 w-full text-sm">
+              {!entries.length && directParents.length ? (
+                <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
+                  현재 BOM에는 등록되어 있습니다. 다만 아래 반제품들이 활성 완제품 BOM까지
+                  연결되지 않아 완제품 역전개 결과는 없습니다.
+                </div>
+              ) : null}
+
+              {directParents.length ? (
+                <section className="mt-4">
+                  <h3 className="mb-2 text-sm font-bold text-neutral-800">직접 BOM 사용처 (PP_STPO)</h3>
+                  <table className="w-full text-sm">
+                    <thead className="bg-neutral-50 text-xs text-neutral-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">상위 자재</th>
+                        <th className="px-3 py-2 text-right font-semibold">개당 소요</th>
+                        <th className="px-3 py-2 text-right font-semibold">대안 BOM</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-100">
+                      {directParents.map((parent) => (
+                        <tr key={`${parent.werks}|${parent.parentMatnr}`} className="text-neutral-800">
+                          <td className="px-3 py-2">
+                            <div className="font-medium">{parent.parentName || parent.parentMatnr}</div>
+                            <div className="text-xs text-neutral-500">{parent.parentMatnr}</div>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {perUnitQty(parent.qtyPerParent)} {parent.unit}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {parent.alternativeCount.toLocaleString()}개
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              ) : null}
+
+              {entries.length ? <table className="mt-4 w-full text-sm">
                 <thead className="bg-neutral-50 text-xs text-neutral-500">
                   <tr>
                     <th className="px-3 py-2 text-left font-semibold">완제품</th>
@@ -831,7 +879,7 @@ function MaterialDetailSheet({
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table> : null}
 
               {totalPages > 1 ? (
                 <div className="mt-3 flex items-center justify-center gap-3 text-sm text-neutral-600">

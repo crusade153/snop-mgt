@@ -18,6 +18,7 @@ import {
   getReverseBom,
 } from '@/lib/bom/mart';
 import {
+  getDirectBomUsage,
   getMaterialFacts,
   getMaterialRequirements,
   getProductUsage,
@@ -33,7 +34,12 @@ import {
   type OwnerSummary,
 } from '@/lib/material/allocation';
 import { loadProductOwners, loadThresholds } from '@/lib/material/ownership';
-import { UNASSIGNED_OWNER_ID, type BomBuildRun, type MaterialInsight } from '@/types/material';
+import {
+  UNASSIGNED_OWNER_ID,
+  type BomBuildRun,
+  type DirectBomParent,
+  type MaterialInsight,
+} from '@/types/material';
 
 export interface MaterialInsightPayload {
   success: boolean;
@@ -185,6 +191,7 @@ export interface MaterialDetailPayload {
   unit: string;
   onHand: number;
   entries: ReverseBomEntry[];
+  directParents: DirectBomParent[];
 }
 
 /**
@@ -203,16 +210,18 @@ export async function getMaterialDetail(
     unit: '',
     onHand: 0,
     entries: [] as ReverseBomEntry[],
+    directParents: [] as DirectBomParent[],
   };
   if (!context.user || !context.isActive) {
     return { success: false, message: '로그인이 필요합니다.', ...empty };
   }
 
-  const [rows, facts, owners, thresholds] = await Promise.all([
+  const [rows, facts, owners, thresholds, directParents] = await Promise.all([
     getReverseBom(materialCode, werks),
     getMaterialFacts(),
     loadProductOwners(),
     loadThresholds(),
+    getDirectBomUsage(materialCode, werks),
   ]);
 
   const usage = await getProductUsage(thresholds.usageLookbackMonths);
@@ -260,6 +269,7 @@ export async function getMaterialDetail(
     unit: fact?.unit || rows[0]?.baseUom || 'EA',
     onHand,
     entries,
+    directParents,
   };
 }
 

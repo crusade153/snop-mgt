@@ -18,15 +18,22 @@ import { MAX_BOM_LEVEL } from '@/lib/bom/explosion-sql';
 import { buildMaterialRequirementQuery } from '@/lib/material/requirement-sql';
 import {
   buildMaterialStockQuery,
+  buildDirectBomUsageQuery,
   buildOpenPoQuery,
   buildProductUsageQuery,
   mergeMaterialFacts,
   toMaterialRequirements,
+  toDirectBomParents,
   toProductUsage,
   PO_OVERDUE_CUTOFF_DAYS,
   MATERIAL_SIMULATION_MONTHS,
 } from '@/lib/material/queries';
-import type { MaterialFact, MaterialRequirementRow, ProductUsage } from '@/types/material';
+import type {
+  DirectBomParent,
+  MaterialFact,
+  MaterialRequirementRow,
+  ProductUsage,
+} from '@/types/material';
 
 function ymd(date: Date) {
   return format(date, 'yyyyMMdd');
@@ -58,10 +65,36 @@ async function fetchMaterialFactsUncached(): Promise<MaterialFact[]> {
 }
 
 export async function getMaterialFacts(): Promise<MaterialFact[]> {
-  return unstable_cache(fetchMaterialFactsUncached, ['material-facts-v3-mb51-usage'], {
+  return unstable_cache(fetchMaterialFactsUncached, ['material-facts-v4-direct-bom'], {
     revalidate: 600,
     tags: ['report-data'],
   })();
+}
+
+async function fetchDirectBomUsageUncached(
+  materialCode: string,
+  werks: string,
+  asOfDate: string,
+): Promise<DirectBomParent[]> {
+  const [rows] = await bigqueryClient.query({
+    query: buildDirectBomUsageQuery(),
+    params: { materialCode, werks, asOfDate },
+    types: { materialCode: 'STRING', werks: 'STRING', asOfDate: 'STRING' },
+  });
+  return toDirectBomParents(rows as Record<string, unknown>[]);
+}
+
+/** 활성 완제품 연결 여부와 무관한 PP_STPO 직접 BOM 사용처. */
+export async function getDirectBomUsage(
+  materialCode: string,
+  werks: string,
+): Promise<DirectBomParent[]> {
+  const asOfDate = ymd(new Date());
+  return unstable_cache(
+    () => fetchDirectBomUsageUncached(materialCode, werks, asOfDate),
+    [`direct-bom-usage-v1-${materialCode}-${werks}-${asOfDate}`],
+    { revalidate: 600, tags: ['report-data'] },
+  )();
 }
 
 async function fetchProductUsageUncached(months: number): Promise<ProductUsage[]> {

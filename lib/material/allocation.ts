@@ -308,6 +308,7 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
     const hasStake =
       fact.onHand !== 0 || fact.qualityStock !== 0 || fact.blockedStock !== 0 || fact.openPoQty > 0;
     if (!hasStake) continue;
+    const bomRegistered = fact.directBomParentCount > 0;
 
     insights.push({
       materialCode: fact.materialCode,
@@ -324,9 +325,9 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       openPoQty: fact.openPoQty,
       openPoValue: fact.openPoValue,
       overduePoCount: fact.overduePoCount,
-      productCount: 0,
-      bomRegistered: false,
-      kind: 'DEDICATED',
+      productCount: bomRegistered ? fact.directBomParentCount : 0,
+      bomRegistered,
+      kind: fact.directBomParentCount > 1 ? 'SHARED' : 'DEDICATED',
       owners: [
         {
           ownerId: UNASSIGNED_OWNER_ID,
@@ -342,8 +343,8 @@ export function allocateMaterials(input: AllocationInput): AllocationResult {
       stockMonthsWithPo: null,
       requirementsByMonths: Array<number>(13).fill(0),
       activeProductCountsByMonths: Array<number>(13).fill(0),
-      risks: ['DISCONTINUED_ONLY'],
-      dataWarnings: ['BOM 미등록'],
+      risks: bomRegistered ? ['DEAD'] : ['DISCONTINUED_ONLY'],
+      dataWarnings: bomRegistered ? ['활성 완제품 경로 없음'] : ['BOM 미등록'],
     });
   }
 

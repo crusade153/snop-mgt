@@ -58,6 +58,8 @@ export interface MaterialFact {
   blockedStock: number;
   /** MM_MB51 261 투입 - 262 취소 순사용량. 배열 인덱스가 조회 개월이다. */
   actualUsageByMonths: number[];
+  /** PP_STPO에서 이 자재를 직접 구성품으로 등록한 상위 BOM 수. */
+  directBomParentCount: number;
   unit: string;
   /** MM_ZMMR1140 이동평균가 */
   unitPrice: number;
@@ -107,6 +109,16 @@ export interface ProductUsage {
   actualQty: number;
   /** 원본 단위. BOX/KG 였다면 정규화 전 값을 추적하기 위해 남긴다. */
   sourceUnit: string;
+}
+
+/** PP_STPO 직접 사용처. 활성 완제품까지 이어지지 않아도 BOM 등록 사실을 보여준다. */
+export interface DirectBomParent {
+  parentMatnr: string;
+  parentName: string;
+  werks: string;
+  qtyPerParent: number;
+  unit: string;
+  alternativeCount: number;
 }
 
 export type OwnerScopeType = 'BRAND' | 'CATEGORY' | 'FAMILY';

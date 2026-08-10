@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "verify:bom": "node --experimental-strip-types scripts/verify-bom-mart.mjs"
+    "verify:bom": "node --experimental-strip-types scripts/verify-bom-mart.mjs",
+    "verify:ads": "node --experimental-strip-types scripts/verify-ads.mjs"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^8.1.1",

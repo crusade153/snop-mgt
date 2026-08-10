@@ -1,6 +1,7 @@
 // types/analysis.ts
-import { SapOrder, SapInventory, SapProduction, FbhInventory } from './sap';
-import { InventoryStockType } from '@/lib/inventory-classification';
+// 타입만 가져온다. 값 import 로 두면 타입 스트리핑 후에도 import 문이 남아
+// Next 런타임 밖(검증 스크립트)에서 이 모듈을 못 불러온다.
+import type { InventoryStockType } from '@/lib/inventory-classification';
 import type { PriceSource } from '@/lib/ending-inventory-price';
 
 export interface InventoryBatch {
@@ -86,10 +87,20 @@ export interface IntegratedItem {
     remainingDays: number;    
     riskScore: number;        
     
+    // ADS 는 '납품출고 + 생산투입 순소요(MB51 261-262)' 의 일평균이다.
+    // 스프·양념장처럼 제품 코드로 등록됐지만 다시 자재로 투입되는 품목이
+    // 판매출고만 보면 소진속도 0 으로 잡혀서 회전일이 비었기 때문이다.
     ads: number; // 기존 호환용 (기본 60일)
-    ads30: number; // 최근 30일 기준 일평균 판매량
-    ads60: number; // 최근 60일 기준 일평균 판매량
-    ads90: number; // 최근 90일 기준 일평균 판매량
+    ads30: number; // 최근 30일 기준 일평균 순소요
+    ads60: number; // 최근 60일 기준 일평균 순소요
+    ads90: number; // 최근 90일 기준 일평균 순소요
+
+    salesAds30: number; // 납품출고분만
+    salesAds60: number;
+    salesAds90: number;
+    usageAds30: number; // 생산투입(261-262) 순소요분만
+    usageAds60: number;
+    usageAds90: number;
 
     recommendedStock: number; 
     

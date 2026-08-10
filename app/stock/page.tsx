@@ -55,6 +55,12 @@ type ExcelRow = Record<string, string | number | null>;
 const ITEMS_PER_PAGE = 15;
 const BATCHES_PER_PAGE = 30;
 
+/**
+ * ADS 판정 기준은 화면에 그대로 노출한다 — 왜 이 숫자가 나왔는지 사용자가 근거까지 보고 판단하는 구조다.
+ * 판매출고만 세면 스프·양념장처럼 전량 재투입되는 제품이 '소진 0' 으로 잡혀 회전일이 비었다.
+ */
+const ADS_BASIS_TEXT = 'ADS = 납품출고 + 생산투입 순소요(MB51 261-262) 일평균';
+
 function InventoryBoardPageInner() {
   const { unitMode, inventoryViewMode, favoritesOnly } = useUiStore();
   const { endDate: storeEndDate } = useDateStore();
@@ -63,6 +69,7 @@ function InventoryBoardPageInner() {
 
   // ADS(30/60/90)는 항상 '오늘 기준 최근 90일'이라 헤더의 조회기간과 무관하게 고정 구간으로 읽는다.
   // (헤더 날짜를 과거로 당기면 ADS 가 과소 집계되던 문제 때문에 재고 분석 화면이 쓰던 방식을 유지한다)
+  // ADS 는 납품출고 + 생산투입 순소요(MB51 261-262)의 일평균이다 — lib/analysis.ts 참고.
   const today = new Date();
   const queryEndDate = format(subDays(today, 1), 'yyyy-MM-dd');
   const queryStartDate = format(subDays(today, 90), 'yyyy-MM-dd');
@@ -234,6 +241,9 @@ function InventoryBoardPageInner() {
         'ADS(30)': formatQty(item.ads30, item.umrezBox, item.unit, 0).rawValue,
         'ADS(60)': formatQty(item.ads60, item.umrezBox, item.unit, 0).rawValue,
         'ADS(90)': formatQty(item.ads90, item.umrezBox, item.unit, 0).rawValue,
+        // ADS 는 합계값이라 근거를 함께 내린다. 판매분은 ADS - 생산투입분이다.
+        'ADS(60) 판매출고분': formatQty(item.ads60 - item.usageAds60, item.umrezBox, item.unit, 0).rawValue,
+        'ADS(60) 생산투입분': formatQty(item.usageAds60, item.umrezBox, item.unit, 0).rawValue,
         '생산계획(기준일)': formatQty(item.targetDatePlan, item.umrezBox, item.unit).rawValue,
       };
 
@@ -309,13 +319,14 @@ function InventoryBoardPageInner() {
             재고 통합 장표
           </h1>
           <p className="text-[12px] text-neutral-700 mt-1 flex flex-wrap items-center gap-2">
-            <span>유통기한(배치) · 재고금액 · 판매속도(ADS) · 회전일을 한 화면에서 봅니다</span>
+            <span>유통기한(배치) · 재고금액 · 소진속도(ADS) · 회전일을 한 화면에서 봅니다</span>
             <span className={`text-[10px] px-2 py-0.5 rounded text-white font-bold ${
               inventoryViewMode === 'ALL' ? 'bg-green-600' : inventoryViewMode === 'LOGISTICS' ? 'bg-purple-600' : 'bg-blue-600'
             }`}>
               현재 모드: {inventoryViewMode === 'ALL' ? '통합' : inventoryViewMode === 'LOGISTICS' ? '물류센터' : '플랜트'}
             </span>
             <span className="text-[10px] text-neutral-400">{INVENTORY_STATUS_RULE_TEXT}</span>
+            <span className="text-[10px] text-neutral-400">{ADS_BASIS_TEXT}</span>
           </p>
         </div>
 
@@ -400,6 +411,9 @@ function InventoryBoardPageInner() {
           ads30={board.summary.totalAds30}
           ads60={board.summary.totalAds60}
           ads90={board.summary.totalAds90}
+          usageAds30={board.summary.totalUsageAds30}
+          usageAds60={board.summary.totalUsageAds60}
+          usageAds90={board.summary.totalUsageAds90}
           unitMode={unitMode}
         />
       </div>
@@ -518,7 +532,7 @@ function InventoryBoardPageInner() {
                     />
                     <SortableHeader
                       label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" width="130px"
-                      tooltip="가용재고 ÷ ADS(90). 아래 작은 값은 ADS(60) 일평균 판매량입니다."
+                      tooltip={`가용재고 ÷ ADS(90). 아래 작은 값은 ADS(60)입니다. ${ADS_BASIS_TEXT}`}
                     />
                     <SortableHeader
                       label="유통기한" sortKey="minRemain" currentSort={sortConfig} onSort={handleSort} align="left" width="200px"
@@ -540,9 +554,9 @@ function InventoryBoardPageInner() {
                     label="제품명" sortKey="name" currentSort={sortConfig} onSort={handleSort}
                     className="sticky left-0 z-20 bg-[#FAFAFA] border-r border-neutral-200" width="280px"
                   />
-                  <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" tooltip="최근 30일 평균 일판매량. 재고회전 분석 기준" />
-                  <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" tooltip="최근 60일 평균 일판매량. 기본 재고회전 기준값" />
-                  <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" tooltip="최근 90일 평균 일판매량. 회전일수 계산 기준" />
+                  <SortableHeader label="ADS(30)" sortKey="ads30" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/20" tooltip={`최근 30일 평균 일소진량. ${ADS_BASIS_TEXT}. 아래 작은 값은 그중 생산투입분입니다.`} />
+                  <SortableHeader label="ADS(60)" sortKey="ads60" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/40" tooltip={`최근 60일 평균 일소진량. 기본 재고회전 기준값. ${ADS_BASIS_TEXT}`} />
+                  <SortableHeader label="ADS(90)" sortKey="ads90" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-blue-50/60" tooltip={`최근 90일 평균 일소진량. 회전일수 계산 기준. ${ADS_BASIS_TEXT}`} />
                   <SortableHeader label="생산계획(기준일)" sortKey="future" currentSort={sortConfig} onSort={handleSort} align="center" tooltip="헤더에서 고른 조회 종료일의 생산계획 수량입니다." />
                   {showQualityColumn && (
                     <SortableHeader label="품질재고" sortKey="qualityStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-purple-50 text-purple-700" />
@@ -550,7 +564,7 @@ function InventoryBoardPageInner() {
                   <SortableHeader label="가용재고" sortKey="usableStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-green-50/30 text-green-800" />
                   <SortableHeader label="폐기재고" sortKey="wasteStock" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-red-50/50 text-[#C62828]" />
                   <SortableHeader label="재고금액" sortKey="stockValue" currentSort={sortConfig} onSort={handleSort} align="right" className="bg-emerald-50/40 text-emerald-800" tooltip={`${priceLabel} 단가 × 현재 재고수량. 단가가 없는 자재는 당월 첫 생산분이라 금액을 산정하지 않습니다.`} />
-                  <SortableHeader label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" className="text-red-700 bg-red-50/10" />
+                  <SortableHeader label="회전일(90)" sortKey="turnoverDays" currentSort={sortConfig} onSort={handleSort} align="right" className="text-red-700 bg-red-50/10" tooltip={`가용재고 ÷ ADS(90). ${ADS_BASIS_TEXT}`} />
                   <SortableHeader label="유통기한" sortKey="minRemain" currentSort={sortConfig} onSort={handleSort} align="left" className="bg-neutral-50/60 border-l border-neutral-200" width="190px" tooltip={`상단은 가장 짧은 잔여일, 하단은 상태별 재고수량입니다. ${INVENTORY_STATUS_RULE_TEXT}`} />
                   <SortableHeader label="~50% (유효)" sortKey="bucket_under50" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#C62828] bg-red-50/30 border-l border-neutral-200" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
                   <SortableHeader label="50~70%" sortKey="bucket_50_70" currentSort={sortConfig} onSort={handleSort} align="right" className="text-[#E65100] bg-orange-50/30" tooltip="상단은 구간별 수량, 하단은 기말재고 단가를 적용한 구간별 재고금액입니다." />
@@ -746,6 +760,9 @@ function ItemRows({
   const dAds30 = formatQty(item.ads30, item.umrezBox, item.unit, 0);
   const dAds60 = formatQty(item.ads60, item.umrezBox, item.unit, 0);
   const dAds90 = formatQty(item.ads90, item.umrezBox, item.unit, 0);
+  // ADS 는 판매출고 + 생산투입 합계라, 투입분이 섞인 품목만 근거를 한 줄 더 보여준다
+  const dUsageAds60 = formatQty(item.usageAds60, item.umrezBox, item.unit, 0);
+  const hasUsageAds = item.usageAds60 > 0;
 
   let displayTurnover = '-';
   if (item.ads90 > 0 && item.turnoverDays < 90000) {
@@ -817,9 +834,14 @@ function ItemRows({
                   <div className="text-[10px] text-neutral-400">
                     {(item.turnoverDays / 30).toFixed(1)}개월 · ADS60 {dAds60.value}
                   </div>
+                  {hasUsageAds && (
+                    <div className="text-[10px] text-amber-700" title={`ADS(60) 중 생산투입(261-262) 순소요 ${dUsageAds60.value}${dUsageAds60.unit}`}>
+                      생산투입 {dUsageAds60.value}
+                    </div>
+                  )}
                 </>
               ) : (
-                <div className="text-[15px] font-bold text-neutral-300" title="최근 90일 납품 실적이 없어 회전일을 계산하지 않습니다">-</div>
+                <div className="text-[15px] font-bold text-neutral-300" title="최근 90일 납품출고·생산투입 실적이 모두 없어 회전일을 계산하지 않습니다">-</div>
               )}
             </td>
 
@@ -834,9 +856,30 @@ function ItemRows({
           </>
         ) : (
           <>
-            <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/20">{dAds30.value}</td>
-            <td className="px-2 py-3 text-right text-neutral-800 font-medium bg-blue-50/40">{dAds60.value}</td>
-            <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/60">{dAds90.value}</td>
+            <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/20">
+              {dAds30.value}
+              {hasUsageAds && (
+                <div className="text-[10px] text-amber-700" title="ADS 중 생산투입(261-262) 순소요분입니다">
+                  투입 {formatQty(item.usageAds30, item.umrezBox, item.unit, 0).value}
+                </div>
+              )}
+            </td>
+            <td className="px-2 py-3 text-right text-neutral-800 font-medium bg-blue-50/40">
+              {dAds60.value}
+              {hasUsageAds && (
+                <div className="text-[10px] font-normal text-amber-700" title="ADS 중 생산투입(261-262) 순소요분입니다">
+                  투입 {dUsageAds60.value}
+                </div>
+              )}
+            </td>
+            <td className="px-2 py-3 text-right text-neutral-600 bg-blue-50/60">
+              {dAds90.value}
+              {hasUsageAds && (
+                <div className="text-[10px] text-amber-700" title="ADS 중 생산투입(261-262) 순소요분입니다">
+                  투입 {formatQty(item.usageAds90, item.umrezBox, item.unit, 0).value}
+                </div>
+              )}
+            </td>
             <td className="px-2 py-3 text-center">
               {item.targetDatePlan > 0
                 ? <span className="px-2 py-1 rounded bg-[#E3F2FD] text-[#1565C0] text-[11px] font-bold">{dPlan.value}</span>
@@ -1171,17 +1214,21 @@ function ItemAnalysisStrip({ item, formatQty, priceLabel, showQuality }: {
   showQuality: boolean;
 }) {
   const qty = (value: number) => formatQty(value, item.umrezBox, item.unit).value;
+  /** ADS 는 일평균이라 소수점이 길게 붙는다. 표의 ADS 열과 같이 정수로 끊는다 */
+  const adsQty = (value: number) => formatQty(value, item.umrezBox, item.unit, 0).value;
   const priced = item.priceSource === 'ENDING_INVENTORY';
 
   return (
     <div className="px-4 pt-3 grid grid-cols-1 lg:grid-cols-3 gap-3">
-      <StripBlock title="판매속도 · 회전">
-        <StripFigure label="ADS(30)" value={qty(item.ads30)} />
-        <StripFigure label="ADS(60)" value={qty(item.ads60)} />
-        <StripFigure label="ADS(90)" value={qty(item.ads90)} />
+      {/* ADS 는 판매출고 + 생산투입 합계라, 근거가 되는 두 갈래를 여기서 나눠 보여준다 */}
+      <StripBlock title="소진속도 · 회전 (판매출고 + 생산투입)">
+        <StripFigure label="ADS(30)" value={adsQty(item.ads30)} sub={`판매 ${adsQty(item.ads30 - item.usageAds30)} · 투입 ${adsQty(item.usageAds30)}`} />
+        <StripFigure label="ADS(60)" value={adsQty(item.ads60)} sub={`판매 ${adsQty(item.ads60 - item.usageAds60)} · 투입 ${adsQty(item.usageAds60)}`} />
+        <StripFigure label="ADS(90)" value={adsQty(item.ads90)} sub={`판매 ${adsQty(item.ads90 - item.usageAds90)} · 투입 ${adsQty(item.usageAds90)}`} />
         <StripFigure
           label="회전일(90)"
           value={item.ads90 > 0 && item.turnoverDays < 90000 ? `${Math.round(item.turnoverDays)}일` : '-'}
+          sub="가용재고 ÷ ADS(90)"
         />
       </StripBlock>
 
@@ -1424,11 +1471,17 @@ function ValueKpiCard({ icon: Icon, tone, label, value, sub }: {
   );
 }
 
-/** 평균 판매속도(ADS) 3구간을 카드 한 장에 담는다 — 카드 3장으로 펴면 헤더가 두 줄이 된다 */
-function AdsSummaryCard({ ads30, ads60, ads90, unitMode }: {
+/**
+ * 평균 소진속도(ADS) 3구간을 카드 한 장에 담는다 — 카드 3장으로 펴면 헤더가 두 줄이 된다.
+ * 합계 안에 생산투입분이 얼마나 섞였는지 밑줄로 같이 보여준다(판매만 보고 오해하지 않게).
+ */
+function AdsSummaryCard({ ads30, ads60, ads90, usageAds30, usageAds60, usageAds90, unitMode }: {
   ads30: number;
   ads60: number;
   ads90: number;
+  usageAds30: number;
+  usageAds60: number;
+  usageAds90: number;
   unitMode: string;
 }) {
   const fmt = (value: number) => unitMode === 'BOX'
@@ -1441,21 +1494,27 @@ function AdsSummaryCard({ ads30, ads60, ads90, unitMode }: {
         <BarChart3 size={18} />
       </div>
       <div className="min-w-0">
-        <div className="text-[11px] font-bold text-neutral-500">
-          평균 판매속도 (Total ADS · {unitMode === 'BOX' ? 'BOX' : 'EA/KG'}/일)
+        <div className="text-[11px] font-bold text-neutral-500" title={ADS_BASIS_TEXT}>
+          평균 소진속도 (Total ADS · {unitMode === 'BOX' ? 'BOX' : 'EA/KG'}/일)
         </div>
         <div className="mt-1 flex gap-4">
           {[
-            { label: '30일', value: ads30 },
-            { label: '60일', value: ads60 },
-            { label: '90일', value: ads90 },
-          ].map(({ label, value }) => (
+            { label: '30일', value: ads30, usage: usageAds30 },
+            { label: '60일', value: ads60, usage: usageAds60 },
+            { label: '90일', value: ads90, usage: usageAds90 },
+          ].map(({ label, value, usage }) => (
             <div key={label}>
               <div className="text-[10px] text-neutral-400">{label}</div>
               <div className="text-[15px] font-bold text-neutral-900 leading-tight">{fmt(value)}</div>
+              {usage > 0 && (
+                <div className="text-[10px] text-amber-700 leading-tight" title="이 중 생산투입(261-262) 순소요분">
+                  투입 {fmt(usage)}
+                </div>
+              )}
             </div>
           ))}
         </div>
+        <div className="text-[10px] text-neutral-400 mt-1">판매출고 + 생산투입(261-262)</div>
       </div>
     </div>
   );

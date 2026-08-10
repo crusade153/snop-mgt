@@ -154,8 +154,8 @@ function ProductCard({
             borderR borderB
           />
           <MetricCell
-            icon={TrendingUp} label="ADS (60일)"
-            value={`${fmt(item.inventory.ads)}/일`}
+            icon={TrendingUp} label="ADS (60일 · 출고+투입)"
+            value={`${fmt(Math.round(item.inventory.ads))}/일`}
             borderB
           />
           <MetricCell

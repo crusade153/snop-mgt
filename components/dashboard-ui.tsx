@@ -242,10 +242,10 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-center w-[140px]">상태 및 구성</th>
                 <th className="px-4 py-3 border-b border-neutral-200 text-[13px] font-bold text-neutral-700 text-right group cursor-help">
                   <div className="flex items-center justify-end gap-1">
-                    일평균 판매량
+                    일평균 소진량
                     <HelpCircle size={12} className="text-neutral-400" />
                     <div className="absolute hidden group-hover:block right-4 mt-8 p-2 bg-gray-800 text-white text-xs rounded shadow-lg z-50 whitespace-nowrap font-normal">
-                      최근 60일 실적수량 ÷ 60
+                      최근 60일 (납품출고 + 생산투입 261-262) ÷ 60
                     </div>
                   </div>
                 </th>
@@ -273,7 +273,8 @@ export default function DashboardClientUserInterface({ initialData }: Props) {
                 return displayItems.map((item: IntegratedItem) => {
                   
                   const displayStock = formatQty(item.inventory.totalStock, item.umrezBox, item.unit);
-                  const displayAds = formatQty(item.inventory.ads, item.umrezBox, item.unit);
+                  // ADS 는 일평균이라 소수점이 길게 붙는다. 표에서는 정수로 끊는다
+                  const displayAds = formatQty(Math.round(item.inventory.ads), item.umrezBox, item.unit);
                   const disposedQty = formatQty(item.inventory.statusBreakdown?.disposed || 0, item.umrezBox, item.unit);
 
                   return (

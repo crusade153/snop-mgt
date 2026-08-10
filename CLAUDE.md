@@ -13,9 +13,10 @@ npm run build      # 프로덕션 빌드 (타입 오류가 여기서 잡힌다)
 npm run lint       # eslint (flat config, next core-web-vitals + typescript)
 npx tsc --noEmit   # 타입만 빠르게 확인
 npm run verify:bom # BOM 마트·자재 귀속 실데이터 검증 (아래 참고)
+npm run verify:ads # 재고 장표 ADS(판매출고+생산투입) 실데이터 검증
 ```
 
-**테스트 프레임워크가 없다.** 유일한 자동 검증은 `scripts/verify-bom-mart.mjs` 이며,
+**테스트 프레임워크가 없다.** 자동 검증은 `scripts/verify-bom-mart.mjs` 와 `scripts/verify-ads.mjs` 뿐이며,
 `.env.local` 을 직접 파싱해 실제 BigQuery 를 읽고(SELECT 전용) 불변식을 확인한다 —
 지분합 = 1, 배분금액 합 = 실재고금액, 캐시 gzip 후 2MB 미만, 손계산(N개입 박스 = 1/N) 대조 등.
 실패하면 exit 1. 그래서 **계산 로직은 I/O 없는 순수 함수로 `lib/` 에 두고, `'use server'` 파일에는 실행·캐시만 둔다** —
@@ -100,6 +101,11 @@ middleware.ts             전 경로 인증 게이트
 - **재고 단가는 SAP 표준가(STPRS)를 쓰지 않는다.** 미사용 자재에 5천만원/EA 같은 값이 남아 금액이 30배 튀었다.
   원가팀 `ending_inventory`(별도 Supabase) 단가만 쓰고, 거기 없는 자재는 금액을 만들지 말고 `CURRENT_MONTH`(당월생산)로 표기한다.
   `as_of_month` 는 "그 달의 기초" = 전월 기말이다.
+- **ADS 는 판매속도가 아니라 소진속도다.** `납품출고(SD_ZASSDDV0020, 601 성격) + 생산투입 순소요(MB51 261-262)`.
+  스프·양념장·소스처럼 제품 코드(5xxxxxxx)로 등록됐지만 다시 다른 제품의 자재로 투입되는 품목이
+  판매출고만 세면 '소진 0' 이라 회전일이 영원히 비었다. 실측(최근 90일): 재고 보유 752품목 중 449품목에 261 투입이 있고
+  그중 130품목은 납품출고가 0, 전체 순투입 11,803,490 > 납품출고 10,238,786 으로 모수가 오히려 더 크다.
+  262 취소가 261 투입을 넘기는 구간은 0 으로 막는다(음수 ADS 금지). 판단 근거 문구는 `/stock` 의 `ADS_BASIS_TEXT` 에 그대로 노출한다.
 - **매출 기준이 두 개다.** 대시보드 기본은 납품매출(`SD_ZASSDDV0020`, VDATU 납품요청일). 청구매출은 `V_SD_SO1`(FKDAT), VTWEG 10=내수 20=수출.
   둘을 섞어 비교하지 말 것.
 - **생산실적은 `PP_ZASPPR1110` 이 아니라 `MM_MB51`(BWART 101-102)** 로 센다. 생산오더 테이블은 최근 건이 누락된다.

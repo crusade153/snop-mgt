@@ -72,9 +72,14 @@ export interface InventoryBoardItemRow {
   unit: string;
   umrezBox: number;
 
+  /** 순소요 일평균 = 납품출고 + 생산투입(MB51 261-262) */
   ads30: number;
   ads60: number;
   ads90: number;
+  /** 위 ADS 중 생산투입분. 판매분은 ads - usageAds 로 읽는다 */
+  usageAds30: number;
+  usageAds60: number;
+  usageAds90: number;
 
   usableStock: number;
   wasteStock: number;
@@ -112,6 +117,10 @@ export interface InventoryBoardSummary {
   totalAds30: number;
   totalAds60: number;
   totalAds90: number;
+  /** 위 합계 중 생산투입(261-262) 순소요분 */
+  totalUsageAds30: number;
+  totalUsageAds60: number;
+  totalUsageAds90: number;
   statusQty: InventoryStatusQty;
 }
 
@@ -227,6 +236,9 @@ export function buildInventoryBoard(
     totalAds30: 0,
     totalAds60: 0,
     totalAds90: 0,
+    totalUsageAds30: 0,
+    totalUsageAds60: 0,
+    totalUsageAds90: 0,
     statusQty: createStatusQty(),
   };
 
@@ -366,9 +378,15 @@ export function buildInventoryBoard(
         ? 'CURRENT_MONTH'
         : 'UNKNOWN';
 
+    // ADS 는 판매출고만이 아니라 생산투입 순소요(261-262)까지 합친 값이다.
+    // 회전일도 이 합계로 나눈다 — 스프·양념장처럼 팔리지 않고 전량 재투입되는 품목은
+    // 판매분만 보면 ADS 0 이라 회전일이 영원히 '-' 로 남았다.
     const ads30 = item.inventory.ads30 || 0;
     const ads60 = item.inventory.ads60 || 0;
     const ads90 = item.inventory.ads90 || 0;
+    const usageAds30 = item.inventory.usageAds30 || 0;
+    const usageAds60 = item.inventory.usageAds60 || 0;
+    const usageAds90 = item.inventory.usageAds90 || 0;
     const turnoverDays = ads90 > 0 ? usableStock / ads90 : usableStock > 0 ? 99999 : 0;
 
     items.push({
@@ -379,6 +397,9 @@ export function buildInventoryBoard(
       ads30,
       ads60,
       ads90,
+      usageAds30,
+      usageAds60,
+      usageAds90,
       usableStock,
       wasteStock,
       qualityStock: quantityMode ? qualityStock : 0,
@@ -404,6 +425,9 @@ export function buildInventoryBoard(
     summary.totalAds30 += ads30;
     summary.totalAds60 += ads60;
     summary.totalAds90 += ads90;
+    summary.totalUsageAds30 += usageAds30;
+    summary.totalUsageAds60 += usageAds60;
+    summary.totalUsageAds90 += usageAds90;
     if (priceSource === 'ENDING_INVENTORY') summary.pricedItemCount += 1;
     else if (priceSource === 'CURRENT_MONTH') summary.currentMonthItemCount += 1;
     INVENTORY_STATUS_ORDER.forEach((key) => {

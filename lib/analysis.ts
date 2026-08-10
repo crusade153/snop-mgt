@@ -1,5 +1,5 @@
-import { SapOrder, SapInventory, SapProduction, FbhInventory } from '@/types/sap';
-import { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder, ProductionRow } from '@/types/analysis';
+import type { SapOrder, SapInventory, SapProduction, SapProductConsumption, FbhInventory } from '@/types/sap';
+import type { IntegratedItem, DashboardAnalysis, InventoryBatch, CustomerStat, UnfulfilledOrder, ProductionRow } from '@/types/analysis';
 import { differenceInCalendarDays, parseISO, format, subDays } from 'date-fns';
 import { classifyInventoryStock, getProductionLine } from '@/lib/inventory-classification';
 import type { PriceSource } from '@/lib/ending-inventory-price';
@@ -121,7 +121,9 @@ export function analyzeSnopData(
   fbhList: FbhInventory[],
   startDateStr: string,
   endDateStr: string,
-  priceAsOfLabel: string = ''
+  priceAsOfLabel: string = '',
+  /** MM_MB51 261-262 생산투입 순소요. 제품 코드로 등록됐지만 다시 자재로 투입되는 품목의 실소요다 */
+  productConsumptions: SapProductConsumption[] = []
 ): DashboardAnalysis {
   
   const filterStart = startDateStr.replace(/-/g, '');
@@ -250,6 +252,23 @@ export function analyzeSnopData(
   let productSales = 0;
   let merchandiseSales = 0;
   const salesHistory = new Map<string, { d30: number, d60: number, d90: number }>();
+  /** 생산투입(261-262) 순소요. 판매출고와 같은 30/60/90일 창으로 접는다 */
+  const usageHistory = new Map<string, { d30: number, d60: number, d90: number }>();
+
+  productConsumptions.forEach(row => {
+    const code = row.MATNR;
+    if (!code) return;
+    const budat = safeExtractDateStr(row.BUDAT);
+    if (!budat) return;
+    const qty = Number(row.NET_QTY || 0);
+    if (!qty) return;
+
+    if (!usageHistory.has(code)) usageHistory.set(code, { d30: 0, d60: 0, d90: 0 });
+    const usage = usageHistory.get(code)!;
+    if (budat >= date30DaysAgo) usage.d30 += qty;
+    if (budat >= date60DaysAgo) usage.d60 += qty;
+    if (budat >= date90DaysAgo) usage.d90 += qty;
+  });
 
   orders.forEach(order => {
     const code = order.MATNR;
@@ -412,10 +431,20 @@ export function analyzeSnopData(
 
   integratedArray.forEach(item => {
     const history = salesHistory.get(item.code) || { d30: 0, d60: 0, d90: 0 };
-    item.inventory.ads30 = history.d30 / 30;
-    item.inventory.ads60 = history.d60 / 60;
-    item.inventory.ads90 = history.d90 / 90;
-    item.inventory.ads = item.inventory.ads60; 
+    const usage = usageHistory.get(item.code) || { d30: 0, d60: 0, d90: 0 };
+
+    // ADS = 납품출고 + 생산투입 순소요. 취소(262)가 투입(261)을 넘겨 음수가 되면 0 으로 막는다
+    // (실측 748품목 전부 양수였지만, 월말 대량 취소 전기 때 음수가 나면 ADS 를 깎아버린다).
+    item.inventory.salesAds30 = history.d30 / 30;
+    item.inventory.salesAds60 = history.d60 / 60;
+    item.inventory.salesAds90 = history.d90 / 90;
+    item.inventory.usageAds30 = Math.max(0, usage.d30) / 30;
+    item.inventory.usageAds60 = Math.max(0, usage.d60) / 60;
+    item.inventory.usageAds90 = Math.max(0, usage.d90) / 90;
+    item.inventory.ads30 = item.inventory.salesAds30 + item.inventory.usageAds30;
+    item.inventory.ads60 = item.inventory.salesAds60 + item.inventory.usageAds60;
+    item.inventory.ads90 = item.inventory.salesAds90 + item.inventory.usageAds90;
+    item.inventory.ads = item.inventory.ads60;
 
     if (item.inventory.totalStock > 0) {
         stockHealth[item.inventory.status]++;
@@ -614,10 +643,16 @@ function initializeItem(
       statusBreakdown,     
       remainingDays: minRemaining === 9999 ? 0 : minRemaining,
       riskScore: 0,
-      ads: 0, 
-      ads30: 0, 
-      ads60: 0, 
-      ads90: 0, 
+      ads: 0,
+      ads30: 0,
+      ads60: 0,
+      ads90: 0,
+      salesAds30: 0,
+      salesAds60: 0,
+      salesAds90: 0,
+      usageAds30: 0,
+      usageAds60: 0,
+      usageAds90: 0,
       recommendedStock: 0
     },
     production: { planQty: 0, futurePlanQty: 0, receivedQty: 0, achievementRate: 0, lastReceivedDate: null },

@@ -2,11 +2,20 @@
 
 import bigqueryClient from '@/lib/bigquery';
 import { analyzeSnopData } from '@/lib/analysis';
-import { SapOrder, SapInventory, SapProduction, FbhInventory } from '@/types/sap';
+import { SapOrder, SapInventory, SapProduction, SapProductConsumption, FbhInventory } from '@/types/sap';
 import { getEndingInventoryPrices, resolveUnitPrice } from '@/lib/ending-inventory-price';
 import { unstable_cache } from 'next/cache';
 import { gzipSync, gunzipSync } from 'zlib';
 import { addMonths, format, subDays } from 'date-fns'; 
+
+/** BigQuery 는 DATE 컬럼을 { value: '2026-08-10' } 로 돌려준다. 날짜는 항상 문자열로 눕혀 넘긴다 */
+function toDateString(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object' && 'value' in (value as Record<string, unknown>)) {
+    return String((value as Record<string, unknown>).value ?? '');
+  }
+  return String(value);
+}
 
 async function fetchRawData(sDate: string, eDate: string) {
   
@@ -55,7 +64,35 @@ async function fetchRawData(sDate: string, eDate: string) {
       AND P.MATNR BETWEEN '50000000' AND '69999999'
   `;
 
-  // 3. 사내 플랜트 재고 
+  // 2-1. 완제품·상품의 생산투입 순소요 (MM_MB51 261 투입 - 262 취소)
+  //
+  // ADS 를 납품출고(601 성격의 SD_ZASSDDV0020)만으로 잡으면 스프·양념장·소스처럼
+  // 제품 코드(5xxxxxxx)로 등록됐지만 다시 다른 제품의 자재로 투입되는 품목이 전부 '판매 0' 이 된다.
+  // 실측(최근 90일): 재고 보유 752품목 중 449품목에 261 투입이 있고 그중 130품목은 납품출고가 0이라
+  // 회전일이 '-' 로 비어 있었다. 같은 기간 순투입 11,803,490 > 납품출고 10,238,786 으로 모수가 더 크다.
+  // 그래서 ADS 는 '납품출고 + 생산투입 순소요' 로 잡는다. 개념상 판매속도는 아니지만 재고 소진 속도는 이쪽이 맞다.
+  //
+  // ⚠️ BOX 전기분은 SD_MARA.UMREZ_BOX 로 기본단위 환산한다(현재 실측은 EA·KG 뿐이지만 방어).
+  const consumptionQuery = `
+    SELECT
+      B.MATNR,
+      B.BUDAT,
+      SUM(
+        (CASE WHEN B.BWART = '261' THEN 1 ELSE -1 END) * ABS(IFNULL(B.ERFMG, 0)) *
+        (CASE
+          WHEN B.ERFME = 'BOX' AND IFNULL(M.MEINS, '') <> 'BOX' THEN IFNULL(M.UMREZ_BOX, 1)
+          ELSE 1
+        END)
+      ) AS NET_QTY
+    FROM \`harimfood-361004.harim_sap_bi.MM_MB51\` AS B
+    LEFT JOIN \`harimfood-361004.harim_sap_bi.SD_MARA\` AS M ON M.MATNR = B.MATNR
+    WHERE B.BUDAT BETWEEN '${queryStartDate}' AND '${eDate}'
+      AND B.BWART IN ('261', '262')
+      AND B.MATNR BETWEEN '50000000' AND '69999999'
+    GROUP BY B.MATNR, B.BUDAT
+  `;
+
+  // 3. 사내 플랜트 재고
   const inventoryQuery = `
     WITH batch_master AS (
       SELECT
@@ -108,10 +145,11 @@ async function fetchRawData(sDate: string, eDate: string) {
   `;
 
   try {
-    const [orderRes, prodRes, invRes] = await Promise.all([
+    const [orderRes, prodRes, invRes, consumptionRes] = await Promise.all([
       bigqueryClient.query({ query: orderQuery }),
       bigqueryClient.query({ query: productionQuery }),
-      bigqueryClient.query({ query: inventoryQuery })
+      bigqueryClient.query({ query: inventoryQuery }),
+      bigqueryClient.query({ query: consumptionQuery })
     ]);
 
     let fbhRows: FbhInventory[] = [];
@@ -151,6 +189,11 @@ async function fetchRawData(sDate: string, eDate: string) {
     return {
       orders: orderRes[0] as SapOrder[],
       production: prodRes[0] as SapProduction[],
+      consumptions: (consumptionRes[0] as Record<string, unknown>[]).map((row): SapProductConsumption => ({
+        MATNR: String(row.MATNR ?? ''),
+        BUDAT: toDateString(row.BUDAT),
+        NET_QTY: Number(row.NET_QTY) || 0,
+      })),
       inventory,
       fbhInventory,
       priceAsOfLabel: prices.asOfLabel,
@@ -162,12 +205,12 @@ async function fetchRawData(sDate: string, eDate: string) {
 }
 
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // 단가 소스를 기말재고(ending_inventory)로 교체하면서 캐시 버전을 상향합니다.
-    const cacheKey = `dashboard-analysis-v7-${sDate}-${eDate}`;
+    // v8: ADS 에 MB51 생산투입 순소요(261-262)를 합산하면서 계산 결과가 바뀌어 버전을 올립니다.
+    const cacheKey = `dashboard-analysis-v8-ads-with-261-${sDate}-${eDate}`;
 
     return await unstable_cache(
       async () => {
-        const { orders, production, inventory, fbhInventory, priceAsOfLabel } = await fetchRawData(sDate, eDate);
+        const { orders, production, consumptions, inventory, fbhInventory, priceAsOfLabel } = await fetchRawData(sDate, eDate);
 
         if ((!orders || orders.length === 0) && (!inventory || inventory.length === 0) && (!fbhInventory || fbhInventory.length === 0)) {
             const emptyData = analyzeSnopData([], [], [], [], startDateStr, endDateStr);
@@ -181,7 +224,8 @@ const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr:
           fbhInventory || [],
           startDateStr,
           endDateStr,
-          priceAsOfLabel
+          priceAsOfLabel,
+          consumptions || []
         );
 
         const compressed = gzipSync(JSON.stringify({ success: true, data: analyzedData })).toString('base64');

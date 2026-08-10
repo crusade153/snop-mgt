@@ -201,12 +201,13 @@ export default function DeliveryPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-neutral-500 mb-1">판매 속도 (ADS)</div>
+                  {/* ADS 는 납품출고 + 생산투입 순소요(MB51 261-262) 합계다 */}
+                  <div className="text-xs text-neutral-500 mb-1" title="납품출고 + 생산투입 순소요(261-262) 일평균">소진 속도 (ADS)</div>
                   {/* ✅ [수정] 수량 ADS 값 연동 및 단위 변환 적용 */}
                   <div className="font-bold text-blue-600">
-                    {formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).value}
+                    {formatQty(Math.round(selectedProduct.inventory.ads), selectedProduct.umrezBox, selectedProduct.unit).value}
                     <span className="text-xs font-normal text-neutral-400 ml-1">
-                      {formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).unit}/일
+                      {formatQty(Math.round(selectedProduct.inventory.ads), selectedProduct.umrezBox, selectedProduct.unit).unit}/일
                     </span>
                   </div>
                 </div>
@@ -218,7 +219,7 @@ export default function DeliveryPage() {
               <div>
                 <h4 className="font-bold text-blue-900 text-sm mb-1">S&OP 인사이트</h4>
                 <p className="text-xs text-blue-700 leading-relaxed">
-                  현재 일평균 <strong>{formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).value}{formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).unit}</strong>가 팔리고 있습니다.<br/>
+                  현재 일평균 <strong>{formatQty(Math.round(selectedProduct.inventory.ads), selectedProduct.umrezBox, selectedProduct.unit).value}{formatQty(Math.round(selectedProduct.inventory.ads), selectedProduct.umrezBox, selectedProduct.unit).unit}</strong>가 나가고 있습니다(납품출고 + 생산투입).<br/>
                   {selectedProduct.inventory.totalStock === 0 
                     ? "재고가 고갈되어 즉시 생산 투입이 필요합니다. 생산팀에 긴급 오더를 확인하세요." 
                     : `현재 재고로 약 ${(selectedProduct.inventory.totalStock / (selectedProduct.inventory.ads || 1)).toFixed(1)}일 운영할 수 있습니다.`}

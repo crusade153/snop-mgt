@@ -456,10 +456,10 @@ function FulfillmentPageInner() {
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-neutral-500 mb-1">판매속도 (ADS)</div>
+                    <div className="text-xs text-neutral-500 mb-1" title="납품출고 + 생산투입 순소요(261-262) 일평균">소진속도 (ADS)</div>
                     <div className="font-bold text-neutral-800 text-sm">
-                      {formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).value}
-                      <span className="text-xs font-normal text-neutral-400 ml-1">{formatQty(selectedProduct.inventory.ads, selectedProduct.umrezBox, selectedProduct.unit).unit}/일</span>
+                      {formatQty(Math.round(selectedProduct.inventory.ads), selectedProduct.umrezBox, selectedProduct.unit).value}
+                      <span className="text-xs font-normal text-neutral-400 ml-1">{formatQty(Math.round(selectedProduct.inventory.ads), selectedProduct.umrezBox, selectedProduct.unit).unit}/일</span>
                     </div>
                   </div>
                 </div>

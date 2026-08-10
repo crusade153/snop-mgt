@@ -67,6 +67,14 @@ export interface SapProduction {
   UMREZ_BOX?: number;   
 }
 
+// 3-1. 완제품·상품의 생산투입 소요 (MM_MB51 BWART 261 투입 - 262 취소)
+// 스프·양념장처럼 '제품 코드로 등록됐지만 다른 제품의 자재로 다시 투입되는' 품목의 실소요다.
+export interface SapProductConsumption {
+  MATNR: string;    // 자재 번호
+  BUDAT: string;    // 전기일 (YYYYMMDD)
+  NET_QTY: number;  // 261 - 262 순투입량, 기본단위(EA/KG) 환산
+}
+
 // ✅ [신규] 4. 외부 창고 재고 (FBH Inventory)
 export interface FbhInventory {
   SKU_CD: string;             // 자재코드 (MATNR 대응)

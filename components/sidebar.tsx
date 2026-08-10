@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import {
   LayoutDashboard, Truck, ClipboardList, FileText,
-  Package, Factory, ChevronRight,
+  Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
   Sun, X, Star, UserCog, Bot, Megaphone, PanelLeftClose,
   Link2, Network
@@ -20,8 +20,8 @@ const menuItems = [
   { name: '납품 현황', href: '/fulfillment', icon: Truck },
   { name: '미납 리스트', href: '/delivery', icon: ClipboardList },
   { name: '미납 상세', href: '/unfulfilled-detail', icon: FileText },
-  { name: '재고 현황', href: '/stock', icon: Boxes },
-  { name: '재고 분석', href: '/inventory', icon: Package },
+  // 재고 현황(배치·유통기한)과 재고 분석(ADS·회전일)은 한 장표로 합쳤다 → /stock
+  { name: '재고 통합 장표', href: '/stock', icon: Boxes },
   { name: '자재 연결', href: '/materials', icon: Link2 },
   { name: '생산 분석', href: '/production', icon: Factory },
   { name: '수요 예측', href: '/forecast', icon: BrainCircuit },

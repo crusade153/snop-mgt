@@ -70,7 +70,7 @@ export default function Home() {
           icon={Package}
           title="재고 건전성 분석 (Inventory)"
           desc="유통기한 임박 재고, ADS(판매속도) 기반 적정 재고를 시뮬레이션하여 폐기 비용을 최소화합니다."
-          link="/inventory"
+          link="/stock"
           color="green"
         />
         <FeatureCard 

@@ -4,7 +4,9 @@
       "Bash(rm /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/app/snop/page.tsx /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/components/snop/weekly-grid.tsx /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/store/snop-store.ts /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/actions/snop-actions.ts /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/lib/snop-aggregation.ts)",
       "Bash(rmdir /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/app/snop /c/Users/User/Desktop/sap_link/snop-mgt/snop-mgt/components/snop)",
       "Bash(npx tsc *)",
-      "mcp__filesystem__directory_tree"
+      "mcp__filesystem__directory_tree",
+      "Bash(sed 's/=$//')",
+      "Bash(node \"C:/Users/User/AppData/Local/Temp/claude/C--Users-User-Desktop-sap-link-snop-mgt-snop-mgt/8563602f-9326-4477-8d89-244cec0128cc/scratchpad/diag-261.mjs\")"
     ]
   }
 }

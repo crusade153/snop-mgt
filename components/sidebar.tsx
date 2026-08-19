@@ -8,13 +8,14 @@ import {
   LayoutDashboard, Truck, ClipboardList, FileText,
   Factory, ChevronRight,
   Boxes, BrainCircuit, LineChart, LogOut,
-  Sun, X, Star, UserCog, Bot, Megaphone, PanelLeftClose,
+  CalendarRange, X, Star, UserCog, Bot, Megaphone, PanelLeftClose,
   Link2, Network
 } from 'lucide-react';
 import { useUiStore } from '@/store/ui-store';
 
 const menuItems = [
-  { name: '일일 관리 (Morning)', href: '/daily', icon: Sun },
+  // 일일 관리(Morning) 화면은 주간 요약장표로 대체했다. 일별 스냅샷 파이프라인과 MCP 아침브리핑은 그대로 살아 있다.
+  { name: '주간 재고 요약', href: '/weekly', icon: CalendarRange },
   { name: '종합 현황', href: '/dashboard', icon: LayoutDashboard },
   { name: '관심 제품', href: '/favorites', icon: Star },
   { name: '납품 현황', href: '/fulfillment', icon: Truck },

@@ -34,7 +34,7 @@ async function getInventoryStatusUncached(): Promise<SapInventory[]> {
 export async function getInventoryStatus(): Promise<SapInventory[]> {
   return unstable_cache(
     getInventoryStatusUncached,
-    ['inventory-status-v1'],
+    ['inventory-status-v2-price-month-fallback'],
     { revalidate: 600, tags: ['report-data'] }
   )();
 }

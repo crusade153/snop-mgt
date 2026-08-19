@@ -14,9 +14,10 @@ npm run lint       # eslint (flat config, next core-web-vitals + typescript)
 npx tsc --noEmit   # 타입만 빠르게 확인
 npm run verify:bom # BOM 마트·자재 귀속 실데이터 검증 (아래 참고)
 npm run verify:ads # 재고 장표 ADS(판매출고+생산투입) 실데이터 검증
+npm run verify:weekly # 주간 요약장표(주차 계산·분류·적재 불변식) 실데이터 검증
 ```
 
-**테스트 프레임워크가 없다.** 자동 검증은 `scripts/verify-bom-mart.mjs` 와 `scripts/verify-ads.mjs` 뿐이며,
+**테스트 프레임워크가 없다.** 자동 검증은 `scripts/verify-bom-mart.mjs`·`verify-ads.mjs`·`verify-weekly.mjs` 뿐이며,
 `.env.local` 을 직접 파싱해 실제 BigQuery 를 읽고(SELECT 전용) 불변식을 확인한다 —
 지분합 = 1, 배분금액 합 = 실재고금액, 캐시 gzip 후 2MB 미만, 손계산(N개입 박스 = 1/N) 대조 등.
 실패하면 exit 1. 그래서 **계산 로직은 I/O 없는 순수 함수로 `lib/` 에 두고, `'use server'` 파일에는 실행·캐시만 둔다** —
@@ -38,7 +39,8 @@ npm run verify:ads # 재고 장표 ADS(판매출고+생산투입) 실데이터 �
 
 **Supabase 프로젝트는 사내 다른 앱들과 공유한다.** 이 앱이 만드는 테이블은 전부 `snop_` 접두어를 붙인다
 (`snop_profiles`, `snop_bom_leaf`, `snop_bom_build_runs`, `snop_product_owners`, `snop_material_thresholds`,
-`snop_inventory_daily_snapshots`, `snop_user_favorites`, `snop_user_favorite_customers`).
+`snop_inventory_daily_snapshots`, `snop_weekly_inventory_snapshots`, `snop_cm_mapping`, `snop_weekly_board_notes`,
+`snop_user_favorites`, `snop_user_favorite_customers`).
 `auth.users` 도 공유되므로 로그인 계정은 회사 이메일이 아니라 `<login_id>@snop.local` 내부 주소로 만든다(`lib/pin-auth.ts`).
 스키마 변경은 `supabase/*.sql` 에 파일로 남기고 대시보드에서 수동 실행한다(마이그레이션 러너 없음).
 
@@ -62,6 +64,10 @@ middleware.ts             전 경로 인증 게이트
 판정·집계는 전부 `lib/inventory-board.ts` 순수 함수에 있다 — 화면은 표시만 한다.
 `/inventory` 는 필터 쿼리를 들고 `/stock` 으로 넘기는 리다이렉트다(예전 공유 링크 보존). **다시 두 화면으로 쪼개지 말 것.**
 
+`/weekly` 는 주간 완제품 재고 요약장표다(수기 엑셀 「1. 완제품 재고현황」 대체). 설계 근거는 `docs/weekly-summary-board.md`.
+예전 `/daily`(일일 관리) 화면 자리를 대신하며, **화면만 지웠고 일별 스냅샷 cron·`snop_inventory_daily_snapshots`·MCP 아침브리핑은 그대로 살아 있다.**
+이 장표는 BigQuery 를 읽지 않는다 — 주 1회 적재해 둔 `snop_weekly_inventory_snapshots` 만 읽는다.
+
 ### 캐시 규약
 
 모든 무거운 조회는 `unstable_cache(fn, [버전이 박힌 키], { revalidate: 600, tags: ['report-data'] })` 이다.
@@ -83,7 +89,7 @@ middleware.ts             전 경로 인증 게이트
 - 로그인은 ID + 6자리 PIN 방식(`lib/pin-auth.ts`) — 5회 실패 시 15분 잠금, 쉬운 PIN 거부, 실패 문구는 항상 동일.
 - `/api/mcp` 는 쿠키가 없는 클라이언트용이라 미들웨어를 통과시키고 라우트에서 `MCP_TOKEN` 으로 인증한다.
   `/.well-known/oauth-*` 는 **반드시 404** 로 끊어야 한다(로그인 페이지로 리다이렉트하면 MCP 커넥터 등록이 실패한다).
-- `/api/cron/*` 은 `CRON_SECRET` Bearer 로 라우트 내부에서 인증한다. Vercel Cron 은 `vercel.json` 에 정의(매일 21:45 UTC 재고 스냅샷).
+- `/api/cron/*` 은 `CRON_SECRET` Bearer 로 라우트 내부에서 인증한다. Vercel Cron 은 `vercel.json` 에 정의(매일 21:45 UTC 일별 재고 스냅샷, 일요일 20:40 UTC = 월요일 05:40 KST 주간 스냅샷).
 
 ### MCP 서버
 
@@ -99,7 +105,9 @@ middleware.ts             전 경로 인증 게이트
   1=원재료 2=부재료 3=포장재 4=반제품 5=자사소재 6=상품 (`lib/bom/explosion-sql.ts` `MATERIAL_CLASS_LABEL`).
   BOM 전개 스코프와 재고/발주 쿼리의 대역이 어긋나면 모수가 갈린다.
 - **재고 단가는 SAP 표준가(STPRS)를 쓰지 않는다.** 미사용 자재에 5천만원/EA 같은 값이 남아 금액이 30배 튀었다.
-  원가팀 `ending_inventory`(별도 Supabase) 단가만 쓰고, 거기 없는 자재는 금액을 만들지 말고 `CURRENT_MONTH`(당월생산)로 표기한다.
+  원가팀 `ending_inventory`(별도 Supabase) 단가만 쓴다. **최신 마감월에 없으면 과거월로 최대 6개월 역탐색**하고,
+  그래도 없으면 금액을 만들지 말고 `CURRENT_MONTH`(당월생산)로 표기한다. 어느 월 단가를 썼는지는
+  `resolveUnitPrice` 가 돌려주는 `priceMonth` 로 따라다니므로 화면에서 "최신 단가가 아님"을 숨기지 않는다.
   `as_of_month` 는 "그 달의 기초" = 전월 기말이다.
 - **ADS 는 판매속도가 아니라 소진속도다.** `납품출고(SD_ZASSDDV0020, 601 성격) + 생산투입 순소요(MB51 261-262)`.
   스프·양념장·소스처럼 제품 코드(5xxxxxxx)로 등록됐지만 다시 다른 제품의 자재로 투입되는 품목이
@@ -125,6 +133,16 @@ middleware.ts             전 경로 인증 게이트
   (재고 일별 스냅샷 `lib/inventory-daily-snapshot.ts` 와 순서가 반대다).
 - **자재 위험 판정 기준은 화면에 그대로 노출한다**(`describeRiskCriteria`, `describeMaterialStatuses`).
   판정 로직을 바꾸면 이 설명 문자열도 같이 고쳐야 한다 — "왜 위험으로 잡혔나"를 사용자가 임계값까지 보고 판단하는 구조다.
+- **주간 요약장표(`/weekly`)의 판정 기준** — `lib/weekly/classification.ts` 하나에 모여 있다.
+  카테고리는 DISPO 로 판정한다: 냉동 M01~M05·M10 / HMI M06~M09 / 즉석밥 M30~M32 / 라면 M11~M17·M19 / 나머지 기타.
+  M13(전처리)은 조직상 K1 냉동팀_전처리지만 **이 장표에서는 라면(K3)** 이고, M31(FD)은 카테고리 축이 4개뿐이라 K2 즉석밥에 함께 잡힌다 — 둘 다 확인을 거친 결정이다.
+  DISPO 는 `MM_MARD` 에서 **생산 플랜트(1021·1022·1023)만** 뽑는다. 1031(판매법인)의 DISPO 는 M33·M36·H01 같은 영업용 코드라 생산라인이 아니다.
+  ⚠️ 실측 재고금액의 **26.5% 가 아직 어느 카테고리에도 안 걸린다**(M18 11.2억, A08 8.7억, 마스터없음 7.0억). 화면이 이 금액을 「기타」로 드러내니 매핑을 넓힐 때 이 파일만 고치면 과거 주차까지 다시 접힌다.
+- **주간 장표의 창고 그룹** — 플랜트 / 물류(FBH) / 기타창고 3개다. 기타창고는 다른 화면이 통째로 제외하던 저장위치들이다.
+  ⚠️ **저장위치 3000(물류창고)은 어느 그룹에도 넣지 않는다.** FBH 물류센터 재고의 SAP 측 미러라서(실측: 445품목 중 381품목이 FBH 에도 있고 32품목은 수량까지 일치) 넣으면 물류 재고를 두 번 센다.
+  이 3그룹 합계는 `/weekly` 안에서만 쓴다. `/stock`·MCP 의 기존 「통합 재고」 정의는 건드리지 않는다.
+- **주간 재고는 소급 생성이 불가능하다.** `V_MM_MCHB_ALL` 은 "지금" 재고만 준다. 그래서 같은 주차를 다시 적재해도
+  **재고 열은 최초 1회분을 유지하고 출고·생산·매출만 다시 계산한다**(전표 이력이라 소급 가능). 이 순서를 뒤집지 말 것.
 - 자재 공용/전용(`SHARED`/`DEDICATED`)은 **BOM 사실**로, 담당자 지분은 **최근 실적**으로 판정한다. 서로 다른 기준이며 의도된 것이다.
 
 ## 환경변수 (`.env.local`, 커밋 금지)

@@ -205,8 +205,8 @@ async function fetchRawData(sDate: string, eDate: string) {
 }
 
 const getCompressedAnalysis = async (sDate: string, eDate: string, startDateStr: string, endDateStr: string) => {
-    // v8: ADS 에 MB51 생산투입 순소요(261-262)를 합산하면서 계산 결과가 바뀌어 버전을 올립니다.
-    const cacheKey = `dashboard-analysis-v8-ads-with-261-${sDate}-${eDate}`;
+    // v9: 기말재고 단가에 과거월 역탐색(최대 6개월)을 붙이면서 재고금액이 바뀌어 버전을 올립니다.
+    const cacheKey = `dashboard-analysis-v9-price-month-fallback-${sDate}-${eDate}`;
 
     return await unstable_cache(
       async () => {

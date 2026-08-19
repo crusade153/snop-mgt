@@ -192,7 +192,7 @@ export async function getProductDetail(matnr: string): Promise<{ success: boolea
 
   return unstable_cache(
     async () => getProductDetailUncached(productCode),
-    ['product-detail-v1', productCode],
+    ['product-detail-v2-price-month-fallback', productCode],
     { revalidate: 600, tags: ['report-data'] }
   )();
 }

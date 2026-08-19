@@ -26,7 +26,13 @@ const THRESHOLDS = {
 };
 
 // 🚨 [완벽 조치 1] SAP 더미 날짜(1899-12-30, 00000000 등)를 기한없음으로 정확히 걸러내는 방탄 함수
-function safeExtractDateStr(val: any): string {
+/**
+ * SAP 날짜값 → 'YYYYMMDD'. 더미 날짜(00000000·1899·1900·1970·2000년 미만)는 빈 문자열로 떨군다.
+ *
+ * 주간 장표(lib/weekly/*)도 같은 판정을 써야 해서 export 한다.
+ * 이 규칙을 복사해 두 벌로 만들면 '기한없음' 판정이 화면마다 갈린다.
+ */
+export function safeExtractDateStr(val: any): string {
   if (!val) return '';
 
   try {

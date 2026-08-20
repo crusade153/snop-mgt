@@ -312,8 +312,10 @@ export default function WeeklyBoardPage() {
                         </span>
                       </th>
                       <th className="px-1.5 pb-1.5 font-bold">
-                        월매출 比
-                        <br />
+                        <span className="flex items-center justify-end gap-1">
+                          월 출고 比
+                          <InfoTooltip text="재고금액 ÷ 당월 누적 출고금액입니다. 출고금액도 재고와 똑같이 완제품 재고단가로 환산하므로, 200% 는 '이번 달 출고량의 2배를 쌓아두고 있다'로 읽으면 됩니다. 매출액(판매가)이 분모였을 때는 마진율만큼 비율이 눌려 이렇게 읽을 수 없었습니다." />
+                        </span>
                         재고금액
                       </th>
                     </tr>
@@ -383,7 +385,7 @@ export default function WeeklyBoardPage() {
                             </div>
                           </td>
                           <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
-                            {percent(row.stockToSalesRatio)}
+                            {percent(row.stockToShipmentRatio)}
                           </td>
                         </tr>
                       );
@@ -410,14 +412,34 @@ export default function WeeklyBoardPage() {
                       <td className="border-l border-neutral-200 px-1.5 py-2 text-sm tabular-nums">
                         {money(board.totals.stockValue)}
                       </td>
-                      <td className="px-1.5 py-2 tabular-nums text-[#C62828]">
-                        {money(riskOf(board.totals.buckets, board.totals.stockValue).value)}
-                        <span className="ml-1 text-[10px] font-normal text-neutral-500">
-                          {Math.round(riskOf(board.totals.buckets, board.totals.stockValue).ratio * 100)}%
-                        </span>
+                      <td className="px-1.5 py-2">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span className="tabular-nums text-[#C62828]">
+                            {money(riskOf(board.totals.buckets, board.totals.stockValue).value)}
+                          </span>
+                          <span className="h-1.5 w-9 overflow-hidden rounded-sm bg-white">
+                            <span
+                              className="block h-1.5 rounded-sm bg-[#D32F2F]"
+                              style={{
+                                width: `${Math.min(
+                                  100,
+                                  Math.round(
+                                    riskOf(board.totals.buckets, board.totals.stockValue).ratio * 100
+                                  )
+                                )}%`,
+                              }}
+                            />
+                          </span>
+                          <span className="w-7 text-[10px] font-normal tabular-nums text-neutral-500">
+                            {Math.round(
+                              riskOf(board.totals.buckets, board.totals.stockValue).ratio * 100
+                            )}
+                            %
+                          </span>
+                        </div>
                       </td>
                       <td className="px-1.5 py-2 tabular-nums">
-                        {percent(board.totals.stockToSalesRatio)}
+                        {percent(board.totals.stockToShipmentRatio)}
                       </td>
                     </tr>
                   </tbody>

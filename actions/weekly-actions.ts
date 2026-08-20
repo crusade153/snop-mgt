@@ -204,10 +204,9 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v6: A 계열 DISPO 를 M 과 같은 분류로 묶고, H01 을 `상품` 행으로 분리하고,
-      //     재고금액을 배치 플랜트 단가로 환산해 `/stock` 과 원 단위까지 맞췄다.
-      //     (v4 = 품질대기 CINSM 을 뺀 CLABS 기준)
-      [`weekly-board-v6-dispo-a-h-plant-price-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v7: 「월 출고 比」 분모를 매출액(NETWR)에서 누적 출고금액(재고단가 환산)으로 바꿨다.
+      //     (v6 = A/H 계열 DISPO 분류 + 배치 플랜트 단가, v4 = 품질대기 CINSM 을 뺀 CLABS 기준)
+      [`weekly-board-v7-mtd-shipment-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {

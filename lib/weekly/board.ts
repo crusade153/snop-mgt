@@ -84,6 +84,9 @@ export interface WeeklySnapshotRow {
   bucket_85_over: number;
   shipped_qty: number;
   shipped_value: number;
+  /** 당월 1일~주차 종료일 누적 출고. 금액은 주간 출고와 같은 재고단가 환산이다 */
+  shipped_mtd_qty: number;
+  shipped_mtd_value: number;
   produced_qty: number;
   produced_value: number;
   sales_amount: number;
@@ -103,9 +106,17 @@ export interface WeeklyBoardRow {
   producedValue: number;
   stockValue: number;
   buckets: WeeklyBuckets;
+  /** 당월 누적 출고금액 (재고와 같은 단가) */
+  shipmentMtd: number;
+  /** 당월 누적 납품매출액. 참고용이며 비율 계산에는 쓰지 않는다 */
   salesMtd: number;
-  /** 재고금액 ÷ 당월 납품매출 누계. 분모가 0 이면 null */
-  stockToSalesRatio: number | null;
+  /**
+   * 재고금액 ÷ 당월 누적 출고금액. 분모가 0 이면 null.
+   *
+   * 분자·분모가 **둘 다 완제품 재고단가**라 배수를 그대로 "월 출고량의 몇 배를 쌓아두고 있는가"로 읽는다.
+   * 예전 분모였던 매출액(NETWR)은 판매가라 마진율만큼 비율이 눌렸다.
+   */
+  stockToShipmentRatio: number | null;
   /** 전주 재고 + 생산 − 출고 와 당주 재고의 차이. 폐기·반품·재평가가 섞여 0 이 되지 않는다 */
   balanceGap: number;
 }
@@ -207,8 +218,9 @@ const emptyRow = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory): W
   producedValue: 0,
   stockValue: 0,
   buckets: createWeeklyBuckets(),
+  shipmentMtd: 0,
   salesMtd: 0,
-  stockToSalesRatio: null,
+  stockToShipmentRatio: null,
   balanceGap: 0,
 });
 
@@ -248,6 +260,7 @@ export function buildWeeklyBoard({
     target.stockValue += row.stock_value || 0;
     target.shippedValue += row.shipped_value || 0;
     target.producedValue += row.produced_value || 0;
+    target.shipmentMtd += row.shipped_mtd_value || 0;
     target.salesMtd += row.sales_mtd || 0;
     addBuckets(target.buckets, bucketsOfRow(row));
 
@@ -263,7 +276,7 @@ export function buildWeeklyBoard({
   const rows = [...byKey.values()]
     .map((row) => ({
       ...row,
-      stockToSalesRatio: row.salesMtd > 0 ? row.stockValue / row.salesMtd : null,
+      stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
       balanceGap: row.previousStockValue + row.producedValue - row.shippedValue - row.stockValue,
     }))
     // 재고도 흐름도 전혀 없는 조합은 표를 늘리기만 한다
@@ -283,12 +296,14 @@ export function buildWeeklyBoard({
     producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
     stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
     buckets: createWeeklyBuckets(),
+    shipmentMtd: rows.reduce((sum, row) => sum + row.shipmentMtd, 0),
     salesMtd: rows.reduce((sum, row) => sum + row.salesMtd, 0),
-    stockToSalesRatio: null,
+    stockToShipmentRatio: null,
     balanceGap: 0,
   };
   rows.forEach((row) => addBuckets(totals.buckets, row.buckets));
-  totals.stockToSalesRatio = totals.salesMtd > 0 ? totals.stockValue / totals.salesMtd : null;
+  totals.stockToShipmentRatio =
+    totals.shipmentMtd > 0 ? totals.stockValue / totals.shipmentMtd : null;
   totals.balanceGap =
     totals.previousStockValue + totals.producedValue - totals.shippedValue - totals.stockValue;
 

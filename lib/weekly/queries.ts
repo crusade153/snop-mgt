@@ -169,15 +169,32 @@ export function buildWeeklyProductionQuery(fromCompact: string, toCompact: strin
   `;
 }
 
-/** 「월매출 比」의 분모 — 당월 1일 ~ 주차 종료일의 납품매출 누계 */
-export function buildMonthToDateSalesQuery(fromCompact: string, toCompact: string): string {
+/**
+ * 당월 1일 ~ 주차 종료일의 **누적 출고** — 「월 출고 比 재고금액」의 분모.
+ *
+ * ⚠️ 수량(LFIMG_LIPS)을 뽑는 것이 핵심이다. 금액은 호출부에서 **완제품 재고단가**로 환산한다.
+ * 예전에는 매출액(NETWR)을 분모로 썼는데, 분자인 재고금액은 원가이고 분모는 판매가라
+ * 마진율만큼 비율이 눌려 "재고가 몇 주치인가"로 읽을 수 없었다.
+ * NETWR 도 함께 돌려주지만 참고용이며 이 비율에는 쓰지 않는다.
+ *
+ * 주간 출고와 완전히 같은 기준(VDATU, BOX 환산)이어야 두 열을 나란히 놓고 볼 수 있다.
+ */
+export function buildMonthToDateShipmentQuery(fromCompact: string, toCompact: string): string {
   return `
     SELECT
-      MATNR,
-      SUM(IFNULL(NETWR, 0)) AS SALES_AMOUNT
-    FROM \`${DATASET}.SD_ZASSDDV0020\`
-    WHERE VDATU BETWEEN '${fromCompact}' AND '${toCompact}'
-      AND MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
-    GROUP BY MATNR
+      A.MATNR,
+      SUM(
+        CASE
+          WHEN A.VRKME = 'BOX' AND IFNULL(M.MEINS, '') <> 'BOX'
+            THEN IFNULL(A.LFIMG_LIPS, 0) * IFNULL(M.UMREZ_BOX, 1)
+          ELSE IFNULL(A.LFIMG_LIPS, 0)
+        END
+      ) AS SHIPPED_QTY,
+      SUM(IFNULL(A.NETWR, 0)) AS SALES_AMOUNT
+    FROM \`${DATASET}.SD_ZASSDDV0020\` AS A
+    LEFT JOIN \`${DATASET}.SD_MARA\` AS M ON A.MATNR = M.MATNR
+    WHERE A.VDATU BETWEEN '${fromCompact}' AND '${toCompact}'
+      AND A.MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
+    GROUP BY A.MATNR
   `;
 }

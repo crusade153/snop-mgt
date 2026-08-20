@@ -149,7 +149,7 @@ console.log('\n[4] 불변식');
   // 출고·생산·매출은 SKU 당 한 창고그룹에만 실려야 한다(창고그룹으로 나눌 수 없는 값이라서).
   const flowScopes = new Map();
   rows.forEach((row) => {
-    if (row.shipped_qty === 0 && row.produced_qty === 0 && row.sales_mtd === 0) return;
+    if (row.shipped_qty === 0 && row.produced_qty === 0 && row.shipped_mtd_qty === 0) return;
     flowScopes.set(row.material_code, (flowScopes.get(row.material_code) || 0) + 1);
   });
   const duplicated = [...flowScopes.entries()].filter(([, count]) => count > 1);

@@ -36,8 +36,10 @@ create table if not exists public.snop_weekly_inventory_snapshots (
   shipped_value numeric not null default 0,    -- 원가단가 환산
   produced_qty numeric not null default 0,     -- 주간 생산 (MB51 101-102)
   produced_value numeric not null default 0,   -- 원가단가 환산
-  sales_amount numeric not null default 0,     -- 해당 주 납품매출액(NETWR)
-  sales_mtd numeric not null default 0,        -- 당월 1일~주차 종료일 납품매출 누계
+  shipped_mtd_qty numeric not null default 0,  -- 당월 1일~주차 종료일 누적 출고 수량
+  shipped_mtd_value numeric not null default 0,-- 원가단가 환산. 「월 출고 比 재고금액」의 분모다
+  sales_amount numeric not null default 0,     -- 해당 주 납품매출액(NETWR). 참고용
+  sales_mtd numeric not null default 0,        -- 당월 누적 납품매출액(NETWR). 참고용, 비율에는 쓰지 않는다
 
   unit_price numeric not null default 0,
   price_month text,                     -- 실제 적용된 단가 기준월 (예: 202606)
@@ -90,3 +92,16 @@ create table if not exists public.snop_weekly_board_notes (
 
 alter table public.snop_weekly_board_notes enable row level security;
 revoke all on table public.snop_weekly_board_notes from anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 4. 누적 출고 열 추가 (2026-08, 이미 만든 테이블에 적용)
+--
+-- 「월매출 比 재고금액」의 분모를 매출액(NETWR)에서 **누적 출고금액(원가단가 환산)** 으로 바꿨다.
+-- 분자인 재고금액은 원가인데 분모가 판매가라 마진율만큼 비율이 눌려 "몇 주치 재고인가"로 읽을 수 없었다.
+--
+-- ⚠️ 적재보다 먼저 실행해야 한다. 열이 없으면 upsert 가 통째로 실패한다.
+-- 과거 주차는 이 열이 0 이므로 화면에서 비율이 `-` 로 나오고, 그 주차를 다시 적재하면 채워진다.
+-- ---------------------------------------------------------------------------
+alter table public.snop_weekly_inventory_snapshots
+  add column if not exists shipped_mtd_qty numeric not null default 0,
+  add column if not exists shipped_mtd_value numeric not null default 0;

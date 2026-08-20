@@ -27,7 +27,7 @@ import {
 } from '@/lib/weekly/board';
 import {
   buildDispoMasterQuery,
-  buildMonthToDateSalesQuery,
+  buildMonthToDateShipmentQuery,
   buildWeeklyFbhInventoryQuery,
   buildWeeklyPlantInventoryQuery,
   buildWeeklyProductionQuery,
@@ -166,8 +166,8 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
         buildWeeklyShipmentQuery(from, to)
       ),
       runQuery<{ MATNR: string; PRODUCED_QTY: number }>(buildWeeklyProductionQuery(from, to)),
-      runQuery<{ MATNR: string; SALES_AMOUNT: number }>(
-        buildMonthToDateSalesQuery(toCompactDate(mtd.from), toCompactDate(mtd.to))
+      runQuery<{ MATNR: string; SHIPPED_QTY: number; SALES_AMOUNT: number }>(
+        buildMonthToDateShipmentQuery(toCompactDate(mtd.from), toCompactDate(mtd.to))
       ),
       getEndingInventoryPrices(),
     ]);
@@ -252,8 +252,11 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   const production = new Map(
     productionRows.map((row) => [String(row.MATNR), Number(row.PRODUCED_QTY || 0)])
   );
-  const mtdSales = new Map(
-    mtdRows.map((row) => [String(row.MATNR), Number(row.SALES_AMOUNT || 0)])
+  const mtdShipments = new Map(
+    mtdRows.map((row) => [
+      String(row.MATNR),
+      { qty: Number(row.SHIPPED_QTY || 0), sales: Number(row.SALES_AMOUNT || 0) },
+    ])
   );
 
   // 재고가 0 이어도 그 주에 출고·생산이 있었으면 행을 남겨야 흐름이 끊기지 않는다.
@@ -271,7 +274,13 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   });
 
   // 출고·생산·매출은 SKU 단위 값이라 창고그룹으로 나눌 수 없다.
-  // 중복 합산을 막으려고 SKU 당 한 그룹(재고가 가장 큰 그룹)에만 싣는다.
+  // 중복 합산을 막으려고 SKU 당 한 그룹에만 싣는다.
+  //
+  // ⚠️ 단순히 "재고가 가장 큰 그룹"으로 고르면 안 된다. 재고 대부분이 기타 창고에 있는 SKU 의 출고가
+  // 기본 화면(플랜트+물류)에서 통째로 빠진다(실측 0.32억, 전체 출고의 2.5%).
+  // 그래서 **기본 스코프에 재고가 조금이라도 있으면 그쪽을 먼저** 고르고, 그 안에서 수량이 큰 그룹을 쓴다.
+  // 기타 창고에만 있는 SKU 는 재고도 화면에서 빠지므로 출고도 함께 빠지는 것이 맞다.
+  const scopeRank = (scope: WeeklyStorageScope) => (scope === 'OTHER' ? 1 : 0);
   const primaryScope = new Map<string, WeeklyStorageScope>();
   [...accumulators.values()].forEach((entry) => {
     const current = primaryScope.get(entry.materialCode);
@@ -279,9 +288,11 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       primaryScope.set(entry.materialCode, entry.scope);
       return;
     }
-    const currentQty =
-      accumulators.get(accumulatorKey(entry.materialCode, current))?.qty || 0;
-    if (entry.qty > currentQty) primaryScope.set(entry.materialCode, entry.scope);
+    const currentQty = accumulators.get(accumulatorKey(entry.materialCode, current))?.qty || 0;
+    const rankGap = scopeRank(entry.scope) - scopeRank(current);
+    if (rankGap < 0 || (rankGap === 0 && entry.qty > currentQty)) {
+      primaryScope.set(entry.materialCode, entry.scope);
+    }
   });
 
   return [...accumulators.values()].map((entry) => {
@@ -296,8 +307,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
 
     const isPrimary = primaryScope.get(code) === entry.scope;
     const shipment = isPrimary ? shipments.get(code) : undefined;
+    const mtdShipment = isPrimary ? mtdShipments.get(code) : undefined;
     const producedQty = isPrimary ? production.get(code) || 0 : 0;
     const shippedQty = shipment?.qty || 0;
+    const shippedMtdQty = mtdShipment?.qty || 0;
 
     return {
       week_end_date: week.weekEnd,
@@ -319,8 +332,12 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       shipped_value: Math.round(shippedQty * unitPrice),
       produced_qty: Math.round(producedQty * 1000) / 1000,
       produced_value: Math.round(producedQty * unitPrice),
+      // 출고 금액은 주간·누적 모두 재고와 같은 단가로 환산한다. 그래야 「재고 ÷ 출고」가 기간 배수로 읽힌다.
+      shipped_mtd_qty: Math.round(shippedMtdQty * 1000) / 1000,
+      shipped_mtd_value: Math.round(shippedMtdQty * unitPrice),
       sales_amount: Math.round(shipment?.sales || 0),
-      sales_mtd: isPrimary ? Math.round(mtdSales.get(code) || 0) : 0,
+      // 매출액(NETWR)은 판매가라 비율 계산에 쓰지 않는다. 실적 참고용으로만 남긴다.
+      sales_mtd: Math.round(mtdShipment?.sales || 0),
       // 여러 플랜트에 걸친 자재는 재고금액이 플랜트별 단가로 쌓이므로 `stock_qty × unit_price` 와 몇 원 어긋난다.
       unit_price: unitPrice,
       price_month: priceMonth || null,

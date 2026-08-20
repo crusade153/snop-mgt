@@ -9,20 +9,23 @@
  * ⚠️ 여기 매핑은 조직표가 아니라 **이 장표의 집계 기준**이다.
  *   - M13(전처리)은 조직상 K1 냉동팀_전처리지만 이 장표에서는 라면(K3)으로 센다.
  *   - M31(FD 동결건조)은 카테고리 축이 4개뿐이라 K2 즉석밥 행에 함께 잡힌다.
- * 둘 다 확인을 거친 결정이므로 조직표를 근거로 되돌리지 말 것.
+ *   - **A 접두 DISPO 는 뒤 두 자리가 같은 M 과 같은 분류다**(A08 = M08 = 소스 → HMI).
+ *   - **H 접두(H01)는 상품**이라 CM1~CM3 어디에도 넣지 않고 `상품` 행으로 따로 합산한다.
+ * 전부 확인을 거친 결정이므로 조직표를 근거로 되돌리지 말 것.
  * 적재는 SKU 단위로 하고 `dispo` 원본값을 그대로 보관하므로,
  * 카테고리 축을 늘리고 싶으면 이 파일만 고치면 과거 주차까지 다시 접힌다.
  */
 
-export type WeeklyCategory = '냉동' | 'HMI' | '즉석밥' | '라면' | '기타';
+export type WeeklyCategory = '냉동' | 'HMI' | '즉석밥' | '라면' | '상품' | '기타';
 export type WeeklyPlant = 'K1' | 'K2' | 'K3' | '기타';
-export type WeeklyCm = 'CM1' | 'CM2' | 'CM3' | '미분류';
+/** 상품(H01)은 생산 CM 축 밖이라 `상품` 을 CM 값으로 함께 쓴다. */
+export type WeeklyCm = 'CM1' | 'CM2' | 'CM3' | '상품' | '미분류';
 
 /** 창고 그룹. 원본 엑셀에는 없던 축이고, 기타창고를 드러내려고 새로 만들었다. */
 export type WeeklyStorageScope = 'PLANT' | 'LOGISTICS' | 'OTHER';
 
-export const WEEKLY_CATEGORY_ORDER: WeeklyCategory[] = ['냉동', 'HMI', '즉석밥', '라면', '기타'];
-export const WEEKLY_CM_ORDER: WeeklyCm[] = ['CM1', 'CM2', 'CM3', '미분류'];
+export const WEEKLY_CATEGORY_ORDER: WeeklyCategory[] = ['냉동', 'HMI', '즉석밥', '라면', '상품', '기타'];
+export const WEEKLY_CM_ORDER: WeeklyCm[] = ['CM1', 'CM2', 'CM3', '상품', '미분류'];
 
 /**
  * 화면 기본 스코프 = `/stock` 의 「통합 재고」와 같은 정의(플랜트 + 물류).
@@ -72,7 +75,13 @@ export function isFbhMirrorLocation(lgort?: string | null) {
   return FBH_MIRROR_SET.has(String(lgort || '').trim());
 }
 
-/** DISPO → 카테고리. 앞의 'M' 을 떼고 두 자리 숫자로 비교한다. */
+/**
+ * DISPO → 카테고리. **접두 문자를 떼고 뒤 두 자리 숫자로만** 비교한다.
+ *
+ * 생산 라인 코드는 M(생산) 과 A(자소용) 두 계열로 들어오는데 뒤 두 자리의 뜻은 같다 —
+ * A08 은 M08(소스)과 같은 라인이라 HMI 로 센다. 실측 미매핑 금액의 대부분이 A 계열이었다.
+ * H 계열(H01 상품)만 이 표를 타지 않고 `상품` 카테고리로 빠진다.
+ */
 const CATEGORY_BY_DISPO: Record<string, WeeklyCategory> = {
   '01': '냉동',
   '02': '냉동',
@@ -102,6 +111,8 @@ const PLANT_BY_CATEGORY: Record<WeeklyCategory, WeeklyPlant> = {
   HMI: 'K1',
   즉석밥: 'K2',
   라면: 'K3',
+  // 상품은 사서 파는 물건이라 생산 공장이 없다. 공장 열에는 '기타'로 두고 CM·카테고리 열이 성격을 말한다.
+  상품: '기타',
   기타: '기타',
 };
 
@@ -114,18 +125,32 @@ const CM_BY_CATEGORY: Record<WeeklyCategory, WeeklyCm> = {
   HMI: 'CM2',
   즉석밥: 'CM2',
   라면: 'CM3',
+  // 상품은 CM1~CM3 어디에도 섞지 않는다. 생산 CM 합계를 흐리지 않으려고 별도 행으로 뽑는다.
+  상품: '상품',
   기타: '미분류',
 };
 
-/** 'M07' / 'm07' / '07' 을 전부 '07' 로 정규화한다. */
-function normalizeDispo(dispo?: string | null) {
+/** 라인 번호가 같으면 같은 분류로 보는 접두 문자. 빈 접두(숫자만)도 포함한다. */
+const LINE_DISPO_PREFIXES = new Set(['', 'M', 'A']);
+
+/** 상품 접두. 생산 라인이 아니므로 라인 번호 표를 타지 않는다. */
+const MERCHANDISE_DISPO_PREFIXES = new Set(['H']);
+
+/** 'M07' / 'a07' / '7' 을 전부 `{ prefix, line }` 로 쪼갠다. 숫자가 없으면 line 이 빈 문자열이다. */
+function parseDispo(dispo?: string | null): { prefix: string; line: string } {
   const text = String(dispo || '').trim().toUpperCase();
-  if (!text) return '';
-  return text.startsWith('M') ? text.slice(1) : text;
+  const matched = text.match(/^([A-Z]*)(\d{1,2})$/);
+  if (!matched) return { prefix: text, line: '' };
+  return { prefix: matched[1], line: matched[2].padStart(2, '0') };
 }
 
 export function categoryOfDispo(dispo?: string | null): WeeklyCategory {
-  return CATEGORY_BY_DISPO[normalizeDispo(dispo)] || '기타';
+  const { prefix, line } = parseDispo(dispo);
+  if (!line) return '기타';
+  if (MERCHANDISE_DISPO_PREFIXES.has(prefix)) return '상품';
+  // 모르는 접두(다른 조직 코드)는 라인 번호가 같아도 섞지 않는다. 기타로 남겨 금액으로 드러낸다.
+  if (!LINE_DISPO_PREFIXES.has(prefix)) return '기타';
+  return CATEGORY_BY_DISPO[line] || '기타';
 }
 
 export function plantOfCategory(category: WeeklyCategory): WeeklyPlant {
@@ -136,7 +161,7 @@ export function plantOfDispo(dispo?: string | null): WeeklyPlant {
   return plantOfCategory(categoryOfDispo(dispo));
 }
 
-/** CM 매핑에 없는 SKU 는 카테고리 기본값으로 떨어뜨린다. */
+/** CM 매핑에 없는 SKU 는 카테고리 기본값으로 떨어뜨린다. 상품은 항상 `상품` 이다. */
 export function cmOfCategory(category: WeeklyCategory): WeeklyCm {
   return CM_BY_CATEGORY[category];
 }

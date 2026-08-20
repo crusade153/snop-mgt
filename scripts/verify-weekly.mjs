@@ -68,9 +68,9 @@ for (const line of readFileSync(`${ROOT}/.env.local`, 'utf8').split(/\r?\n/)) {
 
 const { weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, monthToDateRange } =
   await import('@/lib/weekly/week');
-const { categoryOfDispo, plantOfDispo, storageScopeOfLgort, isFbhMirrorLocation } =
+const { categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation } =
   await import('@/lib/weekly/classification');
-const { buildWeeklyBoard, sumBuckets, WEEKLY_BUCKET_KEYS } = await import('@/lib/weekly/board');
+const { buildWeeklyBoard, resolveCm, sumBuckets, WEEKLY_BUCKET_KEYS } = await import('@/lib/weekly/board');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -108,7 +108,14 @@ console.log('\n[2] 분류 규칙 (확정된 DISPO 매핑)');
   check('M13(전처리) → 라면/K3', categoryOfDispo('M13') === '라면' && plantOfDispo('M13') === 'K3');
   check('M19(분말스프) → 라면/K3', categoryOfDispo('M19') === '라면' && plantOfDispo('M19') === 'K3');
   check('M31(FD) → 즉석밥/K2', categoryOfDispo('M31') === '즉석밥' && plantOfDispo('M31') === 'K2');
-  check('미매핑은 기타', categoryOfDispo('A08') === '기타' && categoryOfDispo('') === '기타');
+  check('A 계열은 뒤 두 자리로 M 과 같은 분류',
+    categoryOfDispo('A08') === 'HMI' && categoryOfDispo('A03') === '냉동' &&
+    categoryOfDispo('A09') === 'HMI' && plantOfDispo('A04') === 'K1');
+  check('H01(상품) → 상품 카테고리', categoryOfDispo('H01') === '상품' && plantOfDispo('H01') === '기타');
+  check('상품 CM 은 CM1~3 과 분리', cmOfCategory('상품') === '상품' &&
+    resolveCm('50000001', '상품', new Map([['50000001', 'CM1']])) === '상품');
+  check('M18·마스터없음은 아직 기타',
+    categoryOfDispo('M18') === '기타' && categoryOfDispo('') === '기타' && categoryOfDispo(null) === '기타');
   check('저장위치 그룹', storageScopeOfLgort('2210') === 'PLANT' && storageScopeOfLgort('9100') === 'OTHER');
   check('3000(물류창고)은 FBH 미러라 제외', isFbhMirrorLocation('3000') && !isFbhMirrorLocation('2210'));
 }
@@ -167,6 +174,23 @@ console.log('\n[5] 집계 (화면이 보는 형태)');
   const bucketTotal = sumBuckets(board.totals.buckets);
   check('구간 합계 = 재고 합계', Math.abs(bucketTotal - board.totals.stockValue) < 100,
     `구간 ${Math.round(bucketTotal).toLocaleString('ko-KR')} / 재고 ${Math.round(board.totals.stockValue).toLocaleString('ko-KR')}`);
+
+  // 적재 당시 굳은 category 열이 아니라 지금의 dispo 판정으로 접혀야 한다(매핑을 넓히면 과거 주차도 따라온다).
+  const staleRows = rows.filter((row) => row.category !== categoryOfDispo(row.dispo));
+  const byDerivedCategory = new Map();
+  rows.forEach((row) => {
+    const category = categoryOfDispo(row.dispo);
+    byDerivedCategory.set(category, (byDerivedCategory.get(category) || 0) + row.stock_value);
+  });
+  const foldedMismatch = board.rows.reduce((worst, row) => {
+    const expected = byDerivedCategory.get(row.category) || 0;
+    const actual = board.rows
+      .filter((other) => other.category === row.category)
+      .reduce((sum, other) => sum + other.stockValue, 0);
+    return Math.max(worst, Math.abs(expected - actual));
+  }, 0);
+  check('집계는 저장 열이 아니라 dispo 로 다시 판정', foldedMismatch < 5,
+    staleRows.length ? `적재 열과 다른 ${staleRows.length}행도 새 기준으로 접힘` : '적재 열과 동일');
 
   console.log('\n  [참고] CM × 공장 × 카테고리');
   board.rows.forEach((row) => {

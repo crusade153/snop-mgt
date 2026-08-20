@@ -47,6 +47,8 @@ interface PlantInventoryRow {
   MEINS: string;
   LGORT: string;
   LGOBE: string;
+  /** 배치 마스터에서 붙인 플랜트. 단가가 플랜트별로 달라 금액 환산의 키다 */
+  WERKS: string | null;
   VFDAT: string;
   CLABS: number;
   CINSM: number;
@@ -64,14 +66,29 @@ interface FbhInventoryRow {
   REMAINING_DAY: number;
 }
 
-/** 누적용 중간 상태. SKU × 창고그룹 하나에 대응한다. */
+/**
+ * 누적용 중간 상태. SKU × 창고그룹 하나에 대응한다.
+ *
+ * ⚠️ 수량이 아니라 **금액을 누적한다.** 같은 자재라도 배치가 있는 플랜트마다 단가가 다르므로
+ * 「합친 수량 × 대표단가」로 계산하면 `/stock` 과 금액이 갈린다(실측 68품목·0.04억).
+ */
 interface Accumulator {
   materialCode: string;
   scope: WeeklyStorageScope;
   name: string;
   unit: string;
   qty: number;
+  value: number;
+  /** 잔여율 구간별 **금액** */
   buckets: ReturnType<typeof createWeeklyBuckets>;
+}
+
+/** SKU 대표 단가. 재고가 가장 많은 플랜트의 단가를 출고·생산 환산에 쓴다. */
+interface RepresentativePrice {
+  unitPrice: number;
+  source: string;
+  priceMonth: string;
+  qty: number;
 }
 
 /** 잔여일 → 잔여율. FBH 는 remain_rate 가 없어 생산일·유통기한으로 직접 계산한다. */
@@ -117,6 +134,7 @@ function touch(
       name,
       unit,
       qty: 0,
+      value: 0,
       buckets: createWeeklyBuckets(),
     };
     map.set(key, entry);
@@ -158,6 +176,18 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   const plantByCode = new Map(dispoRows.map((row) => [String(row.MATNR), String(row.WERKS || '')]));
   const accumulators = new Map<string, Accumulator>();
   const names = new Map<string, { name: string; unit: string }>();
+  /** SKU → 재고가 가장 많은 플랜트의 단가. 출고·생산 금액은 이 대표 단가로 환산한다. */
+  const representative = new Map<string, RepresentativePrice>();
+
+  const rememberPrice = (
+    code: string,
+    qty: number,
+    price: { unitPrice: number; source: string; priceMonth: string }
+  ) => {
+    const current = representative.get(code);
+    if (current && current.qty >= qty) return;
+    representative.set(code, { ...price, qty });
+  };
 
   // 재고 기준일 기준의 잔여일을 다시 계산하지 않는다.
   // 스냅샷은 "지금 재고"를 찍는 것이고, 그 시점의 remain_rate 가 곧 주차 마감 상태다.
@@ -175,12 +205,18 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     const entry = touch(accumulators, code, scope, row.MATNR_T || code, row.MEINS || 'EA');
     names.set(code, { name: row.MATNR_T || code, unit: row.MEINS || 'EA' });
 
+    // 단가는 배치가 있는 플랜트 기준이다(`/stock` 과 같은 규칙). 없으면 자재코드 폴백으로 떨어진다.
+    const price = resolveUnitPrice(prices, code, row.WERKS);
+    const value = qty * price.unitPrice;
+    rememberPrice(code, qty, price);
+
     entry.qty += qty;
+    entry.value += value;
 
     // 기한없음 재고를 잔여율 구간에 넣으면 remain_rate 0 때문에 전부 '~50%' 로 오분류된다.
     const hasExpiry = safeExtractDateStr(row.VFDAT).length === 8;
     const bucketKey = hasExpiry ? weeklyBucketKeyOf(normalizeRate(row.remain_rate)) : 'over85';
-    entry.buckets[bucketKey] += qty;
+    entry.buckets[bucketKey] += value;
   });
 
   fbhRows.forEach((row) => {
@@ -191,14 +227,20 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     const entry = touch(accumulators, code, 'LOGISTICS', row.MATNR_T || code, row.MEINS || 'EA');
     if (!names.has(code)) names.set(code, { name: row.MATNR_T || code, unit: row.MEINS || 'EA' });
 
+    // FBH 는 플랜트 정보가 없으므로 자재코드 폴백 단가만 쓴다(`/stock` 과 같다).
+    const price = resolveUnitPrice(prices, code);
+    const value = qty * price.unitPrice;
+    rememberPrice(code, qty, price);
+
     entry.qty += qty;
+    entry.value += value;
 
     const hasExpiry = safeExtractDateStr(row.VALID_DATETIME_NEW).length === 8;
     const rate = hasExpiry
       ? fbhRemainRate(row.PRDT_DATE_NEW, row.VALID_DATETIME_NEW, Number(row.REMAINING_DAY || 0))
       : 0;
     const bucketKey = hasExpiry ? weeklyBucketKeyOf(rate) : 'over85';
-    entry.buckets[bucketKey] += qty;
+    entry.buckets[bucketKey] += value;
   });
 
   const shipments = new Map(
@@ -246,11 +288,11 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     const code = entry.materialCode;
     const dispo = dispoByCode.get(code) || null;
     const category = categoryOfDispo(dispo);
-    const { unitPrice, source, priceMonth } = resolveUnitPrice(
-      prices,
-      code,
-      plantByCode.get(code) || null
-    );
+
+    // 재고금액은 이미 배치 플랜트 단가로 쌓았다. 여기 단가는 출고·생산 환산과 표기용 대표값이다.
+    // 재고가 아예 없는(흐름만 있는) SKU 는 자재마스터의 대표 플랜트로 떨어진다.
+    const fallback = resolveUnitPrice(prices, code, plantByCode.get(code) || null);
+    const { unitPrice, source, priceMonth } = representative.get(code) || fallback;
 
     const isPrimary = primaryScope.get(code) === entry.scope;
     const shipment = isPrimary ? shipments.get(code) : undefined;
@@ -267,18 +309,19 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       category,
       unit: entry.unit,
       stock_qty: Math.round(entry.qty * 1000) / 1000,
-      stock_value: Math.round(entry.qty * unitPrice),
-      bucket_under50: Math.round(entry.buckets.under50 * unitPrice),
-      bucket_50_70: Math.round(entry.buckets.r50_70 * unitPrice),
-      bucket_70_75: Math.round(entry.buckets.r70_75 * unitPrice),
-      bucket_75_85: Math.round(entry.buckets.r75_85 * unitPrice),
-      bucket_85_over: Math.round(entry.buckets.over85 * unitPrice),
+      stock_value: Math.round(entry.value),
+      bucket_under50: Math.round(entry.buckets.under50),
+      bucket_50_70: Math.round(entry.buckets.r50_70),
+      bucket_70_75: Math.round(entry.buckets.r70_75),
+      bucket_75_85: Math.round(entry.buckets.r75_85),
+      bucket_85_over: Math.round(entry.buckets.over85),
       shipped_qty: Math.round(shippedQty * 1000) / 1000,
       shipped_value: Math.round(shippedQty * unitPrice),
       produced_qty: Math.round(producedQty * 1000) / 1000,
       produced_value: Math.round(producedQty * unitPrice),
       sales_amount: Math.round(shipment?.sales || 0),
       sales_mtd: isPrimary ? Math.round(mtdSales.get(code) || 0) : 0,
+      // 여러 플랜트에 걸친 자재는 재고금액이 플랜트별 단가로 쌓이므로 `stock_qty × unit_price` 와 몇 원 어긋난다.
       unit_price: unitPrice,
       price_month: priceMonth || null,
       price_source: source,

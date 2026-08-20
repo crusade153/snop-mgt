@@ -19,16 +19,51 @@ import {
 } from '@/lib/weekly/board';
 import { WEEKLY_DEFAULT_SCOPES } from '@/lib/weekly/classification';
 
-/** 구간 색 — 왼쪽(임박)이 붉고 오른쪽(안전)이 푸르다. 원본 엑셀 차트와 같은 방향이다. */
+/**
+ * 구간 색 — 왼쪽(임박)이 붉고 오른쪽(안전)이 푸르다. 원본 엑셀 차트와 같은 방향이다.
+ *
+ * ⚠️ **안전 구간(75% 이상)은 일부러 채도를 낮췄다.** 다섯 색이 모두 진하면 재고금액의 절반을 차지하는
+ * 파란 조각이 시선을 먼저 가져가서 "어디가 문제인가"가 늦게 읽힌다. 위험 두 구간만 진하게 둔다.
+ */
 const BUCKET_COLORS: Record<keyof WeeklyBuckets, string> = {
-  under50: '#E53935',
-  r50_70: '#FB8C00',
-  r70_75: '#FDD835',
-  r75_85: '#43A047',
-  over85: '#1E88E5',
+  under50: '#D32F2F',
+  r50_70: '#F57C00',
+  r70_75: '#FBC02D',
+  r75_85: '#81C784',
+  over85: '#90CAF9',
+};
+
+/** 소진이 필요한 구간. 표·차트·요약 모두 이 정의 하나를 쓴다. */
+const RISK_BUCKET_KEYS: (keyof WeeklyBuckets)[] = ['under50', 'r50_70'];
+
+/** 위험 구간 열에 얹는 옅은 배경 — 숫자를 가리지 않을 만큼만 */
+const BUCKET_CELL_TONE: Record<keyof WeeklyBuckets, string> = {
+  under50: 'bg-[#FFF5F5] text-[#C62828] font-semibold',
+  r50_70: 'bg-[#FFF8F0] text-[#E65100]',
+  r70_75: 'text-neutral-600',
+  r75_85: 'text-neutral-400',
+  over85: 'text-neutral-400',
 };
 
 type MoneyUnit = 'million' | 'won';
+
+/**
+ * 적재 시각 표기(KST).
+ *
+ * `/stock` 은 실시간이고 이 장표는 적재 순간에 고정된다. 두 화면의 재고금액이 다를 때
+ * 사용자가 가장 먼저 확인해야 하는 것이 "언제 찍은 값인가" 라서 제목 옆에 붙여 둔다.
+ */
+function capturedLabel(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
 
 export default function WeeklyBoardPage() {
   const [weekEnd, setWeekEnd] = useState<string | undefined>(undefined);
@@ -87,11 +122,22 @@ export default function WeeklyBoardPage() {
 
   const percent = (value: number | null) => (value === null ? '-' : `${Math.round(value * 100)}%`);
 
+  /** 0 을 숫자로 쓰면 표가 0 으로 뒤덮여 실제 값이 묻힌다. */
+  const moneyCell = (value: number) =>
+    Math.round(value) === 0 ? <span className="text-neutral-300">-</span> : money(value);
+
+  /** 소진이 필요한 구간(50% 미만 + 50~70%)의 금액과 비중 */
+  const riskOf = (buckets: WeeklyBuckets, stockValue: number) => {
+    const value = RISK_BUCKET_KEYS.reduce((sum, key) => sum + (buckets[key] || 0), 0);
+    return { value, ratio: stockValue > 0 ? value / stockValue : 0 };
+  };
+
   const chartSeries = useMemo(() => {
     if (!board) return [];
     return WEEKLY_BUCKET_KEYS.map((key) => ({
       label: WEEKLY_BUCKET_LABELS[key],
       color: BUCKET_COLORS[key],
+      emphasis: RISK_BUCKET_KEYS.includes(key),
       values: board.categoryBuckets.map((entry) => toEok(entry.buckets[key])),
     }));
   }, [board]);
@@ -110,9 +156,16 @@ export default function WeeklyBoardPage() {
             text={
               '주 = 월~일, 재고 기준일 = 일요일 마감. 재고는 소급 계산이 불가능해 적재한 값만 남습니다. ' +
               '재고·출고·생산 금액은 모두 원가팀 기말재고 단가(없으면 최대 6개월 과거월) 기준입니다. ' +
-              '기본 스코프(플랜트+물류)는 재고 통합 장표의 통합 재고와 같은 기준입니다.'
+              '재고 범위·단가·플랜트 판정이 재고 통합 장표(/stock)의 통합 재고와 동일하므로 ' +
+              '적재 시점에는 두 화면의 재고금액이 원 단위까지 같습니다. ' +
+              '이후 벌어지는 차이는 통합 장표가 실시간, 이 장표가 적재 시점 고정이라서 생기는 시간차입니다.'
             }
           />
+          {data?.capturedAt && (
+            <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
+              적재 {capturedLabel(data.capturedAt)}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -203,34 +256,62 @@ export default function WeeklyBoardPage() {
           <section className="rounded-lg border border-neutral-200 bg-white">
             <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_230px]">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] text-right text-xs">
+                <table className="w-full min-w-[1040px] text-right text-xs">
                   <thead>
+                    {/* 열이 13개다. 그룹 머리행이 없으면 어디까지가 흐름이고 어디부터가 구간인지 매번 세어야 한다. */}
+                    <tr className="bg-neutral-100 text-[10px] text-neutral-500">
+                      <th className="px-1.5 pt-1.5 text-center font-bold" colSpan={3} rowSpan={2}>
+                        <span className="text-[11px] text-neutral-700">구분</span>
+                      </th>
+                      <th
+                        className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
+                        colSpan={3}
+                      >
+                        주간 흐름 <span className="text-neutral-400">{data?.labels.flow}</span>
+                      </th>
+                      <th
+                        className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
+                        colSpan={5}
+                      >
+                        소비기한 잔여율 구간별 재고금액
+                      </th>
+                      <th
+                        className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
+                        colSpan={3}
+                      >
+                        당주 재고
+                      </th>
+                    </tr>
                     <tr className="bg-neutral-100 text-[11px] text-neutral-700">
-                      <th className="px-1.5 py-1.5 text-center font-bold">CM</th>
-                      <th className="px-1.5 py-1.5 text-center font-bold">공장</th>
-                      <th className="px-1.5 py-1.5 text-center font-bold">카테고리</th>
-                      <th className="px-1.5 py-1.5 font-bold">{data?.labels.previousStock}</th>
-                      <th className="px-1.5 py-1.5 font-bold">
-                        주간 출고
-                        <br />
-                        <span className="font-normal text-neutral-500">{data?.labels.flow}</span>
+                      <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold">
+                        {data?.labels.previousStock}
                       </th>
-                      <th className="px-1.5 py-1.5 font-bold">
-                        주간 생산
-                        <br />
-                        <span className="font-normal text-neutral-500">{data?.labels.flow}</span>
-                      </th>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <th key={key} className="px-1.5 py-1.5 font-bold">
+                      <th className="px-1.5 pb-1.5 font-bold">출고</th>
+                      <th className="px-1.5 pb-1.5 font-bold">생산</th>
+                      {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                        <th
+                          key={key}
+                          className={`px-1.5 pb-1.5 font-bold ${index === 0 ? 'border-l border-neutral-200' : ''} ${
+                            RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : 'text-neutral-500'
+                          }`}
+                        >
                           {WEEKLY_BUCKET_LABELS[key].split(' [')[0]}
                           <br />
-                          <span className="font-normal text-neutral-500">
+                          <span className="font-normal text-neutral-400">
                             [{WEEKLY_BUCKET_LABELS[key].split('[')[1]}
                           </span>
                         </th>
                       ))}
-                      <th className="px-1.5 py-1.5 font-bold">{data?.labels.currentStock}</th>
-                      <th className="px-1.5 py-1.5 font-bold">
+                      <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold">
+                        {data?.labels.currentStock}
+                      </th>
+                      <th className="px-1.5 pb-1.5 font-bold">
+                        <span className="flex items-center justify-end gap-1">
+                          소진 필요
+                          <InfoTooltip text="소비기한 잔여율 70% 미만(50% 미만 + 50~70%) 재고금액과 그 비중입니다. 이 비중이 높은 행부터 소진 계획이 필요합니다." />
+                        </span>
+                      </th>
+                      <th className="px-1.5 pb-1.5 font-bold">
                         월매출 比
                         <br />
                         재고금액
@@ -238,54 +319,104 @@ export default function WeeklyBoardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {board.rows.map((row) => (
-                      <tr
-                        key={`${row.cm}-${row.plant}-${row.category}`}
-                        className="border-b border-neutral-100 hover:bg-neutral-50"
-                      >
-                        <td className="px-1.5 py-1.5 text-center font-medium">{row.cm}</td>
-                        <td className="px-1.5 py-1.5 text-center">{row.plant}</td>
-                        <td className="px-1.5 py-1.5 text-center">{row.category}</td>
-                        <td className="px-1.5 py-1.5 tabular-nums text-neutral-500">
-                          {moneyOrDash(row.previousStockValue, hasPrevious)}
-                        </td>
-                        <td className="px-1.5 py-1.5 tabular-nums">{money(row.shippedValue)}</td>
-                        <td className="px-1.5 py-1.5 tabular-nums">{money(row.producedValue)}</td>
-                        {WEEKLY_BUCKET_KEYS.map((key) => (
-                          <td key={key} className="px-1.5 py-1.5 tabular-nums">
-                            {money(row.buckets[key])}
+                    {board.rows.map((row, index) => {
+                      const risk = riskOf(row.buckets, row.stockValue);
+                      // 생산 CM 행과 상품·미분류 행 사이에 선을 하나 넣어 성격이 다른 행임을 드러낸다.
+                      const isAside = row.cm === '상품' || row.cm === '미분류';
+                      const previousIsAside =
+                        index > 0 &&
+                        (board.rows[index - 1].cm === '상품' || board.rows[index - 1].cm === '미분류');
+                      return (
+                        <tr
+                          key={`${row.cm}-${row.plant}-${row.category}`}
+                          className={`border-b border-neutral-100 hover:bg-neutral-50 ${
+                            isAside && !previousIsAside ? 'border-t-2 border-t-neutral-200' : ''
+                          }`}
+                        >
+                          <td className="px-1.5 py-1.5 text-center font-medium">
+                            {isAside ? (
+                              <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">
+                                {row.cm}
+                              </span>
+                            ) : (
+                              row.cm
+                            )}
                           </td>
-                        ))}
-                        <td className="px-1.5 py-1.5 font-bold tabular-nums">
-                          {money(row.stockValue)}
-                        </td>
-                        <td className="px-1.5 py-1.5 tabular-nums">
-                          {percent(row.stockToSalesRatio)}
-                        </td>
-                      </tr>
-                    ))}
+                          <td className="px-1.5 py-1.5 text-center text-neutral-500">{row.plant}</td>
+                          <td className="px-1.5 py-1.5 text-center font-medium">{row.category}</td>
+                          <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-500">
+                            {hasPrevious ? moneyCell(row.previousStockValue) : '-'}
+                          </td>
+                          <td className="px-1.5 py-1.5 tabular-nums text-neutral-500">
+                            {moneyCell(row.shippedValue)}
+                          </td>
+                          <td className="px-1.5 py-1.5 tabular-nums text-neutral-500">
+                            {moneyCell(row.producedValue)}
+                          </td>
+                          {WEEKLY_BUCKET_KEYS.map((key, bucketIndex) => (
+                            <td
+                              key={key}
+                              className={`px-1.5 py-1.5 tabular-nums ${BUCKET_CELL_TONE[key]} ${
+                                bucketIndex === 0 ? 'border-l border-neutral-100' : ''
+                              }`}
+                            >
+                              {moneyCell(row.buckets[key])}
+                            </td>
+                          ))}
+                          <td className="border-l border-neutral-100 px-1.5 py-1.5 text-sm font-bold tabular-nums text-neutral-900">
+                            {money(row.stockValue)}
+                          </td>
+                          <td className="px-1.5 py-1.5">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <span className="font-semibold tabular-nums text-[#C62828]">
+                                {moneyCell(risk.value)}
+                              </span>
+                              <span className="h-1.5 w-9 overflow-hidden rounded-sm bg-neutral-100">
+                                <span
+                                  className="block h-1.5 rounded-sm bg-[#D32F2F]"
+                                  style={{ width: `${Math.min(100, Math.round(risk.ratio * 100))}%` }}
+                                />
+                              </span>
+                              <span className="w-7 text-[10px] tabular-nums text-neutral-500">
+                                {Math.round(risk.ratio * 100)}%
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
+                            {percent(row.stockToSalesRatio)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                     <tr className="bg-[#FFF3E0] font-bold">
-                      <td className="px-1.5 py-1.5 text-center" colSpan={3}>
+                      <td className="px-1.5 py-2 text-center" colSpan={3}>
                         합계
                       </td>
-                      <td className="px-1.5 py-1.5 tabular-nums">
+                      <td className="border-l border-neutral-200 px-1.5 py-2 tabular-nums">
                         {moneyOrDash(board.totals.previousStockValue, hasPrevious)}
                       </td>
-                      <td className="px-1.5 py-1.5 tabular-nums">
-                        {money(board.totals.shippedValue)}
-                      </td>
-                      <td className="px-1.5 py-1.5 tabular-nums">
-                        {money(board.totals.producedValue)}
-                      </td>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <td key={key} className="px-1.5 py-1.5 tabular-nums">
+                      <td className="px-1.5 py-2 tabular-nums">{money(board.totals.shippedValue)}</td>
+                      <td className="px-1.5 py-2 tabular-nums">{money(board.totals.producedValue)}</td>
+                      {WEEKLY_BUCKET_KEYS.map((key, bucketIndex) => (
+                        <td
+                          key={key}
+                          className={`px-1.5 py-2 tabular-nums ${
+                            RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : 'text-neutral-600'
+                          } ${bucketIndex === 0 ? 'border-l border-neutral-200' : ''}`}
+                        >
                           {money(board.totals.buckets[key])}
                         </td>
                       ))}
-                      <td className="px-1.5 py-1.5 tabular-nums">
+                      <td className="border-l border-neutral-200 px-1.5 py-2 text-sm tabular-nums">
                         {money(board.totals.stockValue)}
                       </td>
-                      <td className="px-1.5 py-1.5 tabular-nums">
+                      <td className="px-1.5 py-2 tabular-nums text-[#C62828]">
+                        {money(riskOf(board.totals.buckets, board.totals.stockValue).value)}
+                        <span className="ml-1 text-[10px] font-normal text-neutral-500">
+                          {Math.round(riskOf(board.totals.buckets, board.totals.stockValue).ratio * 100)}%
+                        </span>
+                      </td>
+                      <td className="px-1.5 py-2 tabular-nums">
                         {percent(board.totals.stockToSalesRatio)}
                       </td>
                     </tr>

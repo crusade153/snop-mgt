@@ -7,7 +7,9 @@
  */
 
 import {
+  categoryOfDispo,
   cmOfCategory,
+  plantOfCategory,
   rowSortWeight,
   WEEKLY_CATEGORY_ORDER,
   type WeeklyCategory,
@@ -144,13 +146,31 @@ function bucketsOfRow(row: WeeklySnapshotRow): WeeklyBuckets {
   };
 }
 
-/** SKU → CM. 매핑 테이블이 우선이고, 없으면 카테고리 기본값으로 떨어진다. */
+/**
+ * SKU → CM. 매핑 테이블이 우선이고, 없으면 카테고리 기본값으로 떨어진다.
+ *
+ * ⚠️ 상품(H01)만 예외로 매핑보다 앞선다. `snop_cm_mapping` 은 CM1~CM3 만 담을 수 있어(체크 제약)
+ * 상품 SKU 가 거기 등록돼 있으면 생산 CM 행으로 딸려 들어가기 때문이다.
+ */
 export function resolveCm(
   materialCode: string,
   category: WeeklyCategory,
   cmMapping: Map<string, WeeklyCm>
 ): WeeklyCm {
+  if (category === '상품') return '상품';
   return cmMapping.get(materialCode) || cmOfCategory(category);
+}
+
+/**
+ * 적재된 행의 카테고리·공장을 **저장값이 아니라 `dispo` 원본에서 다시 판정**한다.
+ *
+ * 적재 시점의 매핑으로 굳은 `category`/`plant` 열을 그대로 쓰면, 매핑을 넓혀도 과거 주차는
+ * 옛 분류로 남아 주차 간 비교(전주 대비)가 어긋난다. 판정 기준은 항상 지금의
+ * `lib/weekly/classification.ts` 하나여야 한다 — 저장 열은 조회 편의용 비정규화일 뿐이다.
+ */
+function classifyRow(row: WeeklySnapshotRow) {
+  const category = categoryOfDispo(row.dispo);
+  return { category, plant: plantOfCategory(category) };
 }
 
 export interface BuildWeeklyBoardInput {
@@ -208,11 +228,12 @@ export function buildWeeklyBoard({
     `${cm}|${plant}|${category}`;
 
   const touch = (row: WeeklySnapshotRow) => {
-    const cm = resolveCm(row.material_code, row.category, cmMapping);
-    const key = keyOf(cm, row.plant, row.category);
+    const { category, plant } = classifyRow(row);
+    const cm = resolveCm(row.material_code, category, cmMapping);
+    const key = keyOf(cm, plant, category);
     let target = byKey.get(key);
     if (!target) {
-      target = emptyRow(cm, row.plant, row.category);
+      target = emptyRow(cm, plant, category);
       byKey.set(key, target);
     }
     return target;
@@ -230,7 +251,7 @@ export function buildWeeklyBoard({
     target.salesMtd += row.sales_mtd || 0;
     addBuckets(target.buckets, bucketsOfRow(row));
 
-    if (row.category === '기타') {
+    if (classifyRow(row).category === '기타') {
       const dispo = row.dispo || '(마스터없음)';
       const bucket = unmapped.get(dispo) || { value: 0, codes: new Set<string>() };
       bucket.value += row.stock_value || 0;

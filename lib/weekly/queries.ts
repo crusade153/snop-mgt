@@ -50,24 +50,45 @@ export function buildDispoMasterQuery(): string {
  *
  * 기존 화면들은 여기서 9개 저장위치를 잘라냈다. 이 장표는 잘라내는 대신 LGORT 를 그대로 들고 나가
  * `lib/weekly/classification.ts` 에서 `PLANT` / `OTHER` 로 나눈다.
+ *
+ * ⚠️ **WERKS 는 배치 마스터(MM_MCHB)에서 붙인다.** 재고 뷰(V_MM_MCHB_ALL)에는 WERKS 컬럼이 아예 없고,
+ * 단가는 플랜트별로 다르다(`ending_inventory.byPlant`). 자재마스터(MM_MARD)의 대표 플랜트로 뭉뚱그리면
+ * 같은 자재가 1021·1022 에 나뉘어 있을 때 `/stock` 과 재고금액이 갈린다 —
+ * 실측 68품목·0.04억이 정확히 이 차이였다. 그래서 `/stock`(actions/dashboard-actions.ts)과 **같은 조인**을 쓴다.
  */
 export function buildWeeklyPlantInventoryQuery(): string {
   return `
+    WITH batch_master AS (
+      SELECT
+        MATNR,
+        LGORT,
+        CHARG,
+        -- 한 배치가 여러 플랜트에 걸리면 플랜트 코드 순 첫 건. /stock 과 동일한 규칙이어야 한다.
+        ARRAY_AGG(CAST(WERKS AS STRING) ORDER BY WERKS LIMIT 1)[OFFSET(0)] AS WERKS
+      FROM \`${DATASET}.MM_MCHB\`
+      WHERE MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
+      GROUP BY MATNR, LGORT, CHARG
+    )
     SELECT
-      MATNR,
-      ANY_VALUE(MATNR_T) AS MATNR_T,
-      ANY_VALUE(MEINS) AS MEINS,
-      LGORT,
-      ANY_VALUE(LGOBE) AS LGOBE,
-      IFNULL(SUBSTR(REPLACE(CAST(VFDAT AS STRING), '-', ''), 1, 8), '') AS VFDAT,
-      SUM(IFNULL(CLABS, 0)) AS CLABS,
-      SUM(IFNULL(CINSM, 0)) AS CINSM,
-      ANY_VALUE(remain_rate) AS remain_rate,
-      ANY_VALUE(remain_day) AS remain_day
-    FROM \`${USER_DATASET}.V_MM_MCHB_ALL\`
-    WHERE CLABS > 0
-      AND MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
-    GROUP BY MATNR, LGORT, VFDAT
+      I.MATNR,
+      ANY_VALUE(I.MATNR_T) AS MATNR_T,
+      ANY_VALUE(I.MEINS) AS MEINS,
+      I.LGORT,
+      ANY_VALUE(I.LGOBE) AS LGOBE,
+      B.WERKS,
+      IFNULL(SUBSTR(REPLACE(CAST(I.VFDAT AS STRING), '-', ''), 1, 8), '') AS VFDAT,
+      SUM(IFNULL(I.CLABS, 0)) AS CLABS,
+      SUM(IFNULL(I.CINSM, 0)) AS CINSM,
+      ANY_VALUE(I.remain_rate) AS remain_rate,
+      ANY_VALUE(I.remain_day) AS remain_day
+    FROM \`${USER_DATASET}.V_MM_MCHB_ALL\` AS I
+    LEFT JOIN batch_master AS B
+      ON I.MATNR = B.MATNR
+      AND I.LGORT = B.LGORT
+      AND IFNULL(I.CHARG, '') = IFNULL(B.CHARG, '')
+    WHERE I.CLABS > 0
+      AND I.MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
+    GROUP BY I.MATNR, I.LGORT, B.WERKS, I.VFDAT
   `;
 }
 

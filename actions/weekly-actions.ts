@@ -44,6 +44,14 @@ export interface WeeklyBoardPayload {
   /** 관리자가 덮어쓴 문구가 있는 섹션 */
   overriddenNoteSections: string[];
   unpricedItemCount: number;
+  /**
+   * 이 주차 재고를 실제로 찍은 시각(ISO).
+   *
+   * `/stock` 은 지금 재고를 보여주고 이 장표는 적재 순간의 재고를 보여준다. 같은 기준·같은 쿼리를 쓰므로
+   * **적재 순간에는 두 화면의 재고금액이 원 단위까지 일치**하고, 이후 벌어지는 차이는 전부 시간차다.
+   * 그 시간차를 사용자가 직접 볼 수 있게 화면에 노출한다.
+   */
+  capturedAt: string | null;
 }
 
 const EMPTY: WeeklyBoardPayload = {
@@ -57,6 +65,7 @@ const EMPTY: WeeklyBoardPayload = {
   notes: { stock: '', bucket: '', issue: '' },
   overriddenNoteSections: [],
   unpricedItemCount: 0,
+  capturedAt: null,
 };
 
 async function loadSnapshotRows(weekEnd: string): Promise<WeeklySnapshotRow[]> {
@@ -75,6 +84,19 @@ async function loadSnapshotRows(weekEnd: string): Promise<WeeklySnapshotRow[]> {
     rows.push(...((data || []) as WeeklySnapshotRow[]));
     if ((data || []).length < pageSize) return rows;
   }
+}
+
+/** 이 주차 행이 실제로 적재된 시각. 가장 늦게 쓰인 행 기준이다. */
+async function loadCapturedAt(weekEnd: string): Promise<string | null> {
+  const supabase = createAdminSupabaseClient();
+  const { data, error } = await supabase
+    .from('snop_weekly_inventory_snapshots')
+    .select('created_at')
+    .eq('week_end_date', weekEnd)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (error) return null;
+  return data?.[0]?.created_at ? String(data[0].created_at) : null;
 }
 
 async function loadCmMapping(): Promise<Map<string, WeeklyCm>> {
@@ -131,11 +153,12 @@ async function buildPayload(
   const hasComparable = !!priorWeek && isConsecutiveWeek(priorWeek, targetWeek);
 
   // 연속하지 않은 주차를 「전주」로 쓰면 증감이 엉뚱해진다. 비교 가능할 때만 불러온다.
-  const [current, previous, cmMapping, notes] = await Promise.all([
+  const [current, previous, cmMapping, notes, capturedAt] = await Promise.all([
     loadSnapshotRows(targetWeek),
     hasComparable && priorWeek ? loadSnapshotRows(priorWeek) : Promise.resolve([]),
     loadCmMapping(),
     loadNotes(targetWeek),
+    loadCapturedAt(targetWeek),
   ]);
 
   const board = buildWeeklyBoard({ current, previous, cmMapping, scopes });
@@ -161,6 +184,7 @@ async function buildPayload(
     },
     overriddenNoteSections: [...notes.keys()],
     unpricedItemCount: current.filter((row) => row.price_source !== 'ENDING_INVENTORY').length,
+    capturedAt,
   };
 }
 
@@ -180,8 +204,10 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v4: 품질대기(CINSM)를 뺀 CLABS 기준으로 재적재하면서 금액이 바뀌어 버전을 올렸다.
-      [`weekly-board-v4-clabs-only-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v6: A 계열 DISPO 를 M 과 같은 분류로 묶고, H01 을 `상품` 행으로 분리하고,
+      //     재고금액을 배치 플랜트 단가로 환산해 `/stock` 과 원 단위까지 맞췄다.
+      //     (v4 = 품질대기 CINSM 을 뺀 CLABS 기준)
+      [`weekly-board-v6-dispo-a-h-plant-price-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {

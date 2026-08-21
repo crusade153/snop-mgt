@@ -15,9 +15,10 @@ npx tsc --noEmit   # 타입만 빠르게 확인
 npm run verify:bom # BOM 마트·자재 귀속 실데이터 검증 (아래 참고)
 npm run verify:ads # 재고 장표 ADS(판매출고+생산투입) 실데이터 검증
 npm run verify:weekly # 주간 요약장표(주차 계산·분류·적재 불변식) 실데이터 검증
+npm run verify:sales  # 매출 리포트(부호 분해·축 합계·부분월·제품 중복) 실데이터 검증
 ```
 
-**테스트 프레임워크가 없다.** 자동 검증은 `scripts/verify-bom-mart.mjs`·`verify-ads.mjs`·`verify-weekly.mjs` 뿐이며,
+**테스트 프레임워크가 없다.** 자동 검증은 `scripts/verify-bom-mart.mjs`·`verify-ads.mjs`·`verify-weekly.mjs`·`verify-sales-report.mjs` 뿐이며,
 `.env.local` 을 직접 파싱해 실제 BigQuery 를 읽고(SELECT 전용) 불변식을 확인한다 —
 지분합 = 1, 배분금액 합 = 실재고금액, 캐시 gzip 후 2MB 미만, 손계산(N개입 박스 = 1/N) 대조 등.
 실패하면 exit 1. 그래서 **계산 로직은 I/O 없는 순수 함수로 `lib/` 에 두고, `'use server'` 파일에는 실행·캐시만 둔다** —
@@ -33,7 +34,7 @@ npm run verify:weekly # 주간 요약장표(주차 계산·분류·적재 불변
 | Supabase (원가팀 별도 프로젝트) | `ending_inventory` 재고 단가 | `lib/ending-inventory-price.ts`, REST 직접 호출 |
 | Neon Postgres | Python ML 파이프라인이 write 한 수요예측. **읽기 전용** | `lib/neon.ts` |
 
-주요 SAP 테이블: `SD_ZASSDDV0020`(납품/주문), `V_SD_SO1`(청구매출), `PP_ZASPPR1110`(생산오더),
+주요 SAP 테이블: `SD_ZASSDDV0020`(납품/주문), `V_SD_SO1`·`SD_SO`(청구매출), `PP_ZASPPR1110`(생산오더),
 `V_MM_MCHB_ALL`·`MM_MCHB`(플랜트 배치재고), `V_WMV_CST_INVNLIST`(FBH 물류센터 재고),
 `SD_MARA`(자재마스터), `PP_STPO`(BOM), `MM_MARD`(자재재고), `MM_MB51`(자재이동), `MM_ZMMR1140`(자재마스터/단가), `MM_ZMMR0020`(발주).
 
@@ -67,6 +68,10 @@ middleware.ts             전 경로 인증 게이트
 `/weekly` 는 주간 완제품 재고 요약장표다(수기 엑셀 「1. 완제품 재고현황」 대체). 설계 근거는 `docs/weekly-summary-board.md`.
 예전 `/daily`(일일 관리) 화면 자리를 대신하며, **화면만 지웠고 일별 스냅샷 cron·`snop_inventory_daily_snapshots`·MCP 아침브리핑은 그대로 살아 있다.**
 이 장표는 BigQuery 를 읽지 않는다 — 주 1회 적재해 둔 `snop_weekly_inventory_snapshots` 만 읽는다.
+
+`/sales-report` 는 청구매출 단독 장표다(`lib/sales-report/`, `actions/sales-report-actions.ts`).
+**다른 화면과 데이터를 공유하지 않는다** — 전용 액션·전용 캐시 키를 쓰므로 대시보드 집계에 영향이 없다.
+집계·판정은 `lib/sales-report/board.ts` 순수 함수에 있고 화면은 표시·필터·페이지네이션만 한다.
 
 ### 캐시 규약
 
@@ -115,7 +120,22 @@ middleware.ts             전 경로 인증 게이트
   그중 130품목은 납품출고가 0, 전체 순투입 11,803,490 > 납품출고 10,238,786 으로 모수가 오히려 더 크다.
   262 취소가 261 투입을 넘기는 구간은 0 으로 막는다(음수 ADS 금지). 판단 근거 문구는 `/stock` 의 `ADS_BASIS_TEXT` 에 그대로 노출한다.
 - **매출 기준이 두 개다.** 대시보드 기본은 납품매출(`SD_ZASSDDV0020`, VDATU 납품요청일). 청구매출은 `V_SD_SO1`(FKDAT), VTWEG 10=내수 20=수출.
-  둘을 섞어 비교하지 말 것.
+  둘을 섞어 비교하지 말 것. `/sales-report` 는 청구매출 원장 `SD_SO`(FKDAT) 하나만 쓴다 — 아래 별도 항목 참고.
+- **매출 리포트(`/sales-report`)의 판정 기준** — `lib/sales-report/query.ts` 와 `board.ts` 두 파일에 모여 있다.
+  원장은 `SD_SO`(3.3M행·2.5GB·76컬럼, 2023-01-01~). **`VBELN`+`POSNR` 이 유일하다**(실측 1,237,540 = 1,237,540) —
+  `MM_ZMMR0020` 같은 중복 전개가 없으므로 GROUP BY 로 접을 필요가 없다.
+  ⚠️ **순매출은 `SUM(NETWR)` 그대로다.** 반품(ZR01·ZR05·ZFR1)·매출조정(ZCR1/ZDR1)·매출이관(ZR08/ZO08)이
+  **음수 금액 행으로 들어 있어** 그냥 합하면 순매출이 된다. 양수만 세면 총매출, 음수 절대값이 차감액이다(실측 1년 차감 286.7억 = 총매출의 18.2%).
+  조정 전표는 금액만 있고 수량이 0 이며, 무상오더(ZF01)는 반대로 수량만 있고 금액이 0 이다 —
+  그래서 **수량으로 나눈 단가를 KPI 로 만들지 않는다**(실제 판매단가보다 낮게 나온다).
+  ⚠️ **월별 추이는 당기·전년을 각자의 구간에서 집계한다.** 넓은 구간에서 한 번에 월별로 묶으면 양끝의 부분월이
+  통째로 딸려 들어와, 8/22 부터 조회해도 8월 막대가 한 달치(17.1억 → 110억대)로 부푼다. 월 시작일로만 검증하면 이 버그가 통과하므로
+  `verify:sales` 는 일부러 22일부터 조회해 대조한다.
+  ⚠️ **제품 표는 자재코드(MATNR)로만 묶는다.** 한 코드에 이름이 여러 개 달려 있다(개명·「[미사용]」 별칭·공백 차이).
+  실측: 자재 2,289종인데 코드+이름+제품군+브랜드 조합은 3,310개 — 이름까지 GROUP BY 에 넣으면 한 제품이 여러 줄로 쪼개진다.
+  대표 이름은 `ANY_VALUE(... HAVING MAX NETWR)` 로 **가장 큰 전표의 이름**을 쓴다(결과가 항상 같고 미사용 별칭이 안 뽑힌다).
+  단가 컬럼 `NETWR_VBRP` 는 **74%가 NULL 이라 쓰지 않는다**. 기본단위(`MEINS`)는 실측 99.99%가 EA 라 `FKLMG` 합산이 사실상 EA 합계다.
+  구성비 분모는 **그 축의 양수 매출 합**이다 — 순매출로 나누면 반품이 큰 축에서 100%를 넘는 조각이 생겨 막대가 뒤집힌다.
 - **생산실적은 `PP_ZASPPR1110` 이 아니라 `MM_MB51`(BWART 101-102)** 로 센다. 생산오더 테이블은 최근 건이 누락된다.
   자재 사용량도 MB51 261-262 기준이다. BOX 입고는 `SD_MARA.UMREZ_BOX` 로 기본단위(EA) 환산한다.
 - **유통기한 판정**: 폐기 ≤0일 / 임박 1~30 / 긴급 31~60 / 양호 61+ / 기한없음.

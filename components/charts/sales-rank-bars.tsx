@@ -30,7 +30,7 @@ export default function SalesRankBars({ items, color = '#2a78d6', emptyText = '�
   }
 
   // 막대 길이는 **최대값 기준**이다. 합계 기준으로 하면 1위가 30%일 때 모든 막대가 짧아 비교가 안 된다.
-  // 순매출은 반품이 크면 음수가 될 수 있으므로 길이 계산에는 절대값을 쓰고 부호는 색으로 알린다.
+  // 차감후 매출액은 반품이 크면 음수가 될 수 있으므로 길이 계산에는 절대값을 쓰고 부호는 색으로 알린다.
   const peak = Math.max(...items.map((i) => Math.abs(i.value)), 1);
 
   return (

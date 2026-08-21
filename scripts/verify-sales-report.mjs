@@ -9,7 +9,7 @@
  * 확인하는 것
  *   1. 기간 프리셋이 손계산과 맞는가
  *   2. 한 방 쿼리가 실제로 돌고 모든 kind 가 돌아오는가
- *   3. 순매출 = 총매출 − 차감 (부호 분해가 어긋나지 않는가)
+ *   3. 차감후 매출액 = 총매출액 − 차감 (부호 분해가 어긋나지 않는가)
  *   4. 축을 바꿔도 합계가 같은가 (채널 합 = 브랜드 합 = 영업그룹 합 = 총계)
  *   5. 구성비 합이 100% 인가 (막대 길이의 근거)
  *   6. 월 추이의 합이 총계와 맞는가
@@ -138,12 +138,12 @@ for (const k of ['TOTAL_CUR', 'TOTAL_PREV', 'MONTH_CUR', 'MONTH_PREV', 'CHANNEL'
 
 const board = buildSalesBoard(rows, params);
 
-console.log('\n[3] 순매출 부호 분해');
+console.log('\n[3] 차감후 매출액 부호 분해');
 {
   const { net, gross, deduction } = board.kpi;
-  check('순매출 = 총매출 − 차감', near(net, gross - deduction), `${eok(net)} = ${eok(gross)} − ${eok(deduction)}`);
+  check('차감후 매출액 = 총매출액 − 차감', near(net, gross - deduction), `${eok(net)} = ${eok(gross)} − ${eok(deduction)}`);
   check('차감 > 0 (반품·조정 전표가 실제로 있다)', deduction > 0, eok(deduction));
-  check('총매출 ≥ 순매출', gross >= net);
+  check('총매출액 ≥ 차감후 매출액', gross >= net);
 }
 
 console.log('\n[4] 축을 바꿔도 합계가 같은가');
@@ -223,7 +223,7 @@ console.log('\n[7] 전년 구간이 당기와 겹치는 경우 (2년치)');
   const wideBoard = buildSalesBoard(wideRows, wide);
   const monthSum = wideBoard.monthly.reduce((acc, m) => acc + m.net, 0);
 
-  check('겹쳐도 순매출 = 총매출 − 차감', near(wideBoard.kpi.net, wideBoard.kpi.gross - wideBoard.kpi.deduction));
+  check('겹쳐도 차감후 매출액 = 총매출액 − 차감', near(wideBoard.kpi.net, wideBoard.kpi.gross - wideBoard.kpi.deduction));
   check('겹쳐도 월별 합 = 총계', near(monthSum, wideBoard.kpi.net, 2), `${eok(monthSum)} vs ${eok(wideBoard.kpi.net)}`);
   check('월 축이 당기 구간만', wideBoard.monthly.every((m) => m.ym >= '202406' && m.ym <= '202608'));
   check('전년 동기 총계가 당기와 다름(겹쳐도 따로 집계됨)', wideBoard.kpi.prevNet !== wideBoard.kpi.net);

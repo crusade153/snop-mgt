@@ -4,13 +4,18 @@
 import { PRODUCT_ROW_LIMIT, type SalesDimension, type SalesRawRow, type SalesReportParams } from './query';
 
 export interface SalesKpi {
-  /** 순매출 = 총매출 - 차감. SD_SO 의 NETWR 합 그대로다. */
+  /**
+   * 차감후 매출액 = 총매출액 − 차감. SD_SO 의 NETWR 합 그대로다.
+   *
+   * ⚠️ **이것을 「순매출」이라 부르지 말 것.** 사내에서 순매출은 프로모션비·행사비까지
+   * 뺀 값을 가리켜서 이 값과 다르다. 여기서 빠지는 것은 반품·매출조정·매출이관뿐이다.
+   */
   net: number;
-  /** 총매출 — NETWR 이 양수인 행만 */
+  /** 총매출액 — NETWR 이 양수인 행만 */
   gross: number;
   /** 반품·매출조정 차감 — NETWR 이 음수인 행의 절대값 */
   deduction: number;
-  /** 차감이 총매출에서 차지하는 비율(%) */
+  /** 차감이 총매출액에서 차지하는 비율(%) */
   deductionRate: number;
   /** 판매수량(기본단위). 실측상 99.99%가 EA 라 사실상 EA 합계다. */
   qty: number;
@@ -20,9 +25,9 @@ export interface SalesKpi {
   customers: number;
   /** 팔린 자재 수 */
   items: number;
-  /** 기간 일수로 나눈 일평균 순매출 */
+  /** 기간 일수로 나눈 일평균 차감후 매출액 */
   dailyAvg: number;
-  /** 전년 동기 순매출 */
+  /** 전년 동기 차감후 매출액 */
   prevNet: number;
   /** 전년 대비 증감률(%). 전년이 0 이면 null — 0 으로 나눈 값을 만들지 않는다. */
   yoyRate: number | null;
@@ -34,7 +39,7 @@ export interface SalesMonthPoint {
   /** 'YY.M' 형태의 축 라벨 */
   label: string;
   net: number;
-  /** 12개월 전 같은 달의 순매출. 자료가 없으면 null(0 과 구분한다) */
+  /** 12개월 전 같은 달의 차감후 매출액. 자료가 없으면 null(0 과 구분한다) */
   prevNet: number | null;
   qty: number;
 }
@@ -110,7 +115,7 @@ function share(part: number, whole: number): number {
 /**
  * 원시행 묶음 → 화면이 쓰는 형태.
  *
- * 축별 구성비의 분모는 **그 축의 양수 매출 합**이다. 순매출로 나누면 차감이 큰 축에서
+ * 축별 구성비의 분모는 **그 축의 양수 매출 합**이다. 차감후 매출액으로 나누면 차감이 큰 축에서
  * 100%를 넘는 조각이 생겨 막대 길이가 뒤집힌다(반품이 매출보다 큰 거래처가 실제로 있다).
  */
 export function buildSalesBoard(rows: SalesRawRow[], params: SalesReportParams): SalesReportBoard {
@@ -264,7 +269,8 @@ export function formatRate(value: number | null, digits = 1): string {
  */
 export const SALES_BASIS_TEXT = [
   '기준: SAP 청구매출(SD_SO)의 빌링일자(FKDAT). 「종합 현황」의 납품매출(납품요청일 VDATU)과는 기준이 달라 숫자가 다른 것이 정상이다.',
-  '순매출 = 총매출 − 차감. 반품·매출조정 전표가 음수 금액으로 들어 있어 합계가 곧 순매출이다.',
+  '차감후 매출액 = 총매출액 − 차감. 반품·매출조정 전표가 음수 금액으로 들어 있어 합계가 곧 이 값이다.',
+  '⚠️ 이 값은 사내에서 말하는 「순매출」이 아니다. 여기서 빠진 것은 반품·매출조정·매출이관뿐이고, 프로모션비·행사비는 차감되지 않았다.',
   '판매수량은 기본단위(FKLMG) 합이다. 무상오더는 수량만 있고 금액이 0 이라 수량으로 나눈 단가는 실제 판매단가보다 낮게 나온다.',
   '유통채널 10=내수, 20=수출.',
 ].join('\n');

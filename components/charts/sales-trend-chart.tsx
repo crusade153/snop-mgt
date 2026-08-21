@@ -1,6 +1,6 @@
 'use client';
 
-// 월별 순매출 추이 — 당기 vs 전년 동월 그룹 막대.
+// 월별 차감후 매출액 추이 — 당기 vs 전년 동월 그룹 막대.
 // 외부 차트 라이브러리 없이 canvas 로 직접 그린다(이 저장소의 차트 규약).
 
 import { useEffect, useRef, useState } from 'react';

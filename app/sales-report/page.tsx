@@ -273,7 +273,7 @@ function SalesReportInner() {
           {/* ── KPI ──────────────────────────────────────── */}
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
             <KpiTile
-              title="순매출"
+              title="차감후 매출액"
               value={formatEok(kpi.net)}
               hint={formatWon(kpi.net)}
               accent
@@ -281,14 +281,14 @@ function SalesReportInner() {
               deltaLabel="전년 동기"
             />
             <KpiTile
-              title="총매출"
+              title="총매출액"
               value={formatEok(kpi.gross)}
               hint={`일평균 ${formatEok(kpi.dailyAvg, 2)}`}
             />
             <KpiTile
               title="반품·조정 차감"
               value={formatEok(kpi.deduction)}
-              hint={`총매출의 ${kpi.deductionRate.toFixed(1)}%`}
+              hint={`총매출액의 ${kpi.deductionRate.toFixed(1)}%`}
               negative
             />
             <KpiTile
@@ -307,7 +307,7 @@ function SalesReportInner() {
           <section className="rounded-lg border border-neutral-200 bg-white p-4">
             <div className="flex items-center gap-2 mb-3">
               <TrendingUp size={16} className="text-[#1565C0]" />
-              <h2 className="text-sm font-bold text-neutral-900">월별 순매출 추이</h2>
+              <h2 className="text-sm font-bold text-neutral-900">월별 차감후 매출액 추이</h2>
               <InfoTooltip text="같은 달의 전년 값을 나란히 세웁니다. 두 막대는 같은 축(원)입니다." />
               <span className="ml-auto text-xs text-neutral-400">단위: 억원</span>
             </div>
@@ -341,7 +341,7 @@ function SalesReportInner() {
             <section className="rounded-lg border border-neutral-200 bg-white p-4">
               <div className="flex items-center gap-2 mb-4">
                 <h2 className="text-sm font-bold text-neutral-900">상위 거래처 10</h2>
-                <InfoTooltip text="판매처(KUNAG) 기준 순매출 상위입니다. 구성비 분모는 기간 순매출입니다." />
+                <InfoTooltip text="판매처(KUNAG) 기준 차감후 매출액 상위입니다. 구성비 분모는 기간 차감후 매출액입니다." />
               </div>
               <SalesRankBars items={customerItems} color="#eb6834" />
             </section>
@@ -372,7 +372,7 @@ function SalesReportInner() {
                     <th className="px-4 py-2.5 text-left font-medium">제품명</th>
                     <th className="px-4 py-2.5 text-left font-medium w-[130px]">제품군</th>
                     <th className="px-4 py-2.5 text-left font-medium w-[100px]">브랜드</th>
-                    <th className="px-4 py-2.5 text-right font-medium w-[110px]">순매출</th>
+                    <th className="px-4 py-2.5 text-right font-medium w-[120px]">차감후 매출액</th>
                     <th className="px-4 py-2.5 text-right font-medium w-[70px]">구성비</th>
                     <th className="px-4 py-2.5 text-right font-medium w-[100px]">수량</th>
                   </tr>
@@ -414,7 +414,7 @@ function SalesReportInner() {
               {/* 표가 상한에서 잘렸으면 숨기지 않고 알린다 — 합계와 표가 안 맞는 이유가 이것뿐이라야 한다. */}
               <span className="text-[11px] text-neutral-400">
                 {board.productsTruncated
-                  ? '순매출 상위 3,000종만 표시합니다. 상단 합계는 전체 기준입니다.'
+                  ? '차감후 매출액 상위 3,000종만 표시합니다. 상단 합계는 전체 기준입니다.'
                   : '상단 합계와 같은 범위입니다.'}
               </span>
 

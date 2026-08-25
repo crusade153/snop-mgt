@@ -1,3 +1,4 @@
+import { denyCronRequest } from '@/lib/cron-auth';
 import { captureWeeklySnapshot } from '@/lib/weekly-snapshot';
 
 export const runtime = 'nodejs';
@@ -12,10 +13,8 @@ export const maxDuration = 300;
  * 다만 재고 열은 최초 적재분을 유지하고 출고·생산·매출만 다시 계산한다.
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret || request.headers.get('authorization') !== `Bearer ${secret}`) {
-    return new Response('Unauthorized', { status: 401 });
-  }
+  const denied = denyCronRequest(request);
+  if (denied) return denied;
 
   const week = new URL(request.url).searchParams.get('week') || undefined;
 

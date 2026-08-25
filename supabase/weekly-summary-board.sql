@@ -105,3 +105,19 @@ revoke all on table public.snop_weekly_board_notes from anon, authenticated;
 alter table public.snop_weekly_inventory_snapshots
   add column if not exists shipped_mtd_qty numeric not null default 0,
   add column if not exists shipped_mtd_value numeric not null default 0;
+
+-- ---------------------------------------------------------------------------
+-- 5. 소비기한 잔여 열 (드릴다운 상세표의 「소비기한 임박」 정렬 축)
+--
+-- 구간별 재고금액(bucket_*)만으로는 "얼마나 임박했나"를 SKU 단위로 줄 세울 수 없다.
+-- min_remain_day = 그 SKU·창고그룹에서 가장 임박한 배치의 잔여일.
+--   ⚠️ 평균이 아니라 **최솟값**이다. 평균이면 곧 폐기될 소량 배치가 안전한 대량 배치에 묻힌다.
+--   ⚠️ 유통기한이 없는 재고뿐이면 null 이다. 0 을 넣으면 '오늘 폐기'로 읽힌다.
+-- avg_remain_rate = 금액 가중 평균 잔여율(%). 기한없음 재고는 분모에서 뺀다.
+--
+-- ⚠️ 재고는 소급 생성이 불가능하므로 **이 열을 추가하기 전에 적재된 주차는 영원히 null** 이다.
+--    화면은 그 주차에서 「소비기한 임박」 정렬을 막고 '-' 로 비운다.
+-- ---------------------------------------------------------------------------
+alter table public.snop_weekly_inventory_snapshots
+  add column if not exists min_remain_day numeric,
+  add column if not exists avg_remain_rate numeric;

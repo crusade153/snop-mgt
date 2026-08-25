@@ -12,6 +12,7 @@
  *   3. 구간별 재고금액의 합 = 재고금액 (구간 표와 상단 표가 구조적으로 일치하는지의 근거)
  *   4. 출고·생산·매출이 SKU 당 한 창고그룹에만 실려 중복 합산되지 않는가
  *   5. 물류 재고와 이중계상되는 저장위치(3000)가 빠졌는가
+ *   6. 카테고리 드릴다운 상세 합계가 메인 표의 그 줄과 같은가 (모수가 갈리면 안 된다)
  */
 
 import { readFileSync } from 'node:fs';
@@ -70,7 +71,7 @@ const { weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, monthToDateRan
   await import('@/lib/weekly/week');
 const { categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation } =
   await import('@/lib/weekly/classification');
-const { buildWeeklyBoard, resolveCm, sumBuckets, WEEKLY_BUCKET_KEYS } = await import('@/lib/weekly/board');
+const { buildWeeklyBoard, buildWeeklyDetail, resolveCm, sumBuckets } = await import('@/lib/weekly/board');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -224,6 +225,116 @@ console.log('\n[5] 집계 (화면이 보는 형태)');
   });
   [...byMonth.entries()].sort().reverse().forEach(([month, count]) => {
     console.log(`    단가 기준월 ${month}: ${count}행`);
+  });
+}
+
+
+console.log('\n[6] 카테고리 드릴다운 상세 (메인 표와 모수가 같아야 한다)');
+{
+  const cmMapping = new Map();
+  const scopes = [];
+  const board = buildWeeklyBoard({ current: rows, previous: [], cmMapping, scopes });
+
+  // 상세표는 위 표의 한 칸을 펼친 것이다. 합계가 어긋나면 사용자가 어느 쪽을 믿어야 할지 알 수 없다.
+  let worstGap = 0;
+  let worstLabel = '';
+  board.rows.forEach((boardRow) => {
+    const detail = buildWeeklyDetail({
+      current: rows,
+      previous: [],
+      cmMapping,
+      scopes,
+      category: boardRow.category,
+      cm: boardRow.cm,
+    });
+    const gap = Math.abs(detail.totals.stockValue - boardRow.stockValue);
+    if (gap > worstGap) {
+      worstGap = gap;
+      worstLabel = `${boardRow.cm} ${boardRow.category}`;
+    }
+  });
+  check('상세 합계 = 메인 표 그 줄', worstGap < 5,
+    worstGap === 0 ? '전 칸 일치' : `최대 ${Math.round(worstGap)}원 차이 (${worstLabel})`);
+
+  // 카테고리 전체(cm 미지정)로 펼쳤을 때는 그 카테고리의 모든 CM 행 합과 같아야 한다.
+  const categoryGaps = [];
+  [...new Set(board.rows.map((row) => row.category))].forEach((category) => {
+    const expected = board.rows
+      .filter((row) => row.category === category)
+      .reduce((sum, row) => sum + row.stockValue, 0);
+    const detail = buildWeeklyDetail({ current: rows, previous: [], cmMapping, scopes, category });
+    if (Math.abs(detail.totals.stockValue - expected) > 5) categoryGaps.push(category);
+  });
+  check('카테고리 전체 = 그 카테고리 CM 행 합', categoryGaps.length === 0,
+    categoryGaps.length ? categoryGaps.join(', ') : '전 카테고리 일치');
+
+  // SKU 는 한 줄로 접혀야 한다. 창고그룹별로 쪼개지면 같은 제품이 두 번 나온다.
+  const all = buildWeeklyDetail({ current: rows, previous: [], cmMapping, scopes });
+  const codes = all.rows.map((row) => row.materialCode);
+  check('상세는 SKU 당 한 줄', codes.length === new Set(codes).size,
+    `${codes.length.toLocaleString('ko-KR')}줄`);
+
+  // 소진필요 = 잔여율 70% 미만 두 구간의 합. 메인 표의 「소진 필요」와 같은 정의여야 한다.
+  const riskMismatch = all.rows.filter(
+    (row) => Math.abs(row.riskValue - (row.buckets.under50 + row.buckets.r50_70)) > 1,
+  );
+  check('소진필요 = 50%미만 + 50~70%', riskMismatch.length === 0);
+
+  // ⚠️ 잔여일이 없는 재고(기한없음)를 0 으로 채우면 '오늘 폐기'로 맨 위에 온다. null 로 남아야 한다.
+  const zeroDay = all.rows.filter((row) => row.minRemainDay === 0);
+  const withDay = all.rows.filter((row) => row.minRemainDay !== null);
+  check('소비기한 잔여일이 채워짐', withDay.length > 0,
+    `${withDay.length.toLocaleString('ko-KR')}/${all.rows.length.toLocaleString('ko-KR')} SKU`);
+  check('기한없음 재고는 0 이 아니라 null', zeroDay.length < all.rows.length * 0.05,
+    `잔여일 0 인 SKU ${zeroDay.length}개 (실제 폐기 대상일 수 있음)`);
+
+  // 잔여율은 % 단위여야 한다.
+  // ⚠️ 상한으로는 검증할 수 없다 — 실측에 130% 초과(유통기한 연장 배치)와 음수(기한 경과)가 정상적으로 있고,
+  //    기타 창고에는 3112% 같은 마스터 오류도 섞여 있다. 그래서 **분포가 0~1 에 몰렸는지**만 본다.
+  //    normalizeRate(0~1 로 오는 원본 행을 100 배) 가 빠지면 전 행이 '50% 미만'으로 오분류되는데,
+  //    그 사고는 값 하나가 아니라 분포로만 드러난다.
+  const rated = all.rows.filter((row) => row.avgRemainRate !== null);
+  const ratioScale = rated.filter((row) => row.avgRemainRate > 0 && row.avgRemainRate <= 1);
+  check('잔여율이 % 스케일 (0~1 에 몰리지 않음)', ratioScale.length < rated.length * 0.05,
+    `0~1 구간 ${ratioScale.length} / 전체 ${rated.length}`);
+  check('잔여율 중앙값이 상식적(20~90%)',
+    (() => {
+      const sorted = rated.map((row) => row.avgRemainRate).sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      return median > 20 && median < 90;
+    })(),
+    `중앙값 ${rated.length ? rated.map((r) => r.avgRemainRate).sort((a, b) => a - b)[Math.floor(rated.length / 2)].toFixed(1) : '-'}%`);
+
+  // 기본 화면(플랜트+물류)의 폐기·임박 재고금액은 소진 계획의 출발점이라 눈으로 확인한다.
+  const mainScope = buildWeeklyDetail({
+    current: rows,
+    previous: [],
+    cmMapping,
+    scopes: ['PLANT', 'LOGISTICS'],
+  });
+  const sumOf = (list) => Math.round(list.reduce((sum, row) => sum + row.stockValue, 0)).toLocaleString('ko-KR');
+  const expired = mainScope.rows.filter((row) => row.minRemainDay !== null && row.minRemainDay <= 0);
+  const soon30 = mainScope.rows.filter(
+    (row) => row.minRemainDay !== null && row.minRemainDay > 0 && row.minRemainDay <= 30,
+  );
+  console.log(
+    `
+  [참고] 기본 스코프 폐기(≤0일) ${expired.length} SKU ${sumOf(expired)} 원 · ` +
+    `임박(1~30일) ${soon30.length} SKU ${sumOf(soon30)} 원`,
+  );
+
+  const soon = all.rows
+    .filter((row) => row.minRemainDay !== null)
+    .sort((a, b) => a.minRemainDay - b.minRemainDay)
+    .slice(0, 5);
+  console.log('\n  [참고] 소비기한 임박 상위 5');
+  soon.forEach((row) => {
+    console.log(
+      `    ${row.materialCode} ${String(row.productName).slice(0, 22).padEnd(24)}` +
+      ` 잔여 ${String(Math.round(row.minRemainDay)).padStart(5)}일` +
+      ` 재고 ${Math.round(row.stockValue).toLocaleString('ko-KR').padStart(13)} 원` +
+      ` (${row.category})`,
+    );
   });
 }
 

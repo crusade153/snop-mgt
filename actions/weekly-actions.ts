@@ -14,10 +14,12 @@ import {
   buildBucketMovementNote,
   buildStockSummaryNote,
   buildWeeklyBoard,
+  buildWeeklyDetail,
   type WeeklyBoardResult,
+  type WeeklyDetailResult,
   type WeeklySnapshotRow,
 } from '@/lib/weekly/board';
-import type { WeeklyCm, WeeklyStorageScope } from '@/lib/weekly/classification';
+import type { WeeklyCategory, WeeklyCm, WeeklyStorageScope } from '@/lib/weekly/classification';
 import { isConsecutiveWeek, rangeLabel, seoulToday, shortDateLabel, weekRangeOf } from '@/lib/weekly/week';
 
 export interface WeeklyBoardPayload {
@@ -123,15 +125,41 @@ async function loadNotes(weekEnd: string) {
   return new Map((data || []).map((row) => [String(row.section), String(row.body)]));
 }
 
-async function loadWeeks(): Promise<string[]> {
+/**
+ * 적재된 주차 목록 (최신순).
+ *
+ * ⚠️ **한 번에 긁어서 `new Set` 으로 distinct 를 만들면 안 된다.**
+ * PostgREST 는 `.limit(2000)` 을 줘도 서버 상한(max-rows = 1000)에서 응답을 자른다.
+ * 이 테이블은 **주차 하나가 2천 행이 넘어서**(실측 2026-08-30 = 2,103행, 08-23 = 2,135행)
+ * 1000행을 다 최신 주차가 채워 버리고, 그 결과 주차 목록에 최신 한 주차만 남았다.
+ * → `priorWeek` 가 null → `hasComparable` false → 전주 재고·전주 比 증감이 통째로 빈칸이 됐다.
+ *
+ * 그래서 주차 하나씩 커서로 내려가며 distinct 를 만든다(주차당 1행씩만 읽으므로 가볍다).
+ * 화면 드롭다운과 「전주」 비교에 필요한 만큼만 가져온다.
+ */
+async function loadWeeks(limit = 26): Promise<string[]> {
   const supabase = createAdminSupabaseClient();
-  const { data, error } = await supabase
-    .from('snop_weekly_inventory_snapshots')
-    .select('week_end_date')
-    .order('week_end_date', { ascending: false })
-    .limit(2000);
-  if (error) throw new Error(`주차 목록 조회 실패: ${error.message}`);
-  return [...new Set((data || []).map((row) => String(row.week_end_date)))];
+  const weeks: string[] = [];
+  let cursor: string | null = null;
+
+  for (let step = 0; step < limit; step += 1) {
+    let query = supabase
+      .from('snop_weekly_inventory_snapshots')
+      .select('week_end_date')
+      .order('week_end_date', { ascending: false })
+      .limit(1);
+    if (cursor) query = query.lt('week_end_date', cursor);
+
+    const { data, error } = await query;
+    if (error) throw new Error(`주차 목록 조회 실패: ${error.message}`);
+
+    const week = data?.[0]?.week_end_date ? String(data[0].week_end_date) : null;
+    if (!week) break;
+    weeks.push(week);
+    cursor = week;
+  }
+
+  return weeks;
 }
 
 async function buildPayload(
@@ -204,9 +232,9 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v7: 「월 출고 比」 분모를 매출액(NETWR)에서 누적 출고금액(재고단가 환산)으로 바꿨다.
-      //     (v6 = A/H 계열 DISPO 분류 + 배치 플랜트 단가, v4 = 품질대기 CINSM 을 뺀 CLABS 기준)
-      [`weekly-board-v7-mtd-shipment-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v8: 주차 목록이 PostgREST 1000행 상한에 잘려 「전주」가 안 잡히던 버그를 고쳤다.
+      //     (v7 = 「월 출고 比」 분모를 누적 출고금액으로 교체, v6 = A/H 계열 DISPO 분류 + 배치 플랜트 단가)
+      [`weekly-board-v8-week-list-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -218,6 +246,89 @@ export async function getWeeklyBoard(
       message: missingTable
         ? '주간 스냅샷 테이블이 아직 없습니다. Supabase 대시보드에서 supabase/weekly-summary-board.sql 을 실행해 주세요.'
         : raw,
+    };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 카테고리 드릴다운                                                     */
+/* ------------------------------------------------------------------ */
+
+export interface WeeklyDetailPayload {
+  success: boolean;
+  message?: string;
+  weekEnd: string | null;
+  previousWeekEnd: string | null;
+  category: WeeklyCategory | null;
+  cm: WeeklyCm | null;
+  detail: WeeklyDetailResult | null;
+}
+
+/**
+ * 메인 표 한 칸을 SKU 단위로 펼친다.
+ *
+ * ⚠️ **메인 표와 같은 스냅샷·같은 판정 함수를 쓴다.** 여기서만 다른 필터를 걸면 상세 합계가
+ * 위 표의 그 줄과 어긋나 사용자가 어느 쪽을 믿어야 할지 알 수 없게 된다.
+ *
+ * 행이 눌릴 때만 부르므로 첫 화면 로딩을 무겁게 하지 않는다.
+ * 캐시는 메인 표와 같은 `report-data` 태그를 달아 적재 직후 함께 갈린다.
+ */
+export async function getWeeklyCategoryDetail(
+  weekEnd: string,
+  category: WeeklyCategory | null,
+  cm: WeeklyCm | null = null,
+  scopes: WeeklyStorageScope[] = ['PLANT', 'LOGISTICS']
+): Promise<WeeklyDetailPayload> {
+  try {
+    return await unstable_cache(
+      async () => {
+        const weeks = await loadWeeks();
+        if (!weeks.includes(weekEnd)) {
+          return {
+            success: false,
+            message: '적재되지 않은 주차입니다.',
+            weekEnd: null,
+            previousWeekEnd: null,
+            category,
+            cm,
+            detail: null,
+          } satisfies WeeklyDetailPayload;
+        }
+
+        const priorWeek = weeks.find((week) => week < weekEnd) || null;
+        const comparable = !!priorWeek && isConsecutiveWeek(priorWeek, weekEnd);
+
+        const [current, previous, cmMapping] = await Promise.all([
+          loadSnapshotRows(weekEnd),
+          comparable && priorWeek ? loadSnapshotRows(priorWeek) : Promise.resolve([]),
+          loadCmMapping(),
+        ]);
+
+        return {
+          success: true,
+          weekEnd,
+          previousWeekEnd: comparable ? priorWeek : null,
+          category,
+          cm,
+          detail: buildWeeklyDetail({ current, previous, cmMapping, scopes, category, cm }),
+        } satisfies WeeklyDetailPayload;
+      },
+      [
+        `weekly-detail-v1-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${[...scopes]
+          .sort()
+          .join('+')}`,
+      ],
+      { revalidate: 600, tags: ['report-data'] }
+    )();
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : '상세 내역을 불러오지 못했습니다.',
+      weekEnd: null,
+      previousWeekEnd: null,
+      category,
+      cm,
+      detail: null,
     };
   }
 }
@@ -256,7 +367,11 @@ export async function captureWeeklySnapshotAction(weekEnd?: string): Promise<Cap
       message:
         `${result.weekStart} ~ ${result.weekEnd} 적재 완료 · ${result.rowCount.toLocaleString('ko-KR')}행` +
         (result.provisional ? ' (진행 중인 주차라 잠정치입니다)' : '') +
-        (result.stockWritten ? '' : ' · 마감된 주차라 재고는 유지하고 출고·생산만 갱신했습니다'),
+        (result.replacedMidWeekStock
+          ? ' · 주중에 찍어둔 잠정 재고를 마감 재고로 교체했습니다'
+          : result.stockWritten
+            ? ''
+            : ' · 마감된 주차라 재고는 유지하고 출고·생산만 갱신했습니다'),
     };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : '적재에 실패했습니다.' };

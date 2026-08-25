@@ -81,6 +81,16 @@ interface Accumulator {
   value: number;
   /** 잔여율 구간별 **금액** */
   buckets: ReturnType<typeof createWeeklyBuckets>;
+  /**
+   * 가장 임박한 배치의 잔여일. 기한없음 배치는 세지 않는다(없으면 null 로 남는다).
+   * 상세표의 「소비기한 임박」 정렬 축이라 **수량이 아니라 최솟값**이어야 한다 —
+   * 평균을 쓰면 소량이라도 곧 폐기될 배치가 안전한 대량 배치에 묻힌다.
+   */
+  minRemainDay: number | null;
+  /** 잔여율 × 금액 누적. 나눠서 금액 가중 평균 잔여율을 만든다 */
+  rateWeighted: number;
+  /** 기한이 있는 재고의 금액 합 = 가중 평균의 분모 */
+  rateWeight: number;
 }
 
 /** SKU 대표 단가. 재고가 가장 많은 플랜트의 단가를 출고·생산 환산에 쓴다. */
@@ -136,10 +146,29 @@ function touch(
       qty: 0,
       value: 0,
       buckets: createWeeklyBuckets(),
+      minRemainDay: null,
+      rateWeighted: 0,
+      rateWeight: 0,
     };
     map.set(key, entry);
   }
   return entry;
+}
+
+/**
+ * 배치 하나의 소비기한 정보를 누적한다.
+ *
+ * ⚠️ **기한없음 배치는 호출부에서 걸러 들어오지 않는다.** 잔여일 0 으로 섞이면
+ * 기한이 아예 없는 재고가 「오늘 폐기」로 보여 상세표 정렬이 통째로 뒤집힌다.
+ */
+function rememberRemain(entry: Accumulator, remainDay: number, rate: number, value: number) {
+  if (Number.isFinite(remainDay)) {
+    entry.minRemainDay = entry.minRemainDay === null ? remainDay : Math.min(entry.minRemainDay, remainDay);
+  }
+  if (value > 0 && Number.isFinite(rate)) {
+    entry.rateWeighted += rate * value;
+    entry.rateWeight += value;
+  }
 }
 
 async function runQuery<T>(query: string): Promise<T[]> {
@@ -215,8 +244,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
 
     // 기한없음 재고를 잔여율 구간에 넣으면 remain_rate 0 때문에 전부 '~50%' 로 오분류된다.
     const hasExpiry = safeExtractDateStr(row.VFDAT).length === 8;
-    const bucketKey = hasExpiry ? weeklyBucketKeyOf(normalizeRate(row.remain_rate)) : 'over85';
+    const rate = hasExpiry ? normalizeRate(row.remain_rate) : null;
+    const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
     entry.buckets[bucketKey] += value;
+    if (rate !== null) rememberRemain(entry, Number(row.remain_day), rate, value);
   });
 
   fbhRows.forEach((row) => {
@@ -238,9 +269,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     const hasExpiry = safeExtractDateStr(row.VALID_DATETIME_NEW).length === 8;
     const rate = hasExpiry
       ? fbhRemainRate(row.PRDT_DATE_NEW, row.VALID_DATETIME_NEW, Number(row.REMAINING_DAY || 0))
-      : 0;
-    const bucketKey = hasExpiry ? weeklyBucketKeyOf(rate) : 'over85';
+      : null;
+    const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
     entry.buckets[bucketKey] += value;
+    if (rate !== null) rememberRemain(entry, Number(row.REMAINING_DAY), rate, value);
   });
 
   const shipments = new Map(
@@ -342,6 +374,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       unit_price: unitPrice,
       price_month: priceMonth || null,
       price_source: source,
+      // 유통기한이 붙은 배치가 하나도 없으면 null 이다. 0 으로 채우면 '오늘 폐기'로 읽힌다.
+      min_remain_day: entry.minRemainDay,
+      avg_remain_rate:
+        entry.rateWeight > 0 ? Math.round((entry.rateWeighted / entry.rateWeight) * 10) / 10 : null,
     } satisfies WeeklySnapshotRow;
   });
 }

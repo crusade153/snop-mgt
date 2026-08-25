@@ -94,6 +94,16 @@ export interface WeeklySnapshotRow {
   unit_price: number;
   price_month: string | null;
   price_source: string;
+  /**
+   * 그 SKU·창고그룹에서 **가장 임박한 배치의 잔여일**. 유통기한이 없는 재고뿐이면 null.
+   * 상세표의 「소비기한 임박」 정렬 축이다.
+   *
+   * ⚠️ 이 열은 나중에 추가됐다. 그 전에 적재된 주차는 null 이므로 화면에서 '-' 로 비워야 한다
+   * (재고는 소급 생성이 불가능해 과거 주차를 다시 찍어 채울 수 없다).
+   */
+  min_remain_day?: number | null;
+  /** 금액 가중 평균 잔여율(%). 기한없음 재고는 분모에서 뺀다 */
+  avg_remain_rate?: number | null;
 }
 
 /** 화면 표의 한 줄 (CM × 공장 × 카테고리) */
@@ -453,4 +463,232 @@ export function buildBucketMovementNote(movement: WeeklyBucketMovement, hasPrevi
       return `* ${label} ${formatNoteAmount(delta)} ${delta >= 0 ? '증가' : '감소'}`;
     })
     .join('\n');
+}
+
+/* ------------------------------------------------------------------ */
+/* 카테고리 드릴다운 — SKU 상세                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 상세표 한 줄 = SKU 하나.
+ *
+ * 적재는 SKU × 창고그룹이라 같은 SKU 가 플랜트·물류에 나뉘어 있다. 여기서 **켜진 스코프만** 접는다.
+ * 출고·생산은 적재 때 SKU 당 한 스코프에만 실려 있으므로(중복 합산 방지) 그냥 더하면 된다.
+ */
+export interface WeeklyDetailRow {
+  materialCode: string;
+  productName: string;
+  dispo: string | null;
+  cm: WeeklyCm;
+  plant: WeeklyPlant;
+  category: WeeklyCategory;
+  unit: string;
+  stockQty: number;
+  stockValue: number;
+  previousStockValue: number;
+  /** 전주 대비 재고금액 증감. 전주 스냅샷이 없으면 null */
+  stockDelta: number | null;
+  buckets: WeeklyBuckets;
+  /** 잔여율 70% 미만(50%미만 + 50~70%) 재고금액 = 소진 필요 */
+  riskValue: number;
+  riskRatio: number;
+  shippedQty: number;
+  shippedValue: number;
+  producedQty: number;
+  producedValue: number;
+  shipmentMtd: number;
+  stockToShipmentRatio: number | null;
+  unitPrice: number;
+  priceMonth: string | null;
+  priceSource: string;
+  /** 가장 임박한 배치의 잔여일. 열이 없던 주차·기한없음 재고는 null */
+  minRemainDay: number | null;
+  /** 금액 가중 평균 잔여율(%). 없으면 null */
+  avgRemainRate: number | null;
+  /** 재고가 실려 있는 창고그룹들. 어디에 쌓여 있는지 한 줄에서 보이게 한다 */
+  scopes: WeeklyStorageScope[];
+}
+
+export interface BuildWeeklyDetailInput extends BuildWeeklyBoardInput {
+  /** 이 카테고리만. 비우면 전부 */
+  category?: WeeklyCategory | null;
+  /** 이 CM 만. 카테고리와 함께 주면 메인 표의 그 한 줄과 정확히 같은 모수가 된다 */
+  cm?: WeeklyCm | null;
+}
+
+export interface WeeklyDetailResult {
+  rows: WeeklyDetailRow[];
+  hasPrevious: boolean;
+  /** 상세표 합계. 메인 표의 해당 줄과 일치해야 한다 */
+  totals: {
+    stockValue: number;
+    previousStockValue: number;
+    riskValue: number;
+    shippedValue: number;
+    producedValue: number;
+    itemCount: number;
+  };
+  /** 잔여일 열이 채워진 주차인지. false 면 「소비기한 임박」 정렬을 쓸 수 없다 */
+  hasRemainDay: boolean;
+}
+
+/** 소진 필요 = 잔여율 70% 미만. 메인 표의 「소진 필요」와 같은 정의다 */
+export const WEEKLY_RISK_BUCKET_KEYS: (keyof WeeklyBuckets)[] = ['under50', 'r50_70'];
+
+function riskValueOf(buckets: WeeklyBuckets) {
+  return WEEKLY_RISK_BUCKET_KEYS.reduce((sum, key) => sum + (buckets[key] || 0), 0);
+}
+
+/**
+ * 카테고리(또는 CM×카테고리) 한 칸을 SKU 단위로 펼친다.
+ *
+ * 분류는 메인 표와 **같은 `classifyRow`·`resolveCm`** 을 쓴다. 여기서만 다르게 판정하면
+ * 합계가 위 표와 어긋나 어느 쪽을 믿어야 할지 알 수 없게 된다.
+ */
+export function buildWeeklyDetail({
+  current,
+  previous,
+  cmMapping,
+  scopes,
+  category = null,
+  cm = null,
+}: BuildWeeklyDetailInput): WeeklyDetailResult {
+  const scopeSet = scopes.length ? new Set(scopes) : null;
+  const inScope = (row: WeeklySnapshotRow) => !scopeSet || scopeSet.has(row.storage_scope);
+
+  const byCode = new Map<string, WeeklyDetailRow>();
+  /** 잔여율 가중평균용 누적 — (잔여율 × 금액) 합과 금액 합 */
+  const rateAccum = new Map<string, { weighted: number; weight: number }>();
+  let hasRemainDay = false;
+
+  const matches = (row: WeeklySnapshotRow) => {
+    const rowCategory = categoryOfDispo(row.dispo);
+    if (category && rowCategory !== category) return false;
+    if (cm && resolveCm(row.material_code, rowCategory, cmMapping) !== cm) return false;
+    return true;
+  };
+
+  const touch = (row: WeeklySnapshotRow) => {
+    const rowCategory = categoryOfDispo(row.dispo);
+    let target = byCode.get(row.material_code);
+    if (!target) {
+      target = {
+        materialCode: row.material_code,
+        productName: row.product_name || row.material_code,
+        dispo: row.dispo,
+        cm: resolveCm(row.material_code, rowCategory, cmMapping),
+        plant: plantOfCategory(rowCategory),
+        category: rowCategory,
+        unit: row.unit || 'EA',
+        stockQty: 0,
+        stockValue: 0,
+        previousStockValue: 0,
+        stockDelta: null,
+        buckets: createWeeklyBuckets(),
+        riskValue: 0,
+        riskRatio: 0,
+        shippedQty: 0,
+        shippedValue: 0,
+        producedQty: 0,
+        producedValue: 0,
+        shipmentMtd: 0,
+        stockToShipmentRatio: null,
+        unitPrice: row.unit_price || 0,
+        priceMonth: row.price_month || null,
+        priceSource: row.price_source || 'UNKNOWN',
+        minRemainDay: null,
+        avgRemainRate: null,
+        scopes: [],
+      };
+      byCode.set(row.material_code, target);
+    }
+    return target;
+  };
+
+  previous
+    .filter((row) => inScope(row) && matches(row))
+    .forEach((row) => {
+      touch(row).previousStockValue += row.stock_value || 0;
+    });
+
+  current
+    .filter((row) => inScope(row) && matches(row))
+    .forEach((row) => {
+      const target = touch(row);
+      // 이름·단가는 재고가 있는 행의 값을 우선한다(흐름만 있는 행은 이름이 코드일 수 있다).
+      if (row.stock_value > 0) {
+        target.productName = row.product_name || target.productName;
+        target.unitPrice = row.unit_price || target.unitPrice;
+        target.priceMonth = row.price_month || target.priceMonth;
+        target.priceSource = row.price_source || target.priceSource;
+      }
+      target.stockQty += row.stock_qty || 0;
+      target.stockValue += row.stock_value || 0;
+      target.shippedQty += row.shipped_qty || 0;
+      target.shippedValue += row.shipped_value || 0;
+      target.producedQty += row.produced_qty || 0;
+      target.producedValue += row.produced_value || 0;
+      target.shipmentMtd += row.shipped_mtd_value || 0;
+      addBuckets(target.buckets, bucketsOfRow(row));
+      if ((row.stock_value || 0) > 0 && !target.scopes.includes(row.storage_scope)) {
+        target.scopes.push(row.storage_scope);
+      }
+
+      const remainDay = row.min_remain_day;
+      if (remainDay !== null && remainDay !== undefined && Number.isFinite(Number(remainDay))) {
+        hasRemainDay = true;
+        const value = Number(remainDay);
+        target.minRemainDay =
+          target.minRemainDay === null ? value : Math.min(target.minRemainDay, value);
+      }
+
+      const rate = row.avg_remain_rate;
+      if (rate !== null && rate !== undefined && Number.isFinite(Number(rate))) {
+        const weight = row.stock_value || 0;
+        if (weight > 0) {
+          const accum = rateAccum.get(row.material_code) || { weighted: 0, weight: 0 };
+          accum.weighted += Number(rate) * weight;
+          accum.weight += weight;
+          rateAccum.set(row.material_code, accum);
+        }
+      }
+    });
+
+  const rows = [...byCode.values()]
+    .map((row) => {
+      const riskValue = riskValueOf(row.buckets);
+      const accum = rateAccum.get(row.materialCode);
+      return {
+        ...row,
+        riskValue,
+        riskRatio: row.stockValue > 0 ? riskValue / row.stockValue : 0,
+        stockDelta: previous.length > 0 ? row.stockValue - row.previousStockValue : null,
+        stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
+        avgRemainRate: accum && accum.weight > 0 ? accum.weighted / accum.weight : null,
+        scopes: row.scopes.sort(),
+      };
+    })
+    // 재고도 흐름도 없는 SKU 는 표를 늘리기만 한다
+    .filter(
+      (row) =>
+        row.stockValue !== 0 ||
+        row.previousStockValue !== 0 ||
+        row.shippedValue !== 0 ||
+        row.producedValue !== 0
+    )
+    .sort((a, b) => b.stockValue - a.stockValue);
+
+  return {
+    rows,
+    hasPrevious: previous.length > 0,
+    hasRemainDay,
+    totals: {
+      stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
+      previousStockValue: rows.reduce((sum, row) => sum + row.previousStockValue, 0),
+      riskValue: rows.reduce((sum, row) => sum + row.riskValue, 0),
+      shippedValue: rows.reduce((sum, row) => sum + row.shippedValue, 0),
+      producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
+      itemCount: rows.length,
+    },
+  };
 }

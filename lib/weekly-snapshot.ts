@@ -18,6 +18,11 @@ export interface CaptureResult {
   rowCount: number;
   /** 재고 열을 새로 쓴 적재인지. 마감된 주차를 두 번째로 돌리면 false 다 */
   stockWritten: boolean;
+  /**
+   * 주중에 미리 찍어둔 잠정 재고를 **마감 재고로 갈아끼운** 적재인지.
+   * 이때만 「마감된 주차인데도 재고를 다시 썼다」가 정상이다.
+   */
+  replacedMidWeekStock: boolean;
   /** 아직 안 끝난 주차인지. true 면 잠정치이고 다시 돌릴 때마다 재고까지 갱신된다 */
   provisional: boolean;
   unpricedItemCount: number;
@@ -47,19 +52,42 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
 
   const supabase = createAdminSupabaseClient();
 
+  // 이미 적재돼 있는지 + **언제 찍힌 값인지**. 두 번째가 중요하다 (바로 아래 설명).
   const { data: existing, error: existingError } = await supabase
     .from('snop_weekly_inventory_snapshots')
-    .select('material_code')
+    .select('created_at')
     .eq('week_end_date', week.weekEnd)
+    .order('created_at', { ascending: false })
     .limit(1);
   if (existingError) throw new Error(`기존 주간 스냅샷 확인 실패: ${existingError.message}`);
 
   const alreadyCaptured = (existing || []).length > 0;
+
+  /**
+   * 이미 있는 재고가 **주가 끝나기 전에 찍힌 잠정치**인지.
+   *
+   * 진행 중인 주차를 미리 적재해 두면(관리자가 「적재」 버튼을 주중에 누르는 경우) 그 재고는
+   * 「그 날의 재고」다. 그런데 월요일 cron 이 도는 시점에는 그 주차가 이미 마감이라
+   * `alreadyCaptured && !provisional` 로 걸려 **흐름 열만 갱신되고 재고는 주중 값으로 영영 굳었다.**
+   * 그러면 그 주차의 재고금액이 「일요일 마감」이 아니라 「수요일 오후」가 되어 주차 간 비교가 어긋난다.
+   *
+   * 주 마감 전에 찍힌 값은 확정본이 아니므로 덮어쓰는 것이 맞다.
+   * 반대로 **마감 후에 찍힌 재고는 절대 덮지 않는다** — 소급 생성이 불가능해서 다시 찍으면
+   * 「그때의 재고」가 아니라 「지금 재고」가 들어오기 때문이다. 이 구분을 뭉개지 말 것.
+   *
+   * 경계는 주차 종료 일요일의 KST 자정 = `weekEnd` 15:00 UTC 다.
+   */
+  const weekClosedAtUtc = Date.parse(`${week.weekEnd}T15:00:00Z`);
+  const existingCapturedAt = existing?.[0]?.created_at
+    ? Date.parse(String(existing[0].created_at))
+    : null;
+  const staleMidWeekCapture =
+    alreadyCaptured && existingCapturedAt !== null && existingCapturedAt < weekClosedAtUtc;
   const rows = await buildWeeklySnapshotRows(week);
 
   if (rows.length === 0) throw new Error('적재할 재고가 없습니다. BigQuery 조회 결과를 확인하세요.');
 
-  if (alreadyCaptured && !provisional) {
+  if (alreadyCaptured && !provisional && !staleMidWeekCapture) {
     // 마감된 주차의 재고는 "그때의 재고"라 다시 찍으면 값이 달라진다. 흐름 열만 갱신한다.
     for (const row of rows) {
       const { error } = await supabase
@@ -81,12 +109,35 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
     }
   } else {
     const chunkSize = 500;
+    // 소비기한 잔여 열은 나중에 추가됐다. supabase/weekly-summary-board.sql 의 5번 블록을
+    // 아직 안 돌린 환경에서도 적재가 죽지 않도록, 컬럼이 없으면 빼고 다시 넣는다.
+    let dropRemainColumns = false;
+
     for (let index = 0; index < rows.length; index += chunkSize) {
-      const { error } = await supabase
-        .from('snop_weekly_inventory_snapshots')
-        .upsert(rows.slice(index, index + chunkSize), {
-          onConflict: 'week_end_date,material_code,storage_scope',
-        });
+      const chunk = rows.slice(index, index + chunkSize);
+      const write = (withRemain: boolean) =>
+        supabase
+          .from('snop_weekly_inventory_snapshots')
+          .upsert(
+            withRemain
+              ? chunk
+              : chunk.map((row) => {
+                  const rest = { ...row };
+                  delete rest.min_remain_day;
+                  delete rest.avg_remain_rate;
+                  return rest;
+                }),
+            { onConflict: 'week_end_date,material_code,storage_scope' }
+          );
+
+      let { error } = await write(!dropRemainColumns);
+      if (error && !dropRemainColumns && /min_remain_day|avg_remain_rate/.test(error.message)) {
+        console.warn(
+          '⚠️ 소비기한 잔여 열이 없어 빼고 적재합니다. supabase/weekly-summary-board.sql 의 alter table 을 실행하세요.'
+        );
+        dropRemainColumns = true;
+        ({ error } = await write(false));
+      }
       if (error) throw new Error(`주간 스냅샷 저장 실패: ${error.message}`);
     }
   }
@@ -95,7 +146,9 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
     weekStart: week.weekStart,
     weekEnd: week.weekEnd,
     rowCount: rows.length,
-    stockWritten: !alreadyCaptured || provisional,
+    stockWritten: !alreadyCaptured || provisional || staleMidWeekCapture,
+    /** 주중에 미리 찍어둔 잠정 재고를 마감 재고로 갈아끼운 적재인지 */
+    replacedMidWeekStock: staleMidWeekCapture && !provisional,
     provisional,
     unpricedItemCount: rows.filter((row) => row.price_source !== 'ENDING_INVENTORY').length,
   };

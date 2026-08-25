@@ -6,8 +6,21 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, CalendarDays, DatabaseZap, RefreshCw } from 'lucide-react';
-import { captureWeeklySnapshotAction, getWeeklyBoard } from '@/actions/weekly-actions';
+import {
+  AlertTriangle,
+  CalendarDays,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft,
+  DatabaseZap,
+  RefreshCw,
+  X,
+} from 'lucide-react';
+import {
+  captureWeeklySnapshotAction,
+  getWeeklyBoard,
+  getWeeklyCategoryDetail,
+} from '@/actions/weekly-actions';
 import CanvasStackedBarChart from '@/components/charts/canvas-stacked-bar-chart';
 import InfoTooltip from '@/components/info-tooltip';
 import {
@@ -17,7 +30,13 @@ import {
   toEok,
   type WeeklyBuckets,
 } from '@/lib/weekly/board';
-import { WEEKLY_DEFAULT_SCOPES } from '@/lib/weekly/classification';
+import type { WeeklyDetailRow } from '@/lib/weekly/board';
+import {
+  WEEKLY_DEFAULT_SCOPES,
+  WEEKLY_STORAGE_SCOPE_LABELS,
+  type WeeklyCategory,
+  type WeeklyCm,
+} from '@/lib/weekly/classification';
 
 /**
  * 구간 색 — 왼쪽(임박)이 붉고 오른쪽(안전)이 푸르다. 원본 엑셀 차트와 같은 방향이다.
@@ -48,6 +67,35 @@ const BUCKET_CELL_TONE: Record<keyof WeeklyBuckets, string> = {
 type MoneyUnit = 'million' | 'won';
 
 /**
+ * 상세표 정렬 축.
+ *
+ * ⚠️ `remain` 은 **소비기한 잔여 열이 채워진 주차에서만** 쓸 수 있다. 열이 추가되기 전에
+ * 적재된 주차는 값이 null 인데, 그걸 0 으로 보고 정렬하면 기한없음 재고가 「오늘 폐기」로 맨 위에 온다.
+ */
+type DetailSortKey = 'stockValue' | 'riskValue' | 'riskRatio' | 'remain' | 'shipped' | 'ratio' | 'delta';
+
+const DETAIL_SORTS: { key: DetailSortKey; label: string; hint: string }[] = [
+  { key: 'stockValue', label: '재고금액', hint: '재고금액이 큰 순' },
+  { key: 'riskValue', label: '소진필요 금액', hint: '잔여율 70% 미만 재고금액이 큰 순' },
+  { key: 'riskRatio', label: '소진필요 비중', hint: '재고 대비 잔여율 70% 미만 비중이 높은 순' },
+  { key: 'remain', label: '소비기한 임박', hint: '가장 임박한 배치의 잔여일이 짧은 순' },
+  { key: 'shipped', label: '주간 출고', hint: '이번 주 출고금액이 큰 순' },
+  { key: 'ratio', label: '월 출고 比', hint: '재고금액 ÷ 당월 누적 출고금액이 높은 순' },
+  { key: 'delta', label: '전주 比 증가', hint: '전주 대비 재고금액이 많이 늘어난 순' },
+];
+
+const DETAIL_PAGE_SIZE = 20;
+
+/** 잔여일 → 색. `/stock` 의 유통기한 판정과 같은 구간이다 (폐기 ≤0 / 임박 1~30 / 긴급 31~60 / 양호 61+) */
+function remainDayTone(day: number | null) {
+  if (day === null) return 'text-neutral-300';
+  if (day <= 0) return 'text-[#B71C1C] font-bold';
+  if (day <= 30) return 'text-[#D32F2F] font-semibold';
+  if (day <= 60) return 'text-[#E65100]';
+  return 'text-neutral-600';
+}
+
+/**
  * 적재 시각 표기(KST).
  *
  * `/stock` 은 실시간이고 이 장표는 적재 순간에 고정된다. 두 화면의 재고금액이 다를 때
@@ -71,6 +119,12 @@ export default function WeeklyBoardPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
+
+  /** 펼친 카테고리 칸. 메인 표의 한 줄(CM × 카테고리)과 1:1 로 대응한다 */
+  const [drill, setDrill] = useState<{ cm: WeeklyCm | null; category: WeeklyCategory } | null>(null);
+  const [detailSort, setDetailSort] = useState<DetailSortKey>('stockValue');
+  const [detailPage, setDetailPage] = useState(0);
+  const [detailQuery, setDetailQuery] = useState('');
 
   // 스코프는 고정이다 — `/stock` 의 「통합 재고」(플랜트+물류)와 같은 정의여야 두 화면의 금액이 맞는다.
   const { data, isLoading, refetch, isRefetching } = useQuery({
@@ -110,6 +164,83 @@ export default function WeeklyBoardPage() {
 
   const board = data?.board ?? null;
   const hasPrevious = board?.hasPrevious ?? false;
+  const activeWeek = data?.weekEnd ?? null;
+
+  // 주차를 바꾸면 펼쳐 둔 상세는 다른 주차의 것이라 닫는다.
+  useEffect(() => {
+    setDrill(null);
+  }, [activeWeek]);
+
+  // 상세는 행을 눌렀을 때만 부른다. 첫 화면 로딩에는 영향이 없다.
+  const { data: detailData, isFetching: detailLoading } = useQuery({
+    queryKey: ['weekly-detail', activeWeek, drill?.cm ?? 'ALL', drill?.category ?? 'ALL'],
+    queryFn: () =>
+      getWeeklyCategoryDetail(activeWeek!, drill!.category, drill!.cm, [...WEEKLY_DEFAULT_SCOPES]),
+    enabled: !!activeWeek && !!drill,
+    staleTime: 1000 * 60 * 10,
+    refetchOnWindowFocus: false,
+  });
+
+  const detail = detailData?.detail ?? null;
+  const hasRemainDay = detail?.hasRemainDay ?? false;
+
+  /** 정렬·검색은 클라이언트에서 한다 — 카테고리 하나가 수백 SKU 라 왕복할 이유가 없다 */
+  const detailRows = useMemo(() => {
+    if (!detail) return [] as WeeklyDetailRow[];
+    const keyword = detailQuery.trim().toLowerCase();
+    const filtered = keyword
+      ? detail.rows.filter(
+          (row) =>
+            row.materialCode.toLowerCase().includes(keyword) ||
+            row.productName.toLowerCase().includes(keyword)
+        )
+      : detail.rows;
+
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      switch (detailSort) {
+        case 'riskValue':
+          return b.riskValue - a.riskValue;
+        case 'riskRatio':
+          return b.riskRatio - a.riskRatio;
+        case 'remain':
+          // 잔여일이 없는 행(기한없음·열이 없던 주차)은 임박한 것처럼 위로 올리면 안 된다. 항상 뒤로 보낸다.
+          if (a.minRemainDay === null && b.minRemainDay === null) return b.stockValue - a.stockValue;
+          if (a.minRemainDay === null) return 1;
+          if (b.minRemainDay === null) return -1;
+          return a.minRemainDay - b.minRemainDay;
+        case 'shipped':
+          return b.shippedValue - a.shippedValue;
+        case 'ratio':
+          if (a.stockToShipmentRatio === null && b.stockToShipmentRatio === null)
+            return b.stockValue - a.stockValue;
+          if (a.stockToShipmentRatio === null) return 1;
+          if (b.stockToShipmentRatio === null) return -1;
+          return b.stockToShipmentRatio - a.stockToShipmentRatio;
+        case 'delta':
+          return (b.stockDelta ?? 0) - (a.stockDelta ?? 0);
+        default:
+          return b.stockValue - a.stockValue;
+      }
+    });
+    return sorted;
+  }, [detail, detailSort, detailQuery]);
+
+  const detailPageCount = Math.max(1, Math.ceil(detailRows.length / DETAIL_PAGE_SIZE));
+  const detailPageSafe = Math.min(detailPage, detailPageCount - 1);
+  const detailPageRows = detailRows.slice(
+    detailPageSafe * DETAIL_PAGE_SIZE,
+    detailPageSafe * DETAIL_PAGE_SIZE + DETAIL_PAGE_SIZE
+  );
+
+  /** 같은 칸을 다시 누르면 접는다 */
+  const toggleDrill = (cm: WeeklyCm | null, category: WeeklyCategory) => {
+    setDetailPage(0);
+    setDetailQuery('');
+    setDrill((current) =>
+      current && current.cm === cm && current.category === category ? null : { cm, category }
+    );
+  };
 
   /** 금액 표기. 백만원 모드는 자릿수를 줄여 한 화면에 열을 더 넣기 위한 것이다. */
   const money = (value: number) =>
@@ -328,12 +459,16 @@ export default function WeeklyBoardPage() {
                       const previousIsAside =
                         index > 0 &&
                         (board.rows[index - 1].cm === '상품' || board.rows[index - 1].cm === '미분류');
+                      const isOpen = drill?.cm === row.cm && drill?.category === row.category;
                       return (
                         <tr
                           key={`${row.cm}-${row.plant}-${row.category}`}
-                          className={`border-b border-neutral-100 hover:bg-neutral-50 ${
-                            isAside && !previousIsAside ? 'border-t-2 border-t-neutral-200' : ''
-                          }`}
+                          // 행 전체가 드릴다운 버튼이다 — 「어느 칸의 상세인가」가 표에서 바로 보여야 한다.
+                          onClick={() => toggleDrill(row.cm, row.category)}
+                          title={`${row.cm} ${row.category} 상세 보기`}
+                          className={`cursor-pointer border-b border-neutral-100 hover:bg-[#E3F2FD]/40 ${
+                            isOpen ? 'bg-[#E3F2FD]/70' : ''
+                          } ${isAside && !previousIsAside ? 'border-t-2 border-t-neutral-200' : ''}`}
                         >
                           <td className="px-1.5 py-1.5 text-center font-medium">
                             {isAside ? (
@@ -345,7 +480,16 @@ export default function WeeklyBoardPage() {
                             )}
                           </td>
                           <td className="px-1.5 py-1.5 text-center text-neutral-500">{row.plant}</td>
-                          <td className="px-1.5 py-1.5 text-center font-medium">{row.category}</td>
+                          <td className="px-1.5 py-1.5 text-center font-medium">
+                            <span className="inline-flex items-center gap-0.5">
+                              {isOpen ? (
+                                <ChevronDown size={11} className="text-[#1565C0]" />
+                              ) : (
+                                <ChevronRight size={11} className="text-neutral-300" />
+                              )}
+                              {row.category}
+                            </span>
+                          </td>
                           <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-500">
                             {hasPrevious ? moneyCell(row.previousStockValue) : '-'}
                           </td>
@@ -464,6 +608,18 @@ export default function WeeklyBoardPage() {
                   {data && data.unpricedItemCount > 0 && (
                     <span className="text-amber-700">단가 미확보 {data.unpricedItemCount}건</span>
                   )}
+                  {/*
+                    출고는 있는데 생산이 0 이면 대차가 성립하지 않는다. 대부분 「주 초에 적재해서
+                    아직 생산 전표가 안 올라온」 경우다 — BigQuery 미러는 하루 늦게 채워지므로
+                    진행 중인 주차를 그 주 월요일에 적재하면 생산이 항상 0 으로 찍힌다.
+                    숫자를 감추지 말고 왜 0 인지 그 자리에서 알려준다.
+                  */}
+                  {board.totals.producedValue === 0 && board.totals.shippedValue > 0 && (
+                    <span className="flex items-center gap-1 text-amber-700">
+                      생산 0
+                      <InfoTooltip text="이 주차에 생산 전표(MB51 101)가 하나도 안 잡혔습니다. 단가 문제가 아니라 적재 시점 문제입니다 — BigQuery 미러는 하루 늦게 채워지므로, 진행 중인 주차를 그 주 초에 적재하면 생산이 0 으로 찍힙니다. 주가 지난 뒤 다시 적재하면(관리자 「적재」 버튼) 채워집니다." />
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -474,6 +630,325 @@ export default function WeeklyBoardPage() {
                 </pre>
               </aside>
             </div>
+          </section>
+
+          {/* 1-1. 카테고리 드릴다운 — 위 표의 한 칸을 SKU 단위로 펼친다 */}
+          <section className="rounded-lg border border-neutral-200 bg-white">
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 px-3 py-2">
+              <span className="text-[11px] font-bold text-neutral-500">상세 보기</span>
+              {board.categoryBuckets.map((entry) => {
+                const isOpen = drill?.cm === null && drill?.category === entry.category;
+                return (
+                  <button
+                    key={entry.category}
+                    onClick={() => toggleDrill(null, entry.category)}
+                    className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+                      isOpen
+                        ? 'border-[#1565C0] bg-[#1565C0] text-white'
+                        : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50'
+                    }`}
+                  >
+                    {entry.category}
+                    <span
+                      className={`ml-1 tabular-nums ${isOpen ? 'text-white/70' : 'text-neutral-400'}`}
+                    >
+                      {toEok(entry.total).toFixed(1)}억
+                    </span>
+                  </button>
+                );
+              })}
+              <InfoTooltip text="카테고리 전체를 펼칩니다. 위 표의 행을 직접 누르면 그 CM × 카테고리 칸만 펼쳐집니다." />
+              {drill && (
+                <button
+                  onClick={() => setDrill(null)}
+                  className="ml-auto flex items-center gap-1 rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50"
+                >
+                  <X size={11} /> 닫기
+                </button>
+              )}
+            </div>
+
+            {!drill && (
+              <p className="px-3 py-4 text-center text-[11px] text-neutral-400">
+                카테고리를 누르거나 위 표의 행을 누르면 SKU 별 재고수량·금액·소비기한이 펼쳐집니다.
+              </p>
+            )}
+
+            {drill && (
+              <div className="p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h2 className="text-xs font-bold text-neutral-800">
+                    {drill.cm ? `${drill.cm} · ` : ''}
+                    {drill.category}
+                    <span className="ml-1.5 font-normal text-neutral-400">
+                      {detail ? `${detail.totals.itemCount.toLocaleString('ko-KR')}품목` : ''}
+                    </span>
+                  </h2>
+
+                  {/* 정렬 — 금액 기준과 소비기한 임박 기준을 나란히 둔다 */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    {DETAIL_SORTS.map((sort) => {
+                      // 잔여일 열이 없는 주차에서 「소비기한 임박」을 누르면 정렬이 무의미해진다. 아예 막는다.
+                      const disabled =
+                        (sort.key === 'remain' && !hasRemainDay) ||
+                        (sort.key === 'delta' && !(detail?.hasPrevious ?? false));
+                      return (
+                        <button
+                          key={sort.key}
+                          onClick={() => {
+                            setDetailSort(sort.key);
+                            setDetailPage(0);
+                          }}
+                          disabled={disabled}
+                          title={
+                            disabled
+                              ? sort.key === 'remain'
+                                ? '이 주차는 소비기한 잔여일이 적재되지 않았습니다(열 추가 이전 주차).'
+                                : '전주 스냅샷이 없어 증감을 정렬할 수 없습니다.'
+                              : sort.hint
+                          }
+                          className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                            detailSort === sort.key
+                              ? 'border-[#1565C0] bg-[#E3F2FD] text-[#1565C0]'
+                              : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-50'
+                          }`}
+                        >
+                          {sort.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <input
+                    value={detailQuery}
+                    onChange={(event) => {
+                      setDetailQuery(event.target.value);
+                      setDetailPage(0);
+                    }}
+                    placeholder="자재코드·품명 검색"
+                    className="ml-auto w-40 rounded-md border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-[#1565C0]"
+                  />
+                </div>
+
+                {detailLoading && !detail && (
+                  <p className="py-8 text-center text-xs text-neutral-400">불러오는 중…</p>
+                )}
+
+                {detail && (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1120px] text-right text-xs">
+                        <thead>
+                          <tr className="bg-neutral-100 text-[10px] text-neutral-600">
+                            <th className="px-1.5 py-1.5 text-left font-bold">자재코드</th>
+                            <th className="px-1.5 py-1.5 text-left font-bold">품명</th>
+                            <th className="px-1.5 py-1.5 text-center font-bold">DISPO</th>
+                            <th className="px-1.5 py-1.5 text-center font-bold">창고</th>
+                            <th className="border-l border-neutral-200 px-1.5 py-1.5 font-bold">
+                              재고수량
+                            </th>
+                            <th className="px-1.5 py-1.5 font-bold">재고금액</th>
+                            <th className="px-1.5 py-1.5 font-bold">전주 比</th>
+                            <th className="border-l border-neutral-200 px-1.5 py-1.5 font-bold">
+                              <span className="flex items-center justify-end gap-1">
+                                잔여일
+                                <InfoTooltip text="그 SKU 에서 가장 임박한 배치의 소비기한 잔여일입니다. 평균이 아니라 최솟값이라, 소량이라도 곧 폐기될 배치가 있으면 짧게 나옵니다. 유통기한이 없는 재고뿐이면 '-' 입니다." />
+                              </span>
+                            </th>
+                            <th className="px-1.5 py-1.5 font-bold">잔여율</th>
+                            <th className="px-1.5 py-1.5 font-bold text-[#C62828]">소진필요</th>
+                            <th className="px-1.5 py-1.5 font-bold">비중</th>
+                            <th className="border-l border-neutral-200 px-1.5 py-1.5 font-bold">
+                              주간 출고
+                            </th>
+                            <th className="px-1.5 py-1.5 font-bold">주간 생산</th>
+                            <th className="px-1.5 py-1.5 font-bold">월 출고 比</th>
+                            <th className="px-1.5 py-1.5 font-bold">단가</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detailPageRows.map((row) => (
+                            <tr
+                              key={row.materialCode}
+                              className="border-b border-neutral-100 hover:bg-neutral-50"
+                            >
+                              <td className="px-1.5 py-1.5 text-left font-mono text-[11px] text-neutral-500">
+                                {row.materialCode}
+                              </td>
+                              <td
+                                className="max-w-[220px] truncate px-1.5 py-1.5 text-left font-medium text-neutral-800"
+                                title={row.productName}
+                              >
+                                {row.productName}
+                              </td>
+                              <td className="px-1.5 py-1.5 text-center text-[10px] text-neutral-400">
+                                {row.dispo || '-'}
+                              </td>
+                              <td className="px-1.5 py-1.5 text-center text-[10px] text-neutral-400">
+                                {row.scopes.length
+                                  ? row.scopes
+                                      .map((scope) =>
+                                        WEEKLY_STORAGE_SCOPE_LABELS[scope].replace(' 재고', '')
+                                      )
+                                      .join('·')
+                                  : '-'}
+                              </td>
+                              <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-600">
+                                {Math.round(row.stockQty).toLocaleString('ko-KR')}
+                                <span className="ml-0.5 text-[9px] text-neutral-400">{row.unit}</span>
+                              </td>
+                              <td className="px-1.5 py-1.5 font-semibold tabular-nums text-neutral-900">
+                                {money(row.stockValue)}
+                              </td>
+                              <td
+                                className={`px-1.5 py-1.5 tabular-nums ${
+                                  row.stockDelta === null
+                                    ? 'text-neutral-300'
+                                    : row.stockDelta > 0
+                                      ? 'text-[#1565C0]'
+                                      : row.stockDelta < 0
+                                        ? 'text-[#C62828]'
+                                        : 'text-neutral-400'
+                                }`}
+                              >
+                                {row.stockDelta === null ? '-' : moneyCell(row.stockDelta)}
+                              </td>
+                              <td
+                                className={`border-l border-neutral-100 px-1.5 py-1.5 tabular-nums ${remainDayTone(
+                                  row.minRemainDay
+                                )}`}
+                              >
+                                {row.minRemainDay === null
+                                  ? '-'
+                                  : `${Math.round(row.minRemainDay).toLocaleString('ko-KR')}일`}
+                              </td>
+                              <td className="px-1.5 py-1.5 tabular-nums text-neutral-500">
+                                {row.avgRemainRate === null
+                                  ? '-'
+                                  : `${row.avgRemainRate.toFixed(0)}%`}
+                              </td>
+                              <td className="px-1.5 py-1.5 tabular-nums text-[#C62828]">
+                                {moneyCell(row.riskValue)}
+                              </td>
+                              <td className="px-1.5 py-1.5">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <span className="h-1.5 w-9 overflow-hidden rounded-sm bg-neutral-100">
+                                    <span
+                                      className="block h-1.5 rounded-sm bg-[#D32F2F]"
+                                      style={{
+                                        width: `${Math.min(100, Math.round(row.riskRatio * 100))}%`,
+                                      }}
+                                    />
+                                  </span>
+                                  <span className="w-7 text-[10px] tabular-nums text-neutral-500">
+                                    {Math.round(row.riskRatio * 100)}%
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-500">
+                                {moneyCell(row.shippedValue)}
+                              </td>
+                              <td className="px-1.5 py-1.5 tabular-nums text-neutral-500">
+                                {moneyCell(row.producedValue)}
+                              </td>
+                              <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
+                                {percent(row.stockToShipmentRatio)}
+                              </td>
+                              <td className="px-1.5 py-1.5 text-[10px] tabular-nums text-neutral-400">
+                                {Math.round(row.unitPrice).toLocaleString('ko-KR')}
+                                {row.priceSource !== 'ENDING_INVENTORY' && (
+                                  <span
+                                    className="ml-0.5 text-amber-600"
+                                    title="원가팀 기말재고 단가가 없어 금액이 0 이거나 추정입니다"
+                                  >
+                                    *
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                          {detailPageRows.length === 0 && (
+                            <tr>
+                              <td colSpan={15} className="py-6 text-center text-[11px] text-neutral-400">
+                                조건에 맞는 품목이 없습니다.
+                              </td>
+                            </tr>
+                          )}
+                          <tr className="bg-[#FFF3E0] text-[11px] font-bold">
+                            <td className="px-1.5 py-1.5 text-left" colSpan={4}>
+                              합계 ({detail.totals.itemCount.toLocaleString('ko-KR')}품목)
+                            </td>
+                            <td className="border-l border-neutral-200 px-1.5 py-1.5 text-neutral-400">
+                              단위혼재
+                            </td>
+                            <td className="px-1.5 py-1.5 tabular-nums">
+                              {money(detail.totals.stockValue)}
+                            </td>
+                            <td className="px-1.5 py-1.5 tabular-nums">
+                              {detail.hasPrevious
+                                ? money(detail.totals.stockValue - detail.totals.previousStockValue)
+                                : '-'}
+                            </td>
+                            <td className="border-l border-neutral-200 px-1.5 py-1.5" colSpan={2} />
+                            <td className="px-1.5 py-1.5 tabular-nums text-[#C62828]">
+                              {money(detail.totals.riskValue)}
+                            </td>
+                            <td className="px-1.5 py-1.5" />
+                            <td className="border-l border-neutral-200 px-1.5 py-1.5 tabular-nums">
+                              {money(detail.totals.shippedValue)}
+                            </td>
+                            <td className="px-1.5 py-1.5 tabular-nums">
+                              {money(detail.totals.producedValue)}
+                            </td>
+                            <td className="px-1.5 py-1.5" colSpan={2} />
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* 페이지네이션 */}
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-neutral-500">
+                      <span>
+                        {detailRows.length.toLocaleString('ko-KR')}품목 중{' '}
+                        {detailRows.length === 0 ? 0 : detailPageSafe * DETAIL_PAGE_SIZE + 1}–
+                        {Math.min((detailPageSafe + 1) * DETAIL_PAGE_SIZE, detailRows.length)}
+                        {' · '}
+                        {DETAIL_SORTS.find((sort) => sort.key === detailSort)?.hint}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setDetailPage((page) => Math.max(0, page - 1))}
+                          disabled={detailPageSafe === 0}
+                          className="rounded border border-neutral-200 p-1 disabled:opacity-30"
+                        >
+                          <ChevronLeft size={12} />
+                        </button>
+                        <span className="tabular-nums">
+                          {detailPageSafe + 1} / {detailPageCount}
+                        </span>
+                        <button
+                          onClick={() =>
+                            setDetailPage((page) => Math.min(detailPageCount - 1, page + 1))
+                          }
+                          disabled={detailPageSafe >= detailPageCount - 1}
+                          className="rounded border border-neutral-200 p-1 disabled:opacity-30"
+                        >
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {!hasRemainDay && (
+                      <p className="mt-1.5 text-[10px] text-amber-700">
+                        이 주차는 소비기한 잔여일이 적재되지 않아 「소비기한 임박」 정렬을 쓸 수 없습니다.
+                        재고는 소급 계산이 불가능해 과거 주차를 다시 채울 수 없고, 다음 적재부터 채워집니다.
+                        그동안은 「소진필요 비중」으로 임박도를 대신 볼 수 있습니다.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </section>
 
           {/* 2. 차트 + 구간별 주간 재고변동 */}

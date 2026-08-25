@@ -86,23 +86,34 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
 
   if (alreadyCaptured && !provisional && !staleMidWeekCapture) {
     // 마감된 주차의 재고는 "그때의 재고"라 다시 찍으면 값이 달라진다. 흐름 열만 갱신한다.
-    for (const row of rows) {
-      const { error } = await supabase
-        .from('snop_weekly_inventory_snapshots')
-        .update({
-          shipped_qty: row.shipped_qty,
-          shipped_value: row.shipped_value,
-          produced_qty: row.produced_qty,
-          produced_value: row.produced_value,
-          shipped_mtd_qty: row.shipped_mtd_qty,
-          shipped_mtd_value: row.shipped_mtd_value,
-          sales_amount: row.sales_amount,
-          sales_mtd: row.sales_mtd,
-        })
-        .eq('week_end_date', row.week_end_date)
-        .eq('material_code', row.material_code)
-        .eq('storage_scope', row.storage_scope);
-      if (error) throw new Error(`주간 스냅샷 흐름 갱신 실패: ${error.message}`);
+    //
+    // ⚠️ 행마다 PK 가 달라 한 방 UPDATE 로 못 접는다. 그렇다고 **순차로 돌리면 안 된다** —
+    // 2천 행 × 왕복 지연이 그대로 쌓여 수 분이 걸리고, 라우트의 maxDuration(300초)에 걸릴 수 있다.
+    // 실측: 2,135행을 순차로 돌렸을 때 호출자가 응답 없이 몇 분을 기다렸다.
+    // 그래서 제한된 동시성으로 묶어 보낸다. Supabase 커넥션 풀을 흔들지 않을 만큼만 연다.
+    const concurrency = 25;
+    for (let index = 0; index < rows.length; index += concurrency) {
+      const results = await Promise.all(
+        rows.slice(index, index + concurrency).map((row) =>
+          supabase
+            .from('snop_weekly_inventory_snapshots')
+            .update({
+              shipped_qty: row.shipped_qty,
+              shipped_value: row.shipped_value,
+              produced_qty: row.produced_qty,
+              produced_value: row.produced_value,
+              shipped_mtd_qty: row.shipped_mtd_qty,
+              shipped_mtd_value: row.shipped_mtd_value,
+              sales_amount: row.sales_amount,
+              sales_mtd: row.sales_mtd,
+            })
+            .eq('week_end_date', row.week_end_date)
+            .eq('material_code', row.material_code)
+            .eq('storage_scope', row.storage_scope)
+        )
+      );
+      const failed = results.find((result) => result.error);
+      if (failed?.error) throw new Error(`주간 스냅샷 흐름 갱신 실패: ${failed.error.message}`);
     }
   } else {
     const chunkSize = 500;

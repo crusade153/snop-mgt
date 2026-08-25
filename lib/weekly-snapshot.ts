@@ -10,7 +10,13 @@
 
 import { createAdminSupabaseClient } from '@/lib/admin-auth';
 import { buildWeeklySnapshotRows } from '@/lib/weekly/snapshot-builder';
-import { completedWeekOf, isWeekEnd, seoulToday, weekRangeOf } from '@/lib/weekly/week';
+import {
+  canReplaceMidWeekStock,
+  completedWeekOf,
+  isWeekEnd,
+  seoulToday,
+  weekRangeOf,
+} from '@/lib/weekly/week';
 
 export interface CaptureResult {
   weekStart: string;
@@ -64,25 +70,16 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
   const alreadyCaptured = (existing || []).length > 0;
 
   /**
-   * 이미 있는 재고가 **주가 끝나기 전에 찍힌 잠정치**인지.
-   *
-   * 진행 중인 주차를 미리 적재해 두면(관리자가 「적재」 버튼을 주중에 누르는 경우) 그 재고는
-   * 「그 날의 재고」다. 그런데 월요일 cron 이 도는 시점에는 그 주차가 이미 마감이라
-   * `alreadyCaptured && !provisional` 로 걸려 **흐름 열만 갱신되고 재고는 주중 값으로 영영 굳었다.**
-   * 그러면 그 주차의 재고금액이 「일요일 마감」이 아니라 「수요일 오후」가 되어 주차 간 비교가 어긋난다.
-   *
-   * 주 마감 전에 찍힌 값은 확정본이 아니므로 덮어쓰는 것이 맞다.
-   * 반대로 **마감 후에 찍힌 재고는 절대 덮지 않는다** — 소급 생성이 불가능해서 다시 찍으면
-   * 「그때의 재고」가 아니라 「지금 재고」가 들어오기 때문이다. 이 구분을 뭉개지 말 것.
-   *
-   * 경계는 주차 종료 일요일의 KST 자정 = `weekEnd` 15:00 UTC 다.
+   * 주중에 미리 찍어둔 잠정 재고를 **마감 직후 재고로 갈아끼울 수 있는지.**
+   * 판정은 `canReplaceMidWeekStock` 순수 함수에 있다 — 조건과 이유는 거기 주석을 볼 것.
    */
-  const weekClosedAtUtc = Date.parse(`${week.weekEnd}T15:00:00Z`);
-  const existingCapturedAt = existing?.[0]?.created_at
-    ? Date.parse(String(existing[0].created_at))
-    : null;
   const staleMidWeekCapture =
-    alreadyCaptured && existingCapturedAt !== null && existingCapturedAt < weekClosedAtUtc;
+    alreadyCaptured &&
+    canReplaceMidWeekStock(
+      week.weekEnd,
+      existing?.[0]?.created_at ? String(existing[0].created_at) : null,
+      seoulToday()
+    );
   const rows = await buildWeeklySnapshotRows(week);
 
   if (rows.length === 0) throw new Error('적재할 재고가 없습니다. BigQuery 조회 결과를 확인하세요.');

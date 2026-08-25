@@ -67,8 +67,10 @@ for (const line of readFileSync(`${ROOT}/.env.local`, 'utf8').split(/\r?\n/)) {
   process.env[match[1]] = value;
 }
 
-const { weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, monthToDateRange } =
-  await import('@/lib/weekly/week');
+const {
+  weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, monthToDateRange,
+  canReplaceMidWeekStock,
+} = await import('@/lib/weekly/week');
 const { categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation } =
   await import('@/lib/weekly/classification');
 const { buildWeeklyBoard, buildWeeklyDetail, resolveCm, sumBuckets } = await import('@/lib/weekly/board');
@@ -101,6 +103,32 @@ console.log('\n[1] 주차 계산 (월~일)');
   const mtd = monthToDateRange('2026-08-23');
   check('월매출 누계 구간', mtd.from === '2026-08-01' && mtd.to === '2026-08-23', `${mtd.from} ~ ${mtd.to}`);
 }
+
+console.log('\n[1-1] 주중 잠정 재고 교체 판정 (소급 불가 원칙)');
+{
+  // 8/17~8/23 주차를 주중(8/20)에 적재해 뒀다.
+  const midWeek = '2026-08-20T00:31:13Z';
+
+  // 월요일 cron(= 마감 다음 날)은 그 잠정치를 마감 재고로 갈아끼운다.
+  check('마감 다음 날이면 교체', canReplaceMidWeekStock('2026-08-23', midWeek, '2026-08-24'));
+
+  // ⚠️ 실제로 터뜨렸던 버그. 시간 상한이 없으면 며칠 뒤 적재가
+  //    「그때의 재고」 자리에 「지금 재고」를 밀어 넣는다.
+  check('이틀 뒤부터는 교체 금지', !canReplaceMidWeekStock('2026-08-23', midWeek, '2026-08-25'));
+  check('몇 주 뒤도 교체 금지', !canReplaceMidWeekStock('2026-08-23', midWeek, '2026-09-14'));
+
+  // 마감 후에 찍힌 재고는 확정본이라 언제든 덮지 않는다.
+  check('마감 후 적재분은 덮지 않음',
+    !canReplaceMidWeekStock('2026-08-23', '2026-08-24T00:31:13Z', '2026-08-24'));
+
+  // 경계: 일요일 KST 자정 직전은 잠정, 직후는 확정.
+  check('경계 = 일요일 KST 자정',
+    canReplaceMidWeekStock('2026-08-23', '2026-08-23T14:59:00Z', '2026-08-24') &&
+    !canReplaceMidWeekStock('2026-08-23', '2026-08-23T15:01:00Z', '2026-08-24'));
+
+  check('적재 이력이 없으면 판정 대상 아님', !canReplaceMidWeekStock('2026-08-23', null, '2026-08-24'));
+}
+
 
 console.log('\n[2] 분류 규칙 (확정된 DISPO 매핑)');
 {

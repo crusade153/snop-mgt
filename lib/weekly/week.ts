@@ -86,3 +86,40 @@ export function isWeekEnd(dateStr: string) {
 export function isConsecutiveWeek(previous: string, current: string) {
   return differenceInCalendarDays(parseISO(current), parseISO(previous)) === 7;
 }
+
+/**
+ * 이미 적재된 재고를 **마감 재고로 갈아끼워도 되는지** 판정한다.
+ *
+ * 진행 중인 주차를 「적재」 버튼으로 미리 찍으면 그 재고는 「그 날의 재고」다.
+ * 월요일 cron 이 도는 시점에는 그 주차가 이미 마감이라, 순진하게 막으면
+ * 재고가 주중 값으로 영영 굳는다. 그래서 교체를 허용하되 **두 조건을 모두** 건다.
+ *
+ *   1. 기존 값이 주 마감 **전에** 찍혔다 (= 잠정치다)
+ *   2. 지금이 주 마감 **직후**(마감 다음 날까지)다
+ *
+ * ⚠️ **2번이 없으면 소급 불가 원칙이 깨진다.** 조건 1만 보면 몇 주 지난 주차를 다시 돌릴 때
+ * 「그때의 재고」가 아니라 「지금 재고」가 그 주차에 들어간다. 실제로 그렇게 만들었다가
+ * 8/23 주차(8/19~20 적재)에 8/25 재고가 덮이는 걸 확인하고 이 함수를 뺐다.
+ *
+ * 월요일 05:40 KST cron 이 정확히 `weekEnd + 1일` 이라 이 창이면 충분하다.
+ * BigQuery 미러가 월요일 04:00 에 갱신되므로 그때 읽은 재고가 일요일 마감 재고다.
+ */
+export function canReplaceMidWeekStock(
+  weekEnd: string,
+  existingCapturedAtIso: string | null,
+  todayKst: string
+): boolean {
+  if (!existingCapturedAtIso) return false;
+
+  // 주 마감 순간 = 종료 일요일의 KST 자정 = weekEnd 15:00 UTC
+  const closedAt = Date.parse(`${weekEnd}T15:00:00Z`);
+  const capturedAt = Date.parse(existingCapturedAtIso);
+  if (!Number.isFinite(capturedAt) || !Number.isFinite(closedAt)) return false;
+
+  // 1. 기존 값이 주 마감 전에 찍힌 잠정치인가
+  if (capturedAt >= closedAt) return false;
+
+  // 2. 지금이 마감 직후(다음 날까지)인가
+  const deadline = format(addDays(parseISO(weekEnd), 1), 'yyyy-MM-dd');
+  return todayKst <= deadline;
+}

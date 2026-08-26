@@ -82,6 +82,12 @@ export interface WeeklySnapshotRow {
   bucket_70_75: number;
   bucket_75_85: number;
   bucket_85_over: number;
+  /** 잔여율 구간별 재고수량. 열 추가 전 주차는 값이 없을 수 있다 */
+  bucket_qty_under50?: number;
+  bucket_qty_50_70?: number;
+  bucket_qty_70_75?: number;
+  bucket_qty_75_85?: number;
+  bucket_qty_85_over?: number;
   shipped_qty: number;
   shipped_value: number;
   /** 당월 1일~주차 종료일 누적 출고. 금액은 주간 출고와 같은 재고단가 환산이다 */
@@ -118,15 +124,17 @@ export interface WeeklyBoardRow {
   buckets: WeeklyBuckets;
   /** 당월 누적 출고금액 (재고와 같은 단가) */
   shipmentMtd: number;
-  /** 당월 누적 납품매출액. 참고용이며 비율 계산에는 쓰지 않는다 */
+  /** 당월 누적 실제 납품매출액(NETWR). 「월 매출 比 재고금액」의 분모 */
   salesMtd: number;
   /**
    * 재고금액 ÷ 당월 누적 출고금액. 분모가 0 이면 null.
    *
    * 분자·분모가 **둘 다 완제품 재고단가**라 배수를 그대로 "월 출고량의 몇 배를 쌓아두고 있는가"로 읽는다.
    * 예전 분모였던 매출액(NETWR)은 판매가라 마진율만큼 비율이 눌렸다.
-   */
+  */
   stockToShipmentRatio: number | null;
+  /** 재고금액 ÷ 당월 누적 실제 납품매출액(NETWR). 분모가 0 이면 null */
+  stockToSalesRatio: number | null;
   /** 전주 재고 + 생산 − 출고 와 당주 재고의 차이. 폐기·반품·재평가가 섞여 0 이 되지 않는다 */
   balanceGap: number;
 }
@@ -231,6 +239,7 @@ const emptyRow = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory): W
   shipmentMtd: 0,
   salesMtd: 0,
   stockToShipmentRatio: null,
+  stockToSalesRatio: null,
   balanceGap: 0,
 });
 
@@ -287,6 +296,7 @@ export function buildWeeklyBoard({
     .map((row) => ({
       ...row,
       stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
+      stockToSalesRatio: row.salesMtd > 0 ? row.stockValue / row.salesMtd : null,
       balanceGap: row.previousStockValue + row.producedValue - row.shippedValue - row.stockValue,
     }))
     // 재고도 흐름도 전혀 없는 조합은 표를 늘리기만 한다
@@ -309,11 +319,13 @@ export function buildWeeklyBoard({
     shipmentMtd: rows.reduce((sum, row) => sum + row.shipmentMtd, 0),
     salesMtd: rows.reduce((sum, row) => sum + row.salesMtd, 0),
     stockToShipmentRatio: null,
+    stockToSalesRatio: null,
     balanceGap: 0,
   };
   rows.forEach((row) => addBuckets(totals.buckets, row.buckets));
   totals.stockToShipmentRatio =
     totals.shipmentMtd > 0 ? totals.stockValue / totals.shipmentMtd : null;
+  totals.stockToSalesRatio = totals.salesMtd > 0 ? totals.stockValue / totals.salesMtd : null;
   totals.balanceGap =
     totals.previousStockValue + totals.producedValue - totals.shippedValue - totals.stockValue;
 
@@ -489,7 +501,11 @@ export interface WeeklyDetailRow {
   /** 전주 대비 재고금액 증감. 전주 스냅샷이 없으면 null */
   stockDelta: number | null;
   buckets: WeeklyBuckets;
-  /** 잔여율 70% 미만(50%미만 + 50~70%) 재고금액 = 소진 필요 */
+  /** 잔여율 구간별 재고수량. 열 추가 전 주차는 모두 0 이다 */
+  bucketQuantities: WeeklyBuckets;
+  /** 이 SKU 의 구간수량 합이 재고수량과 맞는지 */
+  hasBucketQuantities: boolean;
+  /** 잔여율 75% 미만(50%미만 + 50~70% + 70~75%) 재고금액 = 소진 필요 */
   riskValue: number;
   riskRatio: number;
   shippedQty: number;
@@ -509,6 +525,16 @@ export interface WeeklyDetailRow {
   scopes: WeeklyStorageScope[];
 }
 
+function bucketQuantitiesOfRow(row: WeeklySnapshotRow): WeeklyBuckets {
+  return {
+    under50: row.bucket_qty_under50 || 0,
+    r50_70: row.bucket_qty_50_70 || 0,
+    r70_75: row.bucket_qty_70_75 || 0,
+    r75_85: row.bucket_qty_75_85 || 0,
+    over85: row.bucket_qty_85_over || 0,
+  };
+}
+
 export interface BuildWeeklyDetailInput extends BuildWeeklyBoardInput {
   /** 이 카테고리만. 비우면 전부 */
   category?: WeeklyCategory | null;
@@ -524,16 +550,21 @@ export interface WeeklyDetailResult {
     stockValue: number;
     previousStockValue: number;
     riskValue: number;
+    buckets: WeeklyBuckets;
     shippedValue: number;
     producedValue: number;
     itemCount: number;
   };
   /** 잔여일 열이 채워진 주차인지. false 면 「소비기한 임박」 정렬을 쓸 수 없다 */
   hasRemainDay: boolean;
+  /** 구간별 수량 열이 정확히 채워진 주차인지. false 면 수량은 '-' 로 표시한다 */
+  hasBucketQuantities: boolean;
+  /** 구간수량을 역산할 수 없는 SKU 수 */
+  missingBucketQuantityCount: number;
 }
 
-/** 소진 필요 = 잔여율 70% 미만. 메인 표의 「소진 필요」와 같은 정의다 */
-export const WEEKLY_RISK_BUCKET_KEYS: (keyof WeeklyBuckets)[] = ['under50', 'r50_70'];
+/** 소진 필요 = 잔여율 75% 미만. 메인 표의 「소진 필요」와 같은 정의다 */
+export const WEEKLY_RISK_BUCKET_KEYS: (keyof WeeklyBuckets)[] = ['under50', 'r50_70', 'r70_75'];
 
 function riskValueOf(buckets: WeeklyBuckets) {
   return WEEKLY_RISK_BUCKET_KEYS.reduce((sum, key) => sum + (buckets[key] || 0), 0);
@@ -585,6 +616,8 @@ export function buildWeeklyDetail({
         previousStockValue: 0,
         stockDelta: null,
         buckets: createWeeklyBuckets(),
+        bucketQuantities: createWeeklyBuckets(),
+        hasBucketQuantities: false,
         riskValue: 0,
         riskRatio: 0,
         shippedQty: 0,
@@ -630,6 +663,8 @@ export function buildWeeklyDetail({
       target.producedValue += row.produced_value || 0;
       target.shipmentMtd += row.shipped_mtd_value || 0;
       addBuckets(target.buckets, bucketsOfRow(row));
+      const bucketQuantities = bucketQuantitiesOfRow(row);
+      addBuckets(target.bucketQuantities, bucketQuantities);
       if ((row.stock_value || 0) > 0 && !target.scopes.includes(row.storage_scope)) {
         target.scopes.push(row.storage_scope);
       }
@@ -658,8 +693,12 @@ export function buildWeeklyDetail({
     .map((row) => {
       const riskValue = riskValueOf(row.buckets);
       const accum = rateAccum.get(row.materialCode);
+      const bucketQuantityTotal = sumBuckets(row.bucketQuantities);
+      const quantityTolerance = Math.max(0.01, Math.abs(row.stockQty) * 1e-6);
       return {
         ...row,
+        hasBucketQuantities:
+          row.stockQty === 0 || Math.abs(row.stockQty - bucketQuantityTotal) <= quantityTolerance,
         riskValue,
         riskRatio: row.stockValue > 0 ? riskValue / row.stockValue : 0,
         stockDelta: previous.length > 0 ? row.stockValue - row.previousStockValue : null,
@@ -682,10 +721,19 @@ export function buildWeeklyDetail({
     rows,
     hasPrevious: previous.length > 0,
     hasRemainDay,
+    // 과거 주차는 새 열의 기본값이 0 이다. SKU 별로 합계를 맞춰 일부 구형 행도 정확히 구분한다.
+    hasBucketQuantities: rows.some((row) => row.stockQty > 0 && row.hasBucketQuantities),
+    missingBucketQuantityCount: rows.filter(
+      (row) => row.stockQty > 0 && !row.hasBucketQuantities
+    ).length,
     totals: {
       stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
       previousStockValue: rows.reduce((sum, row) => sum + row.previousStockValue, 0),
       riskValue: rows.reduce((sum, row) => sum + row.riskValue, 0),
+      buckets: rows.reduce((total, row) => {
+        addBuckets(total, row.buckets);
+        return total;
+      }, createWeeklyBuckets()),
       shippedValue: rows.reduce((sum, row) => sum + row.shippedValue, 0),
       producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
       itemCount: rows.length,

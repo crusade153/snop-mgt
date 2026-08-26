@@ -232,9 +232,9 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v8: 주차 목록이 PostgREST 1000행 상한에 잘려 「전주」가 안 잡히던 버그를 고쳤다.
-      //     (v7 = 「월 출고 比」 분모를 누적 출고금액으로 교체, v6 = A/H 계열 DISPO 분류 + 배치 플랜트 단가)
-      [`weekly-board-v8-week-list-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v9: 75% 미만 소진 기준과 월 매출 대비 재고 비율을 추가했다.
+      //     (v8 = 주차 목록의 PostgREST 1000행 상한 대응, v7 = 「월 출고 比」 분모 교체)
+      [`weekly-board-v9-sales-ratio-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -314,7 +314,7 @@ export async function getWeeklyCategoryDetail(
         } satisfies WeeklyDetailPayload;
       },
       [
-        `weekly-detail-v1-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${[...scopes]
+        `weekly-detail-v2-age-quantities-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${[...scopes]
           .sort()
           .join('+')}`,
       ],

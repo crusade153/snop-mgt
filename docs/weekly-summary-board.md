@@ -194,6 +194,9 @@ M30 즉석밥1   M31 FD        M32 즉석밥2
 **단가 기준 통일(확정): 재고·출고·생산 세 열 모두 `ending_inventory` 원가단가를 쓴다.**
 납품매출액(`NETWR`)은 「월매출 비」의 **분모 전용**이며, 출고 금액과 섞지 않는다.
 
+「소진 필요」는 소비기한 잔여율 **75% 미만** 세 구간(`~50%`, `50~70%`, `70~75%`)의
+재고금액 합계와 전체 재고 대비 비중으로 계산한다.
+
 ⚠️ **품질대기(CINSM)는 재고에 넣지 않는다.** `/stock` 의 「재고금액」이 가용재고(CLABS)만 세기 때문이다.
 초기 구현이 `CLABS + CINSM` 을 더해 두 화면이 137.2억 vs 126.3억으로 어긋났다. 쿼리 단계에서 `CLABS > 0` 으로 막는다.
 
@@ -328,12 +331,18 @@ snop_weekly_inventory_snapshots
   bucket_70_75     numeric
   bucket_75_85     numeric
   bucket_85_over   numeric
+  bucket_qty_under50 numeric -- 잔여율 구간별 재고수량 5열
+  bucket_qty_50_70   numeric
+  bucket_qty_70_75   numeric
+  bucket_qty_75_85   numeric
+  bucket_qty_85_over numeric
 
   shipped_qty      numeric   -- 주간 출고 (VDATU)
   shipped_value    numeric   -- 원가단가 환산
   produced_qty     numeric   -- 주간 생산 (MB51 101-102)
   produced_value   numeric   -- 원가단가 환산
-  sales_amount     numeric   -- 해당 주 납품매출액(NETWR) — 월매출 비 분자 누적용
+  sales_amount     numeric   -- 해당 주 납품매출액(NETWR)
+  sales_mtd        numeric   -- 당월 누적 납품매출액(NETWR) — 월매출 비 분모
 
   unit_price       numeric
   price_month      text      -- 실제 적용된 단가 기준월 (예: 202606)
@@ -496,7 +505,7 @@ A 계열을 M 과 같은 규칙으로 묶고 H01 을 `상품` 으로 떼면서 �
 - 주간 출고금액·누적 출고금액·생산금액·재고금액이 **전부 같은 단가**(원가팀 기말재고 단가)다.
 - 누적 출고는 주간 출고와 같은 기준(`SD_ZASSDDV0020`, VDATU, BOX→기본단위 환산)이며 기간만 당월 1일~주차 종료일이다.
 - 적재 열이 `shipped_mtd_qty` / `shipped_mtd_value` 로 늘었다. **`supabase/weekly-summary-board.sql` 의 4절 ALTER 를 먼저 실행해야 적재가 된다.**
-- NETWR 은 `sales_amount`·`sales_mtd` 로 계속 적재하지만 비율에는 쓰지 않는다(실매출 참고용).
+- NETWR 은 `sales_amount`·`sales_mtd` 로 적재하며, `sales_mtd` 는 별도 「월 매출 比 재고금액」의 분모로 쓴다.
 
 ### 남은 일 ② — 이슈재고 소진 구글시트 (8절)
 

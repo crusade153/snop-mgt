@@ -175,6 +175,15 @@ console.log('\n[4] 불변식');
   check('구간 합 = 재고금액', mismatched.length === 0,
     mismatched.length ? `${mismatched.length}행 불일치 (예: ${mismatched[0].material_code})` : '전 행 일치');
 
+  const quantityMismatched = rows.filter((row) => {
+    const bucketSum =
+      row.bucket_qty_under50 + row.bucket_qty_50_70 + row.bucket_qty_70_75 +
+      row.bucket_qty_75_85 + row.bucket_qty_85_over;
+    return Math.abs(bucketSum - row.stock_qty) > 0.01;
+  });
+  check('구간 수량 합 = 재고수량', quantityMismatched.length === 0,
+    quantityMismatched.length ? `${quantityMismatched.length}행 불일치 (예: ${quantityMismatched[0].material_code})` : '전 행 일치');
+
   // 출고·생산·매출은 SKU 당 한 창고그룹에만 실려야 한다(창고그룹으로 나눌 수 없는 값이라서).
   const flowScopes = new Map();
   rows.forEach((row) => {
@@ -302,11 +311,19 @@ console.log('\n[6] 카테고리 드릴다운 상세 (메인 표와 모수가 같
   check('상세는 SKU 당 한 줄', codes.length === new Set(codes).size,
     `${codes.length.toLocaleString('ko-KR')}줄`);
 
-  // 소진필요 = 잔여율 70% 미만 두 구간의 합. 메인 표의 「소진 필요」와 같은 정의여야 한다.
+  // 소진필요 = 잔여율 75% 미만 세 구간의 합. 메인 표의 「소진 필요」와 같은 정의여야 한다.
   const riskMismatch = all.rows.filter(
-    (row) => Math.abs(row.riskValue - (row.buckets.under50 + row.buckets.r50_70)) > 1,
+    (row) => Math.abs(row.riskValue - (row.buckets.under50 + row.buckets.r50_70 + row.buckets.r70_75)) > 1,
   );
-  check('소진필요 = 50%미만 + 50~70%', riskMismatch.length === 0);
+  check('소진필요 = 잔여율 75% 미만', riskMismatch.length === 0);
+  check('상세 구간 수량 사용 가능', all.hasBucketQuantities);
+
+  const ratioMismatch = board.rows.filter((row) =>
+    row.salesMtd > 0
+      ? Math.abs(row.stockToSalesRatio - row.stockValue / row.salesMtd) > 1e-9
+      : row.stockToSalesRatio !== null,
+  );
+  check('월 매출 比 = 재고금액 ÷ 실제 월 매출액', ratioMismatch.length === 0);
 
   // ⚠️ 잔여일이 없는 재고(기한없음)를 0 으로 채우면 '오늘 폐기'로 맨 위에 온다. null 로 남아야 한다.
   const zeroDay = all.rows.filter((row) => row.minRemainDay === 0);

@@ -81,6 +81,8 @@ interface Accumulator {
   value: number;
   /** 잔여율 구간별 **금액** */
   buckets: ReturnType<typeof createWeeklyBuckets>;
+  /** 잔여율 구간별 **수량** */
+  bucketQuantities: ReturnType<typeof createWeeklyBuckets>;
   /**
    * 가장 임박한 배치의 잔여일. 기한없음 배치는 세지 않는다(없으면 null 로 남는다).
    * 상세표의 「소비기한 임박」 정렬 축이라 **수량이 아니라 최솟값**이어야 한다 —
@@ -146,6 +148,7 @@ function touch(
       qty: 0,
       value: 0,
       buckets: createWeeklyBuckets(),
+      bucketQuantities: createWeeklyBuckets(),
       minRemainDay: null,
       rateWeighted: 0,
       rateWeight: 0,
@@ -247,6 +250,7 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     const rate = hasExpiry ? normalizeRate(row.remain_rate) : null;
     const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
     entry.buckets[bucketKey] += value;
+    entry.bucketQuantities[bucketKey] += qty;
     if (rate !== null) rememberRemain(entry, Number(row.remain_day), rate, value);
   });
 
@@ -272,6 +276,7 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       : null;
     const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
     entry.buckets[bucketKey] += value;
+    entry.bucketQuantities[bucketKey] += qty;
     if (rate !== null) rememberRemain(entry, Number(row.REMAINING_DAY), rate, value);
   });
 
@@ -360,6 +365,11 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       bucket_70_75: Math.round(entry.buckets.r70_75),
       bucket_75_85: Math.round(entry.buckets.r75_85),
       bucket_85_over: Math.round(entry.buckets.over85),
+      bucket_qty_under50: Math.round(entry.bucketQuantities.under50 * 1000) / 1000,
+      bucket_qty_50_70: Math.round(entry.bucketQuantities.r50_70 * 1000) / 1000,
+      bucket_qty_70_75: Math.round(entry.bucketQuantities.r70_75 * 1000) / 1000,
+      bucket_qty_75_85: Math.round(entry.bucketQuantities.r75_85 * 1000) / 1000,
+      bucket_qty_85_over: Math.round(entry.bucketQuantities.over85 * 1000) / 1000,
       shipped_qty: Math.round(shippedQty * 1000) / 1000,
       shipped_value: Math.round(shippedQty * unitPrice),
       produced_qty: Math.round(producedQty * 1000) / 1000,
@@ -368,7 +378,7 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       shipped_mtd_qty: Math.round(shippedMtdQty * 1000) / 1000,
       shipped_mtd_value: Math.round(shippedMtdQty * unitPrice),
       sales_amount: Math.round(shipment?.sales || 0),
-      // 매출액(NETWR)은 판매가라 비율 계산에 쓰지 않는다. 실적 참고용으로만 남긴다.
+      // 매출액(NETWR)은 원가 환산 출고와 섞지 않고 「월 매출 比 재고금액」의 분모로만 쓴다.
       sales_mtd: Math.round(mtdShipment?.sales || 0),
       // 여러 플랜트에 걸친 자재는 재고금액이 플랜트별 단가로 쌓이므로 `stock_qty × unit_price` 와 몇 원 어긋난다.
       unit_price: unitPrice,

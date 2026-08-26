@@ -26,6 +26,7 @@ import InfoTooltip from '@/components/info-tooltip';
 import {
   WEEKLY_BUCKET_KEYS,
   WEEKLY_BUCKET_LABELS,
+  WEEKLY_RISK_BUCKET_KEYS,
   formatNoteAmount,
   toEok,
   type WeeklyBuckets,
@@ -33,7 +34,6 @@ import {
 import type { WeeklyDetailRow } from '@/lib/weekly/board';
 import {
   WEEKLY_DEFAULT_SCOPES,
-  WEEKLY_STORAGE_SCOPE_LABELS,
   type WeeklyCategory,
   type WeeklyCm,
 } from '@/lib/weekly/classification';
@@ -42,7 +42,7 @@ import {
  * 구간 색 — 왼쪽(임박)이 붉고 오른쪽(안전)이 푸르다. 원본 엑셀 차트와 같은 방향이다.
  *
  * ⚠️ **안전 구간(75% 이상)은 일부러 채도를 낮췄다.** 다섯 색이 모두 진하면 재고금액의 절반을 차지하는
- * 파란 조각이 시선을 먼저 가져가서 "어디가 문제인가"가 늦게 읽힌다. 위험 두 구간만 진하게 둔다.
+ * 파란 조각이 시선을 먼저 가져가서 "어디가 문제인가"가 늦게 읽힌다. 75% 미만 위험 구간만 진하게 둔다.
  */
 const BUCKET_COLORS: Record<keyof WeeklyBuckets, string> = {
   under50: '#D32F2F',
@@ -52,14 +52,14 @@ const BUCKET_COLORS: Record<keyof WeeklyBuckets, string> = {
   over85: '#90CAF9',
 };
 
-/** 소진이 필요한 구간. 표·차트·요약 모두 이 정의 하나를 쓴다. */
-const RISK_BUCKET_KEYS: (keyof WeeklyBuckets)[] = ['under50', 'r50_70'];
+/** 소진 기준은 집계 모듈의 단일 정의를 그대로 쓴다. */
+const RISK_BUCKET_KEYS = WEEKLY_RISK_BUCKET_KEYS;
 
 /** 위험 구간 열에 얹는 옅은 배경 — 숫자를 가리지 않을 만큼만 */
 const BUCKET_CELL_TONE: Record<keyof WeeklyBuckets, string> = {
   under50: 'bg-[#FFF5F5] text-[#C62828] font-semibold',
   r50_70: 'bg-[#FFF8F0] text-[#E65100]',
-  r70_75: 'text-neutral-600',
+  r70_75: 'bg-[#FFFDE7] text-[#F9A825]',
   r75_85: 'text-neutral-400',
   over85: 'text-neutral-400',
 };
@@ -76,8 +76,8 @@ type DetailSortKey = 'stockValue' | 'riskValue' | 'riskRatio' | 'remain' | 'ship
 
 const DETAIL_SORTS: { key: DetailSortKey; label: string; hint: string }[] = [
   { key: 'stockValue', label: '재고금액', hint: '재고금액이 큰 순' },
-  { key: 'riskValue', label: '소진필요 금액', hint: '잔여율 70% 미만 재고금액이 큰 순' },
-  { key: 'riskRatio', label: '소진필요 비중', hint: '재고 대비 잔여율 70% 미만 비중이 높은 순' },
+  { key: 'riskValue', label: '소진필요 금액', hint: '잔여율 75% 미만 재고금액이 큰 순' },
+  { key: 'riskRatio', label: '소진필요 비중', hint: '재고 대비 잔여율 75% 미만 비중이 높은 순' },
   { key: 'remain', label: '소비기한 임박', hint: '가장 임박한 배치의 잔여일이 짧은 순' },
   { key: 'shipped', label: '주간 출고', hint: '이번 주 출고금액이 큰 순' },
   { key: 'ratio', label: '월 출고 比', hint: '재고금액 ÷ 당월 누적 출고금액이 높은 순' },
@@ -183,6 +183,7 @@ export default function WeeklyBoardPage() {
 
   const detail = detailData?.detail ?? null;
   const hasRemainDay = detail?.hasRemainDay ?? false;
+  const hasBucketQuantities = detail?.hasBucketQuantities ?? false;
 
   /** 정렬·검색은 클라이언트에서 한다 — 카테고리 하나가 수백 SKU 라 왕복할 이유가 없다 */
   const detailRows = useMemo(() => {
@@ -257,7 +258,36 @@ export default function WeeklyBoardPage() {
   const moneyCell = (value: number) =>
     Math.round(value) === 0 ? <span className="text-neutral-300">-</span> : money(value);
 
-  /** 소진이 필요한 구간(50% 미만 + 50~70%)의 금액과 비중 */
+  /** 상세 연령구간은 수량을 주지표, 금액을 보조지표로 같은 셀에 쌓는다. */
+  const bucketQuantityCell = (
+    quantity: number,
+    value: number,
+    itemUnit: string,
+    available: boolean
+  ) => {
+    if (!available) {
+      return (
+        <span className="inline-flex flex-col items-end leading-tight">
+          <span className="text-neutral-300">-</span>
+          <span className="mt-0.5 text-[9px] tabular-nums text-neutral-400">{money(value)}</span>
+        </span>
+      );
+    }
+    if (Math.abs(quantity) < 0.0005 && Math.round(value) === 0) {
+      return <span className="text-neutral-300">-</span>;
+    }
+    return (
+      <span className="inline-flex flex-col items-end leading-tight">
+        <span className="font-medium tabular-nums text-neutral-700">
+          {Math.round(quantity).toLocaleString('ko-KR')}
+          <span className="ml-0.5 text-[8px] font-normal text-neutral-400">{itemUnit}</span>
+        </span>
+        <span className="mt-0.5 text-[9px] tabular-nums text-neutral-400">{money(value)}</span>
+      </span>
+    );
+  };
+
+  /** 소진이 필요한 구간(잔여율 75% 미만)의 금액과 비중 */
   const riskOf = (buckets: WeeklyBuckets, stockValue: number) => {
     const value = RISK_BUCKET_KEYS.reduce((sum, key) => sum + (buckets[key] || 0), 0);
     return { value, ratio: stockValue > 0 ? value / stockValue : 0 };
@@ -387,9 +417,9 @@ export default function WeeklyBoardPage() {
           <section className="rounded-lg border border-neutral-200 bg-white">
             <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_230px]">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1040px] text-right text-xs">
+                <table className="w-full min-w-[1120px] text-right text-xs">
                   <thead>
-                    {/* 열이 13개다. 그룹 머리행이 없으면 어디까지가 흐름이고 어디부터가 구간인지 매번 세어야 한다. */}
+                    {/* 열이 많아 그룹 머리행으로 흐름·연령·재고 지표 경계를 고정한다. */}
                     <tr className="bg-neutral-100 text-[10px] text-neutral-500">
                       <th className="px-1.5 pt-1.5 text-center font-bold" colSpan={3} rowSpan={2}>
                         <span className="text-[11px] text-neutral-700">구분</span>
@@ -408,7 +438,7 @@ export default function WeeklyBoardPage() {
                       </th>
                       <th
                         className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
-                        colSpan={3}
+                        colSpan={4}
                       >
                         당주 재고
                       </th>
@@ -439,13 +469,20 @@ export default function WeeklyBoardPage() {
                       <th className="px-1.5 pb-1.5 font-bold">
                         <span className="flex items-center justify-end gap-1">
                           소진 필요
-                          <InfoTooltip text="소비기한 잔여율 70% 미만(50% 미만 + 50~70%) 재고금액과 그 비중입니다. 이 비중이 높은 행부터 소진 계획이 필요합니다." />
+                          <InfoTooltip text="소비기한 잔여율 75% 미만(50% 미만 + 50~70% + 70~75%) 재고금액과 그 비중입니다. 이 비중이 높은 행부터 소진 계획이 필요합니다." />
                         </span>
                       </th>
                       <th className="px-1.5 pb-1.5 font-bold">
                         <span className="flex items-center justify-end gap-1">
                           월 출고 比
                           <InfoTooltip text="재고금액 ÷ 당월 누적 출고금액입니다. 출고금액도 재고와 똑같이 완제품 재고단가로 환산하므로, 200% 는 '이번 달 출고량의 2배를 쌓아두고 있다'로 읽으면 됩니다. 매출액(판매가)이 분모였을 때는 마진율만큼 비율이 눌려 이렇게 읽을 수 없었습니다." />
+                        </span>
+                        재고금액
+                      </th>
+                      <th className="px-1.5 pb-1.5 font-bold">
+                        <span className="flex items-center justify-end gap-1">
+                          월 매출 比
+                          <InfoTooltip text="재고금액 ÷ 당월 누적 실제 납품매출액(NETWR)입니다. 판매가 기준의 실제 매출과 현재 재고자산을 비교해 현금 흐름 부담을 판단합니다." />
                         </span>
                         재고금액
                       </th>
@@ -531,6 +568,9 @@ export default function WeeklyBoardPage() {
                           <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
                             {percent(row.stockToShipmentRatio)}
                           </td>
+                          <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
+                            {percent(row.stockToSalesRatio)}
+                          </td>
                         </tr>
                       );
                     })}
@@ -584,6 +624,9 @@ export default function WeeklyBoardPage() {
                       </td>
                       <td className="px-1.5 py-2 tabular-nums">
                         {percent(board.totals.stockToShipmentRatio)}
+                      </td>
+                      <td className="px-1.5 py-2 tabular-nums">
+                        {percent(board.totals.stockToSalesRatio)}
                       </td>
                     </tr>
                   </tbody>
@@ -737,13 +780,11 @@ export default function WeeklyBoardPage() {
                 {detail && (
                   <>
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[1120px] text-right text-xs">
+                      <table className="w-full min-w-[1480px] text-right text-xs">
                         <thead>
                           <tr className="bg-neutral-100 text-[10px] text-neutral-600">
                             <th className="px-1.5 py-1.5 text-left font-bold">자재코드</th>
                             <th className="px-1.5 py-1.5 text-left font-bold">품명</th>
-                            <th className="px-1.5 py-1.5 text-center font-bold">DISPO</th>
-                            <th className="px-1.5 py-1.5 text-center font-bold">창고</th>
                             <th className="border-l border-neutral-200 px-1.5 py-1.5 font-bold">
                               재고수량
                             </th>
@@ -758,12 +799,23 @@ export default function WeeklyBoardPage() {
                             <th className="px-1.5 py-1.5 font-bold">잔여율</th>
                             <th className="px-1.5 py-1.5 font-bold text-[#C62828]">소진필요</th>
                             <th className="px-1.5 py-1.5 font-bold">비중</th>
+                            {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                              <th
+                                key={key}
+                                className={`px-1.5 py-1.5 font-bold ${
+                                  index === 0 ? 'border-l border-neutral-200' : ''
+                                } ${RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : ''}`}
+                              >
+                                {WEEKLY_BUCKET_LABELS[key].split(' [')[0]}
+                                <br />
+                                <span className="font-normal text-neutral-400">수량 / 금액</span>
+                              </th>
+                            ))}
                             <th className="border-l border-neutral-200 px-1.5 py-1.5 font-bold">
                               주간 출고
                             </th>
                             <th className="px-1.5 py-1.5 font-bold">주간 생산</th>
                             <th className="px-1.5 py-1.5 font-bold">월 출고 比</th>
-                            <th className="px-1.5 py-1.5 font-bold">단가</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -780,18 +832,6 @@ export default function WeeklyBoardPage() {
                                 title={row.productName}
                               >
                                 {row.productName}
-                              </td>
-                              <td className="px-1.5 py-1.5 text-center text-[10px] text-neutral-400">
-                                {row.dispo || '-'}
-                              </td>
-                              <td className="px-1.5 py-1.5 text-center text-[10px] text-neutral-400">
-                                {row.scopes.length
-                                  ? row.scopes
-                                      .map((scope) =>
-                                        WEEKLY_STORAGE_SCOPE_LABELS[scope].replace(' 재고', '')
-                                      )
-                                      .join('·')
-                                  : '-'}
                               </td>
                               <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-600">
                                 {Math.round(row.stockQty).toLocaleString('ko-KR')}
@@ -845,6 +885,21 @@ export default function WeeklyBoardPage() {
                                   </span>
                                 </div>
                               </td>
+                              {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                                <td
+                                  key={key}
+                                  className={`px-1.5 py-1.5 tabular-nums ${BUCKET_CELL_TONE[key]} ${
+                                    index === 0 ? 'border-l border-neutral-100' : ''
+                                  }`}
+                                >
+                                  {bucketQuantityCell(
+                                    row.bucketQuantities[key],
+                                    row.buckets[key],
+                                    row.unit,
+                                    row.hasBucketQuantities
+                                  )}
+                                </td>
+                              ))}
                               <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-500">
                                 {moneyCell(row.shippedValue)}
                               </td>
@@ -854,28 +909,17 @@ export default function WeeklyBoardPage() {
                               <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
                                 {percent(row.stockToShipmentRatio)}
                               </td>
-                              <td className="px-1.5 py-1.5 text-[10px] tabular-nums text-neutral-400">
-                                {Math.round(row.unitPrice).toLocaleString('ko-KR')}
-                                {row.priceSource !== 'ENDING_INVENTORY' && (
-                                  <span
-                                    className="ml-0.5 text-amber-600"
-                                    title="원가팀 기말재고 단가가 없어 금액이 0 이거나 추정입니다"
-                                  >
-                                    *
-                                  </span>
-                                )}
-                              </td>
                             </tr>
                           ))}
                           {detailPageRows.length === 0 && (
                             <tr>
-                              <td colSpan={15} className="py-6 text-center text-[11px] text-neutral-400">
+                              <td colSpan={17} className="py-6 text-center text-[11px] text-neutral-400">
                                 조건에 맞는 품목이 없습니다.
                               </td>
                             </tr>
                           )}
                           <tr className="bg-[#FFF3E0] text-[11px] font-bold">
-                            <td className="px-1.5 py-1.5 text-left" colSpan={4}>
+                            <td className="px-1.5 py-1.5 text-left" colSpan={2}>
                               합계 ({detail.totals.itemCount.toLocaleString('ko-KR')}품목)
                             </td>
                             <td className="border-l border-neutral-200 px-1.5 py-1.5 text-neutral-400">
@@ -894,13 +938,23 @@ export default function WeeklyBoardPage() {
                               {money(detail.totals.riskValue)}
                             </td>
                             <td className="px-1.5 py-1.5" />
+                            {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                              <td
+                                key={key}
+                                className={`px-1.5 py-1.5 tabular-nums ${
+                                  RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : 'text-neutral-600'
+                                } ${index === 0 ? 'border-l border-neutral-200' : ''}`}
+                              >
+                                {money(detail.totals.buckets[key])}
+                              </td>
+                            ))}
                             <td className="border-l border-neutral-200 px-1.5 py-1.5 tabular-nums">
                               {money(detail.totals.shippedValue)}
                             </td>
                             <td className="px-1.5 py-1.5 tabular-nums">
                               {money(detail.totals.producedValue)}
                             </td>
-                            <td className="px-1.5 py-1.5" colSpan={2} />
+                            <td className="px-1.5 py-1.5" />
                           </tr>
                         </tbody>
                       </table>
@@ -943,6 +997,14 @@ export default function WeeklyBoardPage() {
                         이 주차는 소비기한 잔여일이 적재되지 않아 「소비기한 임박」 정렬을 쓸 수 없습니다.
                         재고는 소급 계산이 불가능해 과거 주차를 다시 채울 수 없고, 다음 적재부터 채워집니다.
                         그동안은 「소진필요 비중」으로 임박도를 대신 볼 수 있습니다.
+                      </p>
+                    )}
+                    {detail.missingBucketQuantityCount > 0 && (
+                      <p className="mt-1.5 text-[10px] text-amber-700">
+                        {hasBucketQuantities
+                          ? `구형 잔존 ${detail.missingBucketQuantityCount.toLocaleString('ko-KR')}개 품목은 구간 수량을 역산할 수 없어 수량만 '-'로 표시합니다.`
+                          : '이 주차는 연령구간별 수량 열 추가 이전에 적재되어 수량만 비워 표시합니다.'}{' '}
+                        금액은 기존 스냅샷 값을 그대로 표시합니다.
                       </p>
                     )}
                   </>

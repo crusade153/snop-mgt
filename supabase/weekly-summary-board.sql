@@ -31,6 +31,11 @@ create table if not exists public.snop_weekly_inventory_snapshots (
   bucket_70_75 numeric not null default 0,
   bucket_75_85 numeric not null default 0,
   bucket_85_over numeric not null default 0,
+  bucket_qty_under50 numeric not null default 0, -- 잔여율 구간별 재고수량
+  bucket_qty_50_70 numeric not null default 0,
+  bucket_qty_70_75 numeric not null default 0,
+  bucket_qty_75_85 numeric not null default 0,
+  bucket_qty_85_over numeric not null default 0,
 
   shipped_qty numeric not null default 0,      -- 주간 출고 (VDATU, LFIMG_LIPS)
   shipped_value numeric not null default 0,    -- 원가단가 환산
@@ -39,7 +44,7 @@ create table if not exists public.snop_weekly_inventory_snapshots (
   shipped_mtd_qty numeric not null default 0,  -- 당월 1일~주차 종료일 누적 출고 수량
   shipped_mtd_value numeric not null default 0,-- 원가단가 환산. 「월 출고 比 재고금액」의 분모다
   sales_amount numeric not null default 0,     -- 해당 주 납품매출액(NETWR). 참고용
-  sales_mtd numeric not null default 0,        -- 당월 누적 납품매출액(NETWR). 참고용, 비율에는 쓰지 않는다
+  sales_mtd numeric not null default 0,        -- 당월 누적 납품매출액(NETWR). 「월 매출 比」의 분모
 
   unit_price numeric not null default 0,
   price_month text,                     -- 실제 적용된 단가 기준월 (예: 202606)
@@ -121,3 +126,17 @@ alter table public.snop_weekly_inventory_snapshots
 alter table public.snop_weekly_inventory_snapshots
   add column if not exists min_remain_day numeric,
   add column if not exists avg_remain_rate numeric;
+
+-- ---------------------------------------------------------------------------
+-- 6. 소비기한 잔여율 구간별 재고수량 (상세 시트의 수량/금액 병기)
+--
+-- 기존 bucket_* 열은 금액만 보존하므로 단가가 플랜트별로 다른 SKU 의 정확한 구간 수량을
+-- 역산할 수 없다. 적재 시 배치 수량을 같은 구간으로 따로 누적한다.
+-- 과거 주차는 기본값 0 으로 남고, 화면은 stock_qty 와 합이 맞지 않으면 '-' 로 표시한다.
+-- ---------------------------------------------------------------------------
+alter table public.snop_weekly_inventory_snapshots
+  add column if not exists bucket_qty_under50 numeric not null default 0,
+  add column if not exists bucket_qty_50_70 numeric not null default 0,
+  add column if not exists bucket_qty_70_75 numeric not null default 0,
+  add column if not exists bucket_qty_75_85 numeric not null default 0,
+  add column if not exists bucket_qty_85_over numeric not null default 0;

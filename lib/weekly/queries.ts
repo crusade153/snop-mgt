@@ -175,7 +175,7 @@ export function buildWeeklyProductionQuery(fromCompact: string, toCompact: strin
  * ⚠️ 수량(LFIMG_LIPS)을 뽑는 것이 핵심이다. 금액은 호출부에서 **완제품 재고단가**로 환산한다.
  * 예전에는 매출액(NETWR)을 분모로 썼는데, 분자인 재고금액은 원가이고 분모는 판매가라
  * 마진율만큼 비율이 눌려 "재고가 몇 주치인가"로 읽을 수 없었다.
- * NETWR 도 함께 돌려주지만 참고용이며 이 비율에는 쓰지 않는다.
+ * NETWR 도 함께 돌려주며 별도 「월 매출 比 재고금액」의 분모로 쓴다.
  *
  * 주간 출고와 완전히 같은 기준(VDATU, BOX 환산)이어야 두 열을 나란히 놓고 볼 수 있다.
  */

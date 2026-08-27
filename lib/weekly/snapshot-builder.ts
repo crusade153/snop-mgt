@@ -16,6 +16,7 @@ import { getEndingInventoryPrices, resolveUnitPrice } from '@/lib/ending-invento
 import {
   categoryOfDispo,
   isFbhMirrorLocation,
+  pickFallbackDispo,
   pickPrimaryDispo,
   plantOfCategory,
   storageScopeOfLgort,
@@ -38,8 +39,10 @@ import { monthToDateRange, toCompactDate, type WeekRange } from '@/lib/weekly/we
 
 interface DispoRow {
   MATNR: string;
-  /** 플랜트 코드 오름차순 후보. 한 자재가 플랜트마다 다른 DISPO 를 갖는다 */
+  /** 생산 플랜트(1021·1022·1023) 후보. 플랜트 코드 오름차순 */
   CANDIDATES: { DISPO: string | null; WERKS: string | null }[];
+  /** 판매법인(1031) 후보. 생산 후보가 없을 때 상품(H01)만 폴백으로 쓴다 */
+  SALES_CANDIDATES: { DISPO: string | null; WERKS: string | null }[];
 }
 
 interface PlantInventoryRow {
@@ -212,9 +215,17 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   const plantByCode = new Map<string, string>();
   dispoRows.forEach((row) => {
     const candidates = row.CANDIDATES || [];
-    const dispo = pickPrimaryDispo(candidates.map((candidate) => candidate.DISPO));
-    if (!dispo) return;
     const code = String(row.MATNR);
+    const dispo = pickPrimaryDispo(candidates.map((candidate) => candidate.DISPO));
+
+    if (!dispo) {
+      // 생산 플랜트 마스터가 없는 SKU. 상품(H01)이면 판매법인 마스터를 그대로 믿는다.
+      // ⚠️ 대표 플랜트는 채우지 않는다 — 1031 은 생산 플랜트가 아니라 단가 기준이 될 수 없다.
+      const fallback = pickFallbackDispo((row.SALES_CANDIDATES || []).map((candidate) => candidate.DISPO));
+      if (fallback) dispoByCode.set(code, fallback);
+      return;
+    }
+
     dispoByCode.set(code, dispo);
     const matched = candidates.find((candidate) => String(candidate.DISPO || '').trim() === dispo);
     plantByCode.set(code, String(matched?.WERKS || candidates[0]?.WERKS || ''));

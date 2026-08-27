@@ -284,7 +284,9 @@ export function buildWeeklyBoard({
     addBuckets(target.buckets, bucketsOfRow(row));
 
     if (classifyRow(row).category === '기타') {
-      const dispo = row.dispo || '(마스터없음)';
+      // 「마스터없음」이 아니라 「마스터정비」다 — 데이터가 빠진 게 아니라
+      // 생산 플랜트 기준정보를 아직 정비 중인 SKU 라는 뜻이다(대부분 판매법인 영업 코드).
+      const dispo = row.dispo || '(마스터정비)';
       const bucket = unmapped.get(dispo) || { value: 0, codes: new Set<string>() };
       bucket.value += row.stock_value || 0;
       bucket.codes.add(row.material_code);

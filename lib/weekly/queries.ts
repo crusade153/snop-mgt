@@ -24,6 +24,12 @@ const MATNR_TO = '69999999';
 const PRODUCTION_PLANTS = ["'1021'", "'1022'", "'1023'"].join(', ');
 
 /**
+ * 판매법인. 여기 DISPO 는 생산라인이 아니라 영업 코드(M33·M36)라 **폴백으로만** 쓴다.
+ * 받아들이는 것은 상품(H01) 하나뿐이고, 판단은 `pickFallbackDispo` 가 한다.
+ */
+const SALES_PLANT = "'1031'";
+
+/**
  * SKU → DISPO 마스터. **후보를 전부 돌려준다.**
  *
  * 배치재고(MM_MCHB)에 DISPO 가 붙어 있지만 FBH 물류센터 재고에는 없다.
@@ -36,6 +42,9 @@ const PRODUCTION_PLANTS = ["'1021'", "'1022'", "'1023'"].join(', ');
  * 즉석밥이 아니라 미분류로 잡혔다. 이런 품목이 53개·재고금액 9.9억이었다.
  * 그래서 여기서는 고르지 않고 후보를 플랜트 코드 순으로 전부 넘기고,
  * 대표값 선택은 `pickPrimaryDispo`(lib/weekly/classification.ts) 순수 함수가 한다.
+ *
+ * 판매법인(1031) 후보는 **별도 배열로** 넘긴다. 생산 후보와 섞으면 영업 코드가 생산라인 자리를
+ * 차지하므로, 생산 후보가 아예 없을 때만 `pickFallbackDispo` 가 상품(H01)에 한해 꺼내 쓴다.
  */
 export function buildDispoMasterQuery(): string {
   return `
@@ -43,14 +52,21 @@ export function buildDispoMasterQuery(): string {
       SELECT MATNR, WERKS, DISPO
       FROM \`${DATASET}.MM_MARD\`
       WHERE MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
-        AND WERKS IN (${PRODUCTION_PLANTS})
+        AND WERKS IN (${PRODUCTION_PLANTS}, ${SALES_PLANT})
         AND DISPO IS NOT NULL AND DISPO <> ''
       -- 저장위치 단위 행이라 플랜트당 여러 번 나온다. 후보를 세기 전에 접는다.
       GROUP BY MATNR, WERKS, DISPO
     )
     SELECT
       MATNR,
-      ARRAY_AGG(STRUCT(DISPO, WERKS) ORDER BY WERKS, DISPO) AS CANDIDATES
+      ARRAY_AGG(
+        IF(WERKS IN (${PRODUCTION_PLANTS}), STRUCT(DISPO, WERKS), NULL)
+        IGNORE NULLS ORDER BY WERKS, DISPO
+      ) AS CANDIDATES,
+      ARRAY_AGG(
+        IF(WERKS = ${SALES_PLANT}, STRUCT(DISPO, WERKS), NULL)
+        IGNORE NULLS ORDER BY WERKS, DISPO
+      ) AS SALES_CANDIDATES
     FROM master
     GROUP BY MATNR
   `;

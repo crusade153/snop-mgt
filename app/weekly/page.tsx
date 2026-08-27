@@ -13,6 +13,7 @@ import {
   ChevronRight,
   ChevronLeft,
   DatabaseZap,
+  Download,
   RefreshCw,
   X,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import {
   getWeeklyCategoryDetail,
 } from '@/actions/weekly-actions';
 import CanvasStackedBarChart from '@/components/charts/canvas-stacked-bar-chart';
+import { exportToExcel } from '@/lib/excel-export';
 import InfoTooltip from '@/components/info-tooltip';
 import {
   WEEKLY_BUCKET_KEYS,
@@ -34,6 +36,7 @@ import {
 import type { WeeklyDetailRow } from '@/lib/weekly/board';
 import {
   WEEKLY_DEFAULT_SCOPES,
+  WEEKLY_STORAGE_SCOPE_LABELS,
   type WeeklyCategory,
   type WeeklyCm,
 } from '@/lib/weekly/classification';
@@ -233,6 +236,56 @@ export default function WeeklyBoardPage() {
     detailPageSafe * DETAIL_PAGE_SIZE,
     detailPageSafe * DETAIL_PAGE_SIZE + DETAIL_PAGE_SIZE
   );
+
+  /**
+   * 상세 리스트를 엑셀로 내린다 — **화면에 보이는 페이지가 아니라 필터·정렬이 끝난 전체 목록**이다.
+   *
+   * DISPO 는 화면 표에는 없지만 파일에는 넣는다. 카테고리·CM 이 DISPO 에서 판정되므로,
+   * 받아서 다시 피벗할 때 「이 줄이 왜 이 칸에 들어갔나」를 가르는 구분자가 그 값 하나뿐이다.
+   */
+  const handleDownloadDetail = () => {
+    if (!detail || detailRows.length === 0) return;
+    const label = [drill?.cm, drill?.category].filter(Boolean).join('_') || '전체';
+
+    exportToExcel(
+      detailRows.map((row) => ({
+        '자재코드': row.materialCode,
+        '품명': row.productName,
+        // 화면에는 없는 열이다. 카테고리·CM 판정의 근거라 파일에서는 첫 구분자로 둔다.
+        'DISPO': row.dispo || '(마스터정비)',
+        'CM': row.cm,
+        '공장': row.plant,
+        '카테고리': row.category,
+        '창고그룹': row.scopes.map((scope) => WEEKLY_STORAGE_SCOPE_LABELS[scope]).join(', '),
+        '단위': row.unit,
+        '재고수량': Math.round(row.stockQty),
+        '재고금액': Math.round(row.stockValue),
+        '전주 재고금액': detail.hasPrevious ? Math.round(row.previousStockValue) : null,
+        '전주 比': row.stockDelta === null ? null : Math.round(row.stockDelta),
+        '잔여일(최악 배치)': row.minRemainDay === null ? null : Math.round(row.minRemainDay),
+        '잔여율(금액가중, %)': row.avgRemainRate === null ? null : Math.round(row.avgRemainRate),
+        '소진필요(75%미만)': Math.round(row.riskValue),
+        '소진필요 비중(%)': Math.round(row.riskRatio * 100),
+        ...WEEKLY_BUCKET_KEYS.reduce<Record<string, number | null>>((acc, key) => {
+          const name = WEEKLY_BUCKET_LABELS[key].split(' [')[0];
+          // 구간 수량은 열이 없던 주차에서 0 으로 채워져 있다. 0 과 「모름」을 섞지 않는다.
+          acc[`${name} 수량`] = row.hasBucketQuantities ? Math.round(row.bucketQuantities[key]) : null;
+          acc[`${name} 금액`] = Math.round(row.buckets[key]);
+          return acc;
+        }, {}),
+        '주간 출고금액': Math.round(row.shippedValue),
+        '주간 출고수량': Math.round(row.shippedQty),
+        '주간 생산금액': Math.round(row.producedValue),
+        '주간 생산수량': Math.round(row.producedQty),
+        '월 누적 출고금액': Math.round(row.shipmentMtd),
+        '월 출고 比(%)':
+          row.stockToShipmentRatio === null ? null : Math.round(row.stockToShipmentRatio * 100),
+        '단가': Math.round(row.unitPrice),
+        '단가 기준월': row.priceMonth || '',
+      })),
+      `주간재고_${label}_${activeWeek || ''}`
+    );
+  };
 
   /** 같은 칸을 다시 누르면 접는다 */
   const toggleDrill = (cm: WeeklyCm | null, category: WeeklyCategory) => {
@@ -771,6 +824,17 @@ export default function WeeklyBoardPage() {
                     placeholder="자재코드·품명 검색"
                     className="ml-auto w-40 rounded-md border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-[#1565C0]"
                   />
+
+                  {/* 화면은 20줄씩 끊어 보여주지만 파일은 필터·정렬이 끝난 전체 목록이다 */}
+                  <button
+                    onClick={handleDownloadDetail}
+                    disabled={detailRows.length === 0}
+                    title={`${detailRows.length.toLocaleString('ko-KR')}품목을 엑셀로 내려받습니다 (DISPO 포함, 지금 보이는 페이지가 아니라 전체)`}
+                    className="flex items-center gap-1 rounded-md border border-green-200 bg-white px-2 py-1 text-[11px] font-bold text-green-700 transition-colors hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Download size={12} />
+                    엑셀
+                  </button>
                 </div>
 
                 {detailLoading && !detail && (

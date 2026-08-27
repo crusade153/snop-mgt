@@ -94,6 +94,10 @@ const CATEGORY_BY_DISPO: Record<string, WeeklyCategory> = {
   '07': 'HMI',
   '08': 'HMI',
   '09': 'HMI',
+  // 18 은 라인표에 없던 코드라 한동안 기타에 뒀는데, 실측으로 정체가 확인됐다 —
+  // M18 이 달린 SKU 는 예외 없이 쌀밥이다(더미식 고시히카리·찰현미·귀리·흑미쌀밥,
+  // 5KPRICE·이마트24 백미밥 …). 전부 플랜트 1022 에만 등록돼 있고 다른 후보가 없다.
+  '18': '즉석밥',
   '30': '즉석밥',
   '31': '즉석밥',
   '32': '즉석밥',
@@ -174,6 +178,23 @@ export function pickPrimaryDispo(candidates: (string | null | undefined)[]): str
   const values = candidates.map((value) => String(value || '').trim()).filter(Boolean);
   if (values.length === 0) return null;
   return values.find((value) => categoryOfDispo(value) !== '기타') || values[0];
+}
+
+/**
+ * 생산 플랜트에 DISPO 가 하나도 없을 때 쓰는 **판매법인(1031) 폴백 — 상품(H01)만 받는다.**
+ *
+ * 1031 의 DISPO 는 M33·M36 같은 영업용 코드라 생산라인으로 읽으면 안 된다. 그래서 원칙은
+ * "생산 플랜트만 본다" 인데, 그 바람에 **H01(상품)까지 통째로 기타에 묻혔다** —
+ * 상품은 애초에 생산하지 않으니 생산 플랜트에 마스터가 없는 게 정상이다.
+ * H01 은 생산라인 코드가 아니라 「상품」이라는 표시라서 판매법인 마스터라도 그대로 믿을 수 있다.
+ * 실측 1031 전용 코드 1,078개(6.71억) 중 H01 이 1.71억이었다.
+ *
+ * ⚠️ **폴백이지 우선순위가 아니다.** 생산 플랜트 DISPO 가 있으면 이 함수는 호출되지 않는다.
+ * 여기서 H01 외의 코드를 받아들이면 영업 코드가 생산라인 자리를 차지한다 — 늘리지 말 것.
+ */
+export function pickFallbackDispo(candidates: (string | null | undefined)[]): string | null {
+  const values = candidates.map((value) => String(value || '').trim()).filter(Boolean);
+  return values.find((value) => categoryOfDispo(value) === '상품') || null;
 }
 
 export function plantOfCategory(category: WeeklyCategory): WeeklyPlant {

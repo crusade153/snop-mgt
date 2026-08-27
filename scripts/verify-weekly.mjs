@@ -73,7 +73,7 @@ const {
 } = await import('@/lib/weekly/week');
 const {
   categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation,
-  pickPrimaryDispo,
+  pickPrimaryDispo, pickFallbackDispo,
 } = await import('@/lib/weekly/classification');
 const { buildDispoMasterQuery } = await import('@/lib/weekly/queries');
 const { buildWeeklyBoard, buildWeeklyDetail, resolveCm, sumBuckets } = await import('@/lib/weekly/board');
@@ -146,16 +146,25 @@ console.log('\n[2] 분류 규칙 (확정된 DISPO 매핑)');
   check('H01(상품) → 상품 카테고리', categoryOfDispo('H01') === '상품' && plantOfDispo('H01') === '기타');
   check('상품 CM 은 CM1~3 과 분리', cmOfCategory('상품') === '상품' &&
     resolveCm('50000001', '상품', new Map([['50000001', 'CM1']])) === '상품');
-  check('M18·마스터없음은 아직 기타',
-    categoryOfDispo('M18') === '기타' && categoryOfDispo('') === '기타' && categoryOfDispo(null) === '기타');
+  check('M18 → 즉석밥/K2 (SKU 가 전부 쌀밥이라 확정한 매핑)',
+    categoryOfDispo('M18') === '즉석밥' && plantOfDispo('M18') === 'K2');
+  check('영업 코드·마스터정비는 기타',
+    categoryOfDispo('M33') === '기타' && categoryOfDispo('M36') === '기타' &&
+    categoryOfDispo('') === '기타' && categoryOfDispo(null) === '기타');
 
   // 자재 하나에 DISPO 가 여럿일 때의 대표값 선택.
   // 미매핑 코드가 앞자리를 차지해 품목 전체가 기타로 떨어지던 버그를 막는 규칙이다.
-  check('여러 DISPO 중 분류되는 코드를 대표로', pickPrimaryDispo(['M18', 'M30']) === 'M30');
+  check('여러 DISPO 중 분류되는 코드를 대표로',
+    pickPrimaryDispo(['M33', 'M30']) === 'M30' && pickPrimaryDispo(['M36', 'A08']) === 'A08');
   check('분류되는 코드가 둘이면 첫 번째 유지 (기존 분류를 흔들지 않는다)',
     pickPrimaryDispo(['A08', 'M11']) === 'A08' && pickPrimaryDispo(['A06', 'M19']) === 'A06');
   check('전부 미매핑이면 첫 값 그대로 (없는 분류를 지어내지 않는다)',
-    pickPrimaryDispo(['M18', 'M33']) === 'M18' && pickPrimaryDispo([null, '', undefined]) === null);
+    pickPrimaryDispo(['M33', 'M36']) === 'M33' && pickPrimaryDispo([null, '', undefined]) === null);
+
+  // 판매법인(1031) 폴백은 상품(H01)만 받는다. 영업 코드가 생산라인 자리를 차지하면 안 된다.
+  check('판매법인 폴백은 H01(상품)만', pickFallbackDispo(['M33', 'H01', 'M36']) === 'H01');
+  check('영업 코드만 있으면 폴백 없음 (기타로 남긴다)',
+    pickFallbackDispo(['M33', 'M36', 'M34']) === null && pickFallbackDispo([]) === null);
   check('저장위치 그룹', storageScopeOfLgort('2210') === 'PLANT' && storageScopeOfLgort('9100') === 'OTHER');
   check('3000(물류창고)은 FBH 미러라 제외', isFbhMirrorLocation('3000') && !isFbhMirrorLocation('2210'));
 }
@@ -229,10 +238,19 @@ console.log('\n[4] 불변식');
   check('분류 가능한 DISPO 가 있는데 기타로 떨어진 자재 없음', wrongly.length === 0,
     wrongly.length ? `${wrongly.length}품목 (예: ${wrongly[0].MATNR})` : '전 품목 통과');
 
-  // 적재 행에도 그대로 반영되는가 (실측 사례: 1022:M18 + 1023:M30 → 즉석밥)
+  // 판매법인 폴백은 상품에만 걸려야 한다. 생산 후보가 없는 SKU 에 DISPO 가 붙었다면 H01 뿐이다.
+  const hasProduction = new Set(
+    masterRows.filter((row) => (row.CANDIDATES || []).length > 0).map((row) => String(row.MATNR))
+  );
+  const fallbackRows = rows.filter((row) => row.dispo && !hasProduction.has(row.material_code));
+  const leaked = fallbackRows.filter((row) => row.dispo !== 'H01' || row.category !== '상품');
+  check('판매법인 폴백은 H01(상품)만 통과', leaked.length === 0,
+    leaked.length ? `${leaked.length}행 (예: ${leaked[0].material_code} ${leaked[0].dispo})` : `${fallbackRows.length}행이 상품으로 들어옴`);
+
+  // 적재 행에도 그대로 반영되는가 (실측 사례: 1022:M18 + 1023:M30 → 둘 다 즉석밥)
   const sample = rows.filter((row) => row.material_code === '50001591');
   check('50001591(M18+M30) → 즉석밥/K2',
-    sample.length === 0 || sample.every((row) => row.dispo === 'M30' && row.category === '즉석밥' && row.plant === 'K2'),
+    sample.length === 0 || sample.every((row) => row.category === '즉석밥' && row.plant === 'K2'),
     sample.length ? `${sample[0].dispo} / ${sample[0].category}` : '해당 주차에 행 없음');
 }
 

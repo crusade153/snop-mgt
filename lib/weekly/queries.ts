@@ -24,23 +24,34 @@ const MATNR_TO = '69999999';
 const PRODUCTION_PLANTS = ["'1021'", "'1022'", "'1023'"].join(', ');
 
 /**
- * SKU → DISPO 마스터.
+ * SKU → DISPO 마스터. **후보를 전부 돌려준다.**
  *
  * 배치재고(MM_MCHB)에 DISPO 가 붙어 있지만 FBH 물류센터 재고에는 없다.
  * 그래서 자재재고 마스터(MM_MARD)에서 생산 플랜트 기준 DISPO 를 한 번 뽑아 두 쪽에 모두 붙인다.
+ *
+ * ⚠️ **한 자재가 플랜트마다 다른 DISPO 를 갖는다**(실측 836품목 중 72품목).
+ * 예전에는 플랜트 코드 순 첫 건을 대표값으로 굳혔는데, 그 첫 건이 하필 미매핑 코드면
+ * 뒤에 멀쩡한 라인 코드가 있어도 통째로 `기타` 로 떨어졌다 —
+ * 실측 50001591(더미식 백미밥)은 `1022:M18`(미매핑) + `1023:M30`(즉석밥)인데 M18 이 대표가 돼
+ * 즉석밥이 아니라 미분류로 잡혔다. 이런 품목이 53개·재고금액 9.9억이었다.
+ * 그래서 여기서는 고르지 않고 후보를 플랜트 코드 순으로 전부 넘기고,
+ * 대표값 선택은 `pickPrimaryDispo`(lib/weekly/classification.ts) 순수 함수가 한다.
  */
 export function buildDispoMasterQuery(): string {
   return `
+    WITH master AS (
+      SELECT MATNR, WERKS, DISPO
+      FROM \`${DATASET}.MM_MARD\`
+      WHERE MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
+        AND WERKS IN (${PRODUCTION_PLANTS})
+        AND DISPO IS NOT NULL AND DISPO <> ''
+      -- 저장위치 단위 행이라 플랜트당 여러 번 나온다. 후보를 세기 전에 접는다.
+      GROUP BY MATNR, WERKS, DISPO
+    )
     SELECT
       MATNR,
-      -- 한 자재가 여러 생산 플랜트에 걸릴 수 있다. 플랜트 코드 순으로 첫 건을 대표값으로 쓴다.
-      -- (ANY_VALUE 는 ORDER BY 를 못 받아 ARRAY_AGG 로 뽑는다)
-      ARRAY_AGG(STRUCT(DISPO, WERKS) ORDER BY WERKS LIMIT 1)[OFFSET(0)].DISPO AS DISPO,
-      ARRAY_AGG(STRUCT(DISPO, WERKS) ORDER BY WERKS LIMIT 1)[OFFSET(0)].WERKS AS WERKS
-    FROM \`${DATASET}.MM_MARD\`
-    WHERE MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
-      AND WERKS IN (${PRODUCTION_PLANTS})
-      AND DISPO IS NOT NULL AND DISPO <> ''
+      ARRAY_AGG(STRUCT(DISPO, WERKS) ORDER BY WERKS, DISPO) AS CANDIDATES
+    FROM master
     GROUP BY MATNR
   `;
 }

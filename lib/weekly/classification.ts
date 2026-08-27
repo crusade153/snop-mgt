@@ -11,6 +11,7 @@
  *   - M31(FD 동결건조)은 카테고리 축이 4개뿐이라 K2 즉석밥 행에 함께 잡힌다.
  *   - **A 접두 DISPO 는 뒤 두 자리가 같은 M 과 같은 분류다**(A08 = M08 = 소스 → HMI).
  *   - **H 접두(H01)는 상품**이라 CM1~CM3 어디에도 넣지 않고 `상품` 행으로 따로 합산한다.
+ *   - **한 자재에 DISPO 가 여럿이면 분류되는 코드를 대표로 쓴다**(`pickPrimaryDispo`).
  * 전부 확인을 거친 결정이므로 조직표를 근거로 되돌리지 말 것.
  * 적재는 SKU 단위로 하고 `dispo` 원본값을 그대로 보관하므로,
  * 카테고리 축을 늘리고 싶으면 이 파일만 고치면 과거 주차까지 다시 접힌다.
@@ -151,6 +152,28 @@ export function categoryOfDispo(dispo?: string | null): WeeklyCategory {
   // 모르는 접두(다른 조직 코드)는 라인 번호가 같아도 섞지 않는다. 기타로 남겨 금액으로 드러낸다.
   if (!LINE_DISPO_PREFIXES.has(prefix)) return '기타';
   return CATEGORY_BY_DISPO[line] || '기타';
+}
+
+/**
+ * 한 자재에 DISPO 가 여럿일 때의 대표값 선택 — **분류 가능한 코드를 우선**한다.
+ *
+ * 자재 하나가 여러 생산 플랜트에 걸리면 플랜트마다 DISPO 가 다르게 달려 온다.
+ * 예전에는 플랜트 코드 순 첫 건을 그냥 대표로 썼는데, 그 첫 건이 미매핑 코드면
+ * 뒤에 라인 코드가 멀쩡히 있어도 품목 전체가 `기타`(미분류)로 떨어졌다.
+ * 실측 50001591(더미식 백미밥)의 `1022:M18` + `1023:M30` 이 이 경우다 — M30(즉석밥)이 맞다.
+ *
+ * 규칙은 두 줄이다.
+ *  1) 분류되는 코드(= `categoryOfDispo` 가 `기타` 가 아닌 코드)가 하나라도 있으면 그중 **첫 번째**.
+ *  2) 전부 미매핑이면 첫 번째 값을 그대로 둔다 — 없는 분류를 지어내지 않고 `기타` 금액으로 드러낸다.
+ *
+ * ⚠️ **후보 순서(플랜트 코드 오름차순)를 뒤집지 말 것.** 분류되는 코드가 둘 이상인 품목
+ * (실측 12품목, `1021:A08` + `1022:M11` 같은 조합)은 예전 규칙과 같은 값을 유지해야
+ * 이번 수정이 기존 분류를 흔들지 않는다.
+ */
+export function pickPrimaryDispo(candidates: (string | null | undefined)[]): string | null {
+  const values = candidates.map((value) => String(value || '').trim()).filter(Boolean);
+  if (values.length === 0) return null;
+  return values.find((value) => categoryOfDispo(value) !== '기타') || values[0];
 }
 
 export function plantOfCategory(category: WeeklyCategory): WeeklyPlant {

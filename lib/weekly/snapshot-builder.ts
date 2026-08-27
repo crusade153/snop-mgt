@@ -16,6 +16,7 @@ import { getEndingInventoryPrices, resolveUnitPrice } from '@/lib/ending-invento
 import {
   categoryOfDispo,
   isFbhMirrorLocation,
+  pickPrimaryDispo,
   plantOfCategory,
   storageScopeOfLgort,
   type WeeklyStorageScope,
@@ -37,8 +38,8 @@ import { monthToDateRange, toCompactDate, type WeekRange } from '@/lib/weekly/we
 
 interface DispoRow {
   MATNR: string;
-  DISPO: string;
-  WERKS: string;
+  /** 플랜트 코드 오름차순 후보. 한 자재가 플랜트마다 다른 DISPO 를 갖는다 */
+  CANDIDATES: { DISPO: string | null; WERKS: string | null }[];
 }
 
 interface PlantInventoryRow {
@@ -204,8 +205,20 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       getEndingInventoryPrices(),
     ]);
 
-  const dispoByCode = new Map(dispoRows.map((row) => [String(row.MATNR), String(row.DISPO || '')]));
-  const plantByCode = new Map(dispoRows.map((row) => [String(row.MATNR), String(row.WERKS || '')]));
+  // 대표 DISPO 는 분류되는 코드를 우선해서 고른다(`pickPrimaryDispo` 주석 참고).
+  // 대표 플랜트는 **그 DISPO 가 달려 있던 플랜트**로 짝을 맞춘다 — 재고가 아예 없는(흐름만 있는)
+  // SKU 의 단가 폴백에만 쓰이므로, 라인을 대표하는 플랜트의 단가를 쓰는 편이 앞뒤가 맞다.
+  const dispoByCode = new Map<string, string>();
+  const plantByCode = new Map<string, string>();
+  dispoRows.forEach((row) => {
+    const candidates = row.CANDIDATES || [];
+    const dispo = pickPrimaryDispo(candidates.map((candidate) => candidate.DISPO));
+    if (!dispo) return;
+    const code = String(row.MATNR);
+    dispoByCode.set(code, dispo);
+    const matched = candidates.find((candidate) => String(candidate.DISPO || '').trim() === dispo);
+    plantByCode.set(code, String(matched?.WERKS || candidates[0]?.WERKS || ''));
+  });
   const accumulators = new Map<string, Accumulator>();
   const names = new Map<string, { name: string; unit: string }>();
   /** SKU → 재고가 가장 많은 플랜트의 단가. 출고·생산 금액은 이 대표 단가로 환산한다. */

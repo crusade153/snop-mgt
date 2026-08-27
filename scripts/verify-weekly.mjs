@@ -71,8 +71,11 @@ const {
   weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, monthToDateRange,
   canReplaceMidWeekStock,
 } = await import('@/lib/weekly/week');
-const { categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation } =
-  await import('@/lib/weekly/classification');
+const {
+  categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation,
+  pickPrimaryDispo,
+} = await import('@/lib/weekly/classification');
+const { buildDispoMasterQuery } = await import('@/lib/weekly/queries');
 const { buildWeeklyBoard, buildWeeklyDetail, resolveCm, sumBuckets } = await import('@/lib/weekly/board');
 
 let failed = 0;
@@ -145,6 +148,14 @@ console.log('\n[2] 분류 규칙 (확정된 DISPO 매핑)');
     resolveCm('50000001', '상품', new Map([['50000001', 'CM1']])) === '상품');
   check('M18·마스터없음은 아직 기타',
     categoryOfDispo('M18') === '기타' && categoryOfDispo('') === '기타' && categoryOfDispo(null) === '기타');
+
+  // 자재 하나에 DISPO 가 여럿일 때의 대표값 선택.
+  // 미매핑 코드가 앞자리를 차지해 품목 전체가 기타로 떨어지던 버그를 막는 규칙이다.
+  check('여러 DISPO 중 분류되는 코드를 대표로', pickPrimaryDispo(['M18', 'M30']) === 'M30');
+  check('분류되는 코드가 둘이면 첫 번째 유지 (기존 분류를 흔들지 않는다)',
+    pickPrimaryDispo(['A08', 'M11']) === 'A08' && pickPrimaryDispo(['A06', 'M19']) === 'A06');
+  check('전부 미매핑이면 첫 값 그대로 (없는 분류를 지어내지 않는다)',
+    pickPrimaryDispo(['M18', 'M33']) === 'M18' && pickPrimaryDispo([null, '', undefined]) === null);
   check('저장위치 그룹', storageScopeOfLgort('2210') === 'PLANT' && storageScopeOfLgort('9100') === 'OTHER');
   check('3000(물류창고)은 FBH 미러라 제외', isFbhMirrorLocation('3000') && !isFbhMirrorLocation('2210'));
 }
@@ -200,6 +211,29 @@ console.log('\n[4] 불변식');
   const scopes = new Set(rows.map((row) => row.storage_scope));
   check('창고 그룹이 3종 이내', [...scopes].every((scope) => ['PLANT', 'LOGISTICS', 'OTHER'].includes(scope)),
     [...scopes].join(', '));
+
+  // 대표 DISPO 선택이 실데이터에서도 지켜지는가.
+  // 한 자재가 여러 플랜트에 걸리면 DISPO 가 여러 개 오는데(실측 836품목 중 72품목),
+  // 그중 분류되는 코드가 하나라도 있으면 절대 기타로 떨어지면 안 된다.
+  const bigqueryClient = (await import('@/lib/bigquery')).default;
+  const [masterRows] = await bigqueryClient.query({ query: buildDispoMasterQuery() });
+  const multi = masterRows.filter((row) => (row.CANDIDATES || []).length > 1);
+  check('DISPO 후보가 배열로 온다', masterRows.length > 0 && multi.length > 0,
+    `${masterRows.length}품목 중 ${multi.length}품목이 복수 DISPO`);
+
+  const wrongly = masterRows.filter((row) => {
+    const candidates = (row.CANDIDATES || []).map((candidate) => candidate.DISPO);
+    return categoryOfDispo(pickPrimaryDispo(candidates)) === '기타' &&
+      candidates.some((dispo) => categoryOfDispo(dispo) !== '기타');
+  });
+  check('분류 가능한 DISPO 가 있는데 기타로 떨어진 자재 없음', wrongly.length === 0,
+    wrongly.length ? `${wrongly.length}품목 (예: ${wrongly[0].MATNR})` : '전 품목 통과');
+
+  // 적재 행에도 그대로 반영되는가 (실측 사례: 1022:M18 + 1023:M30 → 즉석밥)
+  const sample = rows.filter((row) => row.material_code === '50001591');
+  check('50001591(M18+M30) → 즉석밥/K2',
+    sample.length === 0 || sample.every((row) => row.dispo === 'M30' && row.category === '즉석밥' && row.plant === 'K2'),
+    sample.length ? `${sample[0].dispo} / ${sample[0].category}` : '해당 주차에 행 없음');
 }
 
 console.log('\n[5] 집계 (화면이 보는 형태)');

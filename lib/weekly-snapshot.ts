@@ -87,6 +87,10 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
   if (alreadyCaptured && !provisional && !staleMidWeekCapture) {
     // 마감된 주차의 재고는 "그때의 재고"라 다시 찍으면 값이 달라진다. 흐름 열만 갱신한다.
     //
+    // ⚠️ 딱 하나 예외가 **분류 열(dispo·plant·category)** 이다. 이건 측정값이 아니라 기준정보라
+    // 소급 갱신이 맞다 — 자재의 DISPO 가 바로잡히면 지난 주차도 같은 칸에 들어가야
+    // 「전주 재고·전주 比」가 같은 모수 위에서 비교된다. 재고·수량 열은 그대로 둔다.
+    //
     // ⚠️ 행마다 PK 가 달라 한 방 UPDATE 로 못 접는다. 그렇다고 **순차로 돌리면 안 된다** —
     // 2천 행 × 왕복 지연이 그대로 쌓여 수 분이 걸리고, 라우트의 maxDuration(300초)에 걸릴 수 있다.
     // 실측: 2,135행을 순차로 돌렸을 때 호출자가 응답 없이 몇 분을 기다렸다.
@@ -98,6 +102,9 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
           supabase
             .from('snop_weekly_inventory_snapshots')
             .update({
+              dispo: row.dispo,
+              plant: row.plant,
+              category: row.category,
               shipped_qty: row.shipped_qty,
               shipped_value: row.shipped_value,
               produced_qty: row.produced_qty,

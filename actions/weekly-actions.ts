@@ -232,9 +232,9 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v10: 같은 적재 행이라도 분류가 달라진다 — 18=즉석밥, 판매법인 H01 폴백, 「마스터정비」 표기.
-      //      (v9 = 75% 미만 소진 기준·월 매출 比, v8 = 주차 목록 1000행 상한, v7 = 「월 출고 比」 분모 교체)
-      [`weekly-board-v10-dispo-remap-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v12: 자재코드 6 대역을 DISPO 보다 앞서 상품으로 본다 + DISPO 없는 SKU 의 한시 매핑표.
+      //      (v10 = 18=즉석밥·H01 폴백, v9 = 75% 미만 소진 기준·월 매출 比, v8 = 주차 목록 1000행 상한)
+      [`weekly-board-v12-merchandise-band-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -314,8 +314,8 @@ export async function getWeeklyCategoryDetail(
         } satisfies WeeklyDetailPayload;
       },
       [
-        // v3: 메인 표와 같은 분류 교정(18=즉석밥·H01 폴백)이 상세에도 그대로 걸린다.
-        `weekly-detail-v3-dispo-remap-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${[...scopes]
+        // v5: 메인 표와 같은 분류(6 대역 상품 + 한시 매핑)가 상세에도 그대로 걸린다.
+        `weekly-detail-v5-merchandise-band-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${[...scopes]
           .sort()
           .join('+')}`,
       ],

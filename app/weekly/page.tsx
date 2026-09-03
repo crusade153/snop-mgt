@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   DatabaseZap,
   Download,
+  Info,
   RefreshCw,
   X,
 } from 'lucide-react';
@@ -34,7 +35,9 @@ import {
   type WeeklyBuckets,
 } from '@/lib/weekly/board';
 import type { WeeklyDetailRow } from '@/lib/weekly/board';
+import { isOverriddenMaterial } from '@/lib/weekly/category-overrides';
 import {
+  isMerchandiseMaterial,
   WEEKLY_DEFAULT_SCOPES,
   WEEKLY_STORAGE_SCOPE_LABELS,
   type WeeklyCategory,
@@ -252,7 +255,16 @@ export default function WeeklyBoardPage() {
         '자재코드': row.materialCode,
         '품명': row.productName,
         // 화면에는 없는 열이다. 카테고리·CM 판정의 근거라 파일에서는 첫 구분자로 둔다.
-        'DISPO': row.dispo || '(마스터정비)',
+        'DISPO': row.dispo || (isOverriddenMaterial(row.materialCode) ? '(임시매핑)' : '(마스터정비)'),
+        // 무엇을 보고 카테고리를 정했는지. 받아서 피벗할 때 근거별로 걸러낼 수 있게 둔다.
+        // 순서는 판정 순서(`categoryOfMaterial`)와 같아야 한다 — 상품대역이 DISPO 보다 앞선다.
+        '분류근거': isMerchandiseMaterial(row.materialCode)
+          ? '상품대역(6xxxxxxx)'
+          : row.dispo
+            ? 'DISPO'
+            : isOverriddenMaterial(row.materialCode)
+              ? '임시매핑'
+              : '미분류',
         'CM': row.cm,
         '공장': row.plant,
         '카테고리': row.category,
@@ -1179,6 +1191,19 @@ export default function WeeklyBoardPage() {
               </pre>
             </section>
           </div>
+
+          {/* 3-0. 한시 매핑으로 자리를 잡은 재고 — 기준정보가 아니라 손으로 적은 값임을 숨기지 않는다 */}
+          {board.overrideMapped.itemCount > 0 && (
+            <section className="rounded-lg border border-sky-200 bg-sky-50 p-2.5 text-[11px] text-sky-900">
+              <h2 className="mb-1 flex items-center gap-1 text-xs font-bold">
+                <Info size={13} />
+                임시 카테고리 매핑 적용 중
+              </h2>
+              DISPO(생산 라인 코드)가 아직 없는 SKU {board.overrideMapped.itemCount}품목 ·{' '}
+              <b>{formatNoteAmount(board.overrideMapped.value)}</b> 은 사업부 확인 목록으로 CM·공장·카테고리를
+              배정했습니다. 기준정보가 정비돼 DISPO 가 붙으면 그 값이 자동으로 우선합니다.
+            </section>
+          )}
 
           {/* 3. 카테고리 축에 못 담긴 재고 — 매핑 누락을 금액으로 드러낸다 */}
           {board.unmappedDispo.length > 0 && (

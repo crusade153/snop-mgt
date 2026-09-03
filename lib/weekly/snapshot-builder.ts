@@ -14,7 +14,7 @@ import bigqueryClient from '@/lib/bigquery';
 import { safeExtractDateStr } from '@/lib/analysis';
 import { getEndingInventoryPrices, resolveUnitPrice } from '@/lib/ending-inventory-price';
 import {
-  categoryOfDispo,
+  categoryOfMaterial,
   isFbhMirrorLocation,
   pickFallbackDispo,
   pickPrimaryDispo,
@@ -31,6 +31,7 @@ import {
   buildDispoMasterQuery,
   buildMonthToDateShipmentQuery,
   buildWeeklyFbhInventoryQuery,
+  buildWeeklyMaterialNameQuery,
   buildWeeklyPlantInventoryQuery,
   buildWeeklyProductionQuery,
   buildWeeklyShipmentQuery,
@@ -189,9 +190,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   const to = toCompactDate(week.weekEnd);
   const mtd = monthToDateRange(week.weekEnd);
 
-  const [dispoRows, plantRows, fbhRows, shipmentRows, productionRows, mtdRows, prices] =
+  const [dispoRows, nameRows, plantRows, fbhRows, shipmentRows, productionRows, mtdRows, prices] =
     await Promise.all([
       runQuery<DispoRow>(buildDispoMasterQuery()),
+      runQuery<{ MATNR: string; MATNR_T: string; MEINS: string }>(buildWeeklyMaterialNameQuery()),
       runQuery<PlantInventoryRow>(buildWeeklyPlantInventoryQuery()),
       runQuery<FbhInventoryRow>(buildWeeklyFbhInventoryQuery()).catch((error) => {
         // FBH 는 외부 시스템이라 단독으로 실패할 수 있다. 나머지 재고까지 죽이지 않는다.
@@ -232,6 +234,20 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   });
   const accumulators = new Map<string, Accumulator>();
   const names = new Map<string, { name: string; unit: string }>();
+
+  /**
+   * 자재마스터(SD_MARA)의 품명 — **재고 행이 이름을 못 채웠을 때만** 쓰는 폴백이다.
+   *
+   * 재고 0 이고 출고·생산만 있는 SKU 는 배치재고·FBH 어느 쪽에도 행이 없어 이름을 주울 데가 없다.
+   * 그대로 두면 품명 칸에 자재코드가 찍힌다(실측 2026-09-06 주차 90품목).
+   * 재고 행이 이름을 주면 그쪽을 그대로 둔다 — 그 재고에 실제로 붙어 있던 표기이기 때문이다.
+   */
+  const masterNames = new Map<string, { name: string; unit: string }>();
+  nameRows.forEach((row) => {
+    const name = String(row.MATNR_T || '').trim();
+    if (!name) return;
+    masterNames.set(String(row.MATNR), { name, unit: String(row.MEINS || 'EA') });
+  });
   /** SKU → 재고가 가장 많은 플랜트의 단가. 출고·생산 금액은 이 대표 단가로 환산한다. */
   const representative = new Map<string, RepresentativePrice>();
 
@@ -258,8 +274,11 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
 
     const code = String(row.MATNR);
     const scope = storageScopeOfLgort(row.LGORT);
-    const entry = touch(accumulators, code, scope, row.MATNR_T || code, row.MEINS || 'EA');
-    names.set(code, { name: row.MATNR_T || code, unit: row.MEINS || 'EA' });
+    // 재고 행의 이름이 비어 있으면 자재마스터로 떨어진다(코드가 그대로 찍히는 것을 막는다).
+    const name = String(row.MATNR_T || '').trim() || masterNames.get(code)?.name || code;
+    const unit = String(row.MEINS || '').trim() || masterNames.get(code)?.unit || 'EA';
+    const entry = touch(accumulators, code, scope, name, unit);
+    names.set(code, { name, unit });
 
     // 단가는 배치가 있는 플랜트 기준이다(`/stock` 과 같은 규칙). 없으면 자재코드 폴백으로 떨어진다.
     const price = resolveUnitPrice(prices, code, row.WERKS);
@@ -283,8 +302,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     if (qty <= 0) return;
 
     const code = String(row.MATNR);
-    const entry = touch(accumulators, code, 'LOGISTICS', row.MATNR_T || code, row.MEINS || 'EA');
-    if (!names.has(code)) names.set(code, { name: row.MATNR_T || code, unit: row.MEINS || 'EA' });
+    const name = String(row.MATNR_T || '').trim() || masterNames.get(code)?.name || code;
+    const unit = String(row.MEINS || '').trim() || masterNames.get(code)?.unit || 'EA';
+    const entry = touch(accumulators, code, 'LOGISTICS', name, unit);
+    if (!names.has(code)) names.set(code, { name, unit });
 
     // FBH 는 플랜트 정보가 없으므로 자재코드 폴백 단가만 쓴다(`/stock` 과 같다).
     const price = resolveUnitPrice(prices, code);
@@ -330,7 +351,9 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     if (!hasStock) flowOnlyCodes.add(code);
   });
   flowOnlyCodes.forEach((code) => {
-    const info = names.get(code);
+    // 재고 행이 없는 SKU 라 `names` 에는 아예 없다. 자재마스터를 봐야 이름이 나온다 —
+    // 이걸 빼먹어 품명 칸에 자재코드가 그대로 찍혔었다(`buildWeeklyMaterialNameQuery` 주석).
+    const info = names.get(code) || masterNames.get(code);
     touch(accumulators, code, 'PLANT', info?.name || code, info?.unit || 'EA');
   });
 
@@ -359,7 +382,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   return [...accumulators.values()].map((entry) => {
     const code = entry.materialCode;
     const dispo = dispoByCode.get(code) || null;
-    const category = categoryOfDispo(dispo);
+    // DISPO 가 없는 SKU 는 한시 매핑표로 받는다(`category-overrides`).
+    // 조회 측은 어차피 `classifyRow` 로 다시 판정하지만, 저장 열도 같은 함수로 채워 둬야
+    // `verify:weekly` 의 「저장 열 = 지금 판정」 대조가 성립한다.
+    const category = categoryOfMaterial(code, dispo);
 
     // 재고금액은 이미 배치 플랜트 단가로 쌓았다. 여기 단가는 출고·생산 환산과 표기용 대표값이다.
     // 재고가 아예 없는(흐름만 있는) SKU 는 자재마스터의 대표 플랜트로 떨어진다.

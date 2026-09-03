@@ -73,6 +73,32 @@ export function buildDispoMasterQuery(): string {
 }
 
 /**
+ * SKU → 품명·기본단위 마스터.
+ *
+ * ⚠️ **품명을 재고 행에서만 주우면 안 된다.** 원래 이 장표는 배치재고(`V_MM_MCHB_ALL`)와
+ * FBH 재고(`V_WMV_CST_INVNLIST`)가 실어 오는 `MATNR_T` 만 썼다. 그래서 **재고가 0 이고
+ * 출고·생산만 있는 SKU 는 이름을 얻을 곳이 없어 품명 칸에 자재코드가 그대로 찍혔다**
+ * (실측 2026-09-06 주차 90품목 — 전부 재고 0 인 흐름 전용 행이다).
+ * 자재마스터에 이름이 없는 게 아니라 이 장표가 마스터를 안 본 것이었다:
+ * 그 90품목 전부 `SD_MARA` 에 이름이 있고 「미사용」 별칭도 섞여 있지 않았다.
+ *
+ * 그래서 마스터를 따로 한 번 읽어 **재고 행이 못 채운 이름의 폴백**으로 쓴다.
+ * 재고 행의 이름을 덮지는 않는다 — 배치재고 쪽이 실제 그 재고에 붙어 있던 표기이기 때문이다.
+ */
+export function buildWeeklyMaterialNameQuery(): string {
+  return `
+    SELECT
+      MATNR,
+      ANY_VALUE(MATNR_T) AS MATNR_T,
+      ANY_VALUE(MEINS) AS MEINS
+    FROM \`${DATASET}.SD_MARA\`
+    WHERE MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
+      AND MATNR_T IS NOT NULL AND MATNR_T <> ''
+    GROUP BY MATNR
+  `;
+}
+
+/**
  * 플랜트 배치재고 — **저장위치를 제외하지 않는다.**
  *
  * 기존 화면들은 여기서 9개 저장위치를 잘라냈다. 이 장표는 잘라내는 대신 LGORT 를 그대로 들고 나가

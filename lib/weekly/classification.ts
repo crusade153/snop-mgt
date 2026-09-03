@@ -11,11 +11,16 @@
  *   - M31(FD 동결건조)은 카테고리 축이 4개뿐이라 K2 즉석밥 행에 함께 잡힌다.
  *   - **A 접두 DISPO 는 뒤 두 자리가 같은 M 과 같은 분류다**(A08 = M08 = 소스 → HMI).
  *   - **H 접두(H01)는 상품**이라 CM1~CM3 어디에도 넣지 않고 `상품` 행으로 따로 합산한다.
+ *   - **자재코드 6 대역(6xxxxxxx)은 DISPO 보다 앞서 무조건 `상품`** 이다(`isMerchandiseMaterial`).
  *   - **한 자재에 DISPO 가 여럿이면 분류되는 코드를 대표로 쓴다**(`pickPrimaryDispo`).
+ *   - **DISPO 가 아예 없어 기타로 떨어지는 SKU 는 한시 매핑표로 받는다**
+ *     (`categoryOfMaterial` + `lib/weekly/category-overrides.ts`, 기준정보 정비 전까지의 임시방편).
  * 전부 확인을 거친 결정이므로 조직표를 근거로 되돌리지 말 것.
  * 적재는 SKU 단위로 하고 `dispo` 원본값을 그대로 보관하므로,
  * 카테고리 축을 늘리고 싶으면 이 파일만 고치면 과거 주차까지 다시 접힌다.
  */
+
+import { MATERIAL_CATEGORY_OVERRIDES } from '@/lib/weekly/category-overrides';
 
 export type WeeklyCategory = '냉동' | 'HMI' | '즉석밥' | '라면' | '상품' | '기타';
 export type WeeklyPlant = 'K1' | 'K2' | 'K3' | '기타';
@@ -197,12 +202,53 @@ export function pickFallbackDispo(candidates: (string | null | undefined)[]): st
   return values.find((value) => categoryOfDispo(value) === '상품') || null;
 }
 
+/**
+ * 상품 대역 = 자재코드 `6xxxxxxx`.
+ *
+ * 자재코드 앞자리가 자재 성격을 정하는 것은 이 앱 전체의 규칙이다(`lib/bom/explosion-sql.ts`
+ * `MATERIAL_CLASS_LABEL`: 1=원재료 … 6=상품). 주간 장표도 같은 규칙을 따른다.
+ *
+ * 실측으로 확인한 근거 — `SD_MARA.MTART` 가 **5 대역 4,552품목 전부 FERT(완제품),
+ * 6 대역 1,259품목 전부 HAWA(상품)** 다. 코드 대역과 SAP 자재유형이 예외 없이 일치한다.
+ */
+export function isMerchandiseMaterial(materialCode?: string | null): boolean {
+  return /^6\d{7}$/.test(String(materialCode || '').trim());
+}
+
+/**
+ * 자재코드까지 보는 카테고리 판정 — **화면·적재는 전부 이 함수를 쓴다.** 순서가 곧 규칙이다.
+ *
+ *  1) **자재코드 6 대역이면 무조건 `상품`.** DISPO 보다 앞선다.
+ *  2) DISPO 로 분류되면 그 값.
+ *  3) 둘 다 아니라 `기타` 로 떨어질 때만 사업부 확인 임시 매핑(`MATERIAL_CATEGORY_OVERRIDES`).
+ *
+ * ⚠️ **1 이 DISPO 보다 앞서는 것은 확인을 거친 결정이다.** 6 대역(상품)인데 생산 플랜트에
+ * 냉동·조미 라인 DISPO 가 달린 SKU 가 실재한다(실측 7품목·1.13억 — 이마트 남대문가메골손만두,
+ * 하림 맥시칸 통살, 맥시칸후라이드용믹스 …). 사내에서 만들더라도 마스터상 상품(HAWA)이므로
+ * 상품 행으로 세고 CM1~CM3 생산 CM 합계에는 넣지 않는다. 순서를 뒤집으면 이 1.13억이
+ * 다시 CM1 냉동·CM2 HMI 로 섞여 들어간다.
+ *
+ * ⚠️ **3 은 폴백이지 우선순위가 아니다.** 임시 매핑이 DISPO 보다 앞서면 기준정보가 정비돼
+ * DISPO 가 붙어도 그 SKU 는 영원히 손으로 적은 값에 머문다.
+ */
+export function categoryOfMaterial(materialCode?: string | null, dispo?: string | null): WeeklyCategory {
+  if (isMerchandiseMaterial(materialCode)) return '상품';
+  const byDispo = categoryOfDispo(dispo);
+  if (byDispo !== '기타') return byDispo;
+  return MATERIAL_CATEGORY_OVERRIDES[String(materialCode || '').trim()] || '기타';
+}
+
 export function plantOfCategory(category: WeeklyCategory): WeeklyPlant {
   return PLANT_BY_CATEGORY[category];
 }
 
 export function plantOfDispo(dispo?: string | null): WeeklyPlant {
   return plantOfCategory(categoryOfDispo(dispo));
+}
+
+/** SKU 의 공장. 카테고리와 같은 순서(DISPO 우선 → 임시 매핑 폴백)를 따른다. */
+export function plantOfMaterial(materialCode?: string | null, dispo?: string | null): WeeklyPlant {
+  return plantOfCategory(categoryOfMaterial(materialCode, dispo));
 }
 
 /** CM 매핑에 없는 SKU 는 카테고리 기본값으로 떨어뜨린다. 상품은 항상 `상품` 이다. */

@@ -6,8 +6,10 @@
  * 접어서 저장하면 매핑이 바뀌었을 때 과거 주차를 다시 쪼갤 수 없다.
  */
 
+import { isOverriddenMaterial } from '@/lib/weekly/category-overrides';
 import {
   categoryOfDispo,
+  categoryOfMaterial,
   cmOfCategory,
   plantOfCategory,
   rowSortWeight,
@@ -191,14 +193,16 @@ export function resolveCm(
 }
 
 /**
- * 적재된 행의 카테고리·공장을 **저장값이 아니라 `dispo` 원본에서 다시 판정**한다.
+ * 적재된 행의 카테고리·공장을 **저장값이 아니라 `dispo`(+ 자재코드) 원본에서 다시 판정**한다.
  *
  * 적재 시점의 매핑으로 굳은 `category`/`plant` 열을 그대로 쓰면, 매핑을 넓혀도 과거 주차는
  * 옛 분류로 남아 주차 간 비교(전주 대비)가 어긋난다. 판정 기준은 항상 지금의
  * `lib/weekly/classification.ts` 하나여야 한다 — 저장 열은 조회 편의용 비정규화일 뿐이다.
+ * DISPO 가 없는 SKU 의 한시 매핑(`category-overrides`)도 같은 이유로 여기서 적용된다 —
+ * 매핑표에 줄을 더하면 재적재 없이 과거 주차까지 그 자리로 옮겨간다.
  */
 function classifyRow(row: WeeklySnapshotRow) {
-  const category = categoryOfDispo(row.dispo);
+  const category = categoryOfMaterial(row.material_code, row.dispo);
   return { category, plant: plantOfCategory(category) };
 }
 
@@ -225,6 +229,13 @@ export interface WeeklyBoardResult {
   categoryBuckets: { category: WeeklyCategory; buckets: WeeklyBuckets; total: number }[];
   /** 카테고리 축에 못 담긴 DISPO 별 재고금액. 매핑 누락을 금액으로 드러낸다 */
   unmappedDispo: { dispo: string; value: number; itemCount: number }[];
+  /**
+   * DISPO 가 없어 한시 매핑표(`category-overrides`)로 카테고리를 받은 재고.
+   *
+   * 기준정보가 아니라 손으로 적은 값이므로 **금액을 화면에 그대로 드러낸다** —
+   * 이 장표의 다른 판정 기준과 같은 원칙이다. 정비가 끝나 DISPO 가 붙으면 0 으로 줄어든다.
+   */
+  overrideMapped: { value: number; itemCount: number };
 }
 
 const emptyRow = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory): WeeklyBoardRow => ({
@@ -254,6 +265,7 @@ export function buildWeeklyBoard({
 
   const byKey = new Map<string, WeeklyBoardRow>();
   const unmapped = new Map<string, { value: number; codes: Set<string> }>();
+  const overridden = { value: 0, codes: new Set<string>() };
 
   const keyOf = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory) =>
     `${cm}|${plant}|${category}`;
@@ -282,6 +294,12 @@ export function buildWeeklyBoard({
     target.shipmentMtd += row.shipped_mtd_value || 0;
     target.salesMtd += row.sales_mtd || 0;
     addBuckets(target.buckets, bucketsOfRow(row));
+
+    if (categoryOfDispo(row.dispo) === '기타' && isOverriddenMaterial(row.material_code)) {
+      // DISPO 없이 한시 매핑표로 자리를 잡은 몫. 「미매핑」에서 빠진 대신 여기로 드러난다.
+      overridden.value += row.stock_value || 0;
+      overridden.codes.add(row.material_code);
+    }
 
     if (classifyRow(row).category === '기타') {
       // 「마스터없음」이 아니라 「마스터정비」다 — 데이터가 빠진 게 아니라
@@ -374,6 +392,7 @@ export function buildWeeklyBoard({
     unmappedDispo: [...unmapped.entries()]
       .map(([dispo, bucket]) => ({ dispo, value: bucket.value, itemCount: bucket.codes.size }))
       .sort((a, b) => b.value - a.value),
+    overrideMapped: { value: overridden.value, itemCount: overridden.codes.size },
   };
 }
 
@@ -595,14 +614,14 @@ export function buildWeeklyDetail({
   let hasRemainDay = false;
 
   const matches = (row: WeeklySnapshotRow) => {
-    const rowCategory = categoryOfDispo(row.dispo);
+    const rowCategory = categoryOfMaterial(row.material_code, row.dispo);
     if (category && rowCategory !== category) return false;
     if (cm && resolveCm(row.material_code, rowCategory, cmMapping) !== cm) return false;
     return true;
   };
 
   const touch = (row: WeeklySnapshotRow) => {
-    const rowCategory = categoryOfDispo(row.dispo);
+    const rowCategory = categoryOfMaterial(row.material_code, row.dispo);
     let target = byCode.get(row.material_code);
     if (!target) {
       target = {

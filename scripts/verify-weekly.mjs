@@ -72,9 +72,11 @@ const {
   canReplaceMidWeekStock,
 } = await import('@/lib/weekly/week');
 const {
-  categoryOfDispo, plantOfDispo, cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation,
-  pickPrimaryDispo, pickFallbackDispo,
+  categoryOfDispo, categoryOfMaterial, isMerchandiseMaterial, plantOfDispo, plantOfCategory,
+  cmOfCategory, storageScopeOfLgort, isFbhMirrorLocation, pickPrimaryDispo, pickFallbackDispo,
 } = await import('@/lib/weekly/classification');
+const { MATERIAL_CATEGORY_OVERRIDES, isOverriddenMaterial } =
+  await import('@/lib/weekly/category-overrides');
 const { buildDispoMasterQuery } = await import('@/lib/weekly/queries');
 const { buildWeeklyBoard, buildWeeklyDetail, resolveCm, sumBuckets } = await import('@/lib/weekly/board');
 
@@ -163,6 +165,45 @@ console.log('\n[2] 분류 규칙 (확정된 DISPO 매핑)');
 
   // 판매법인(1031) 폴백은 상품(H01)만 받는다. 영업 코드가 생산라인 자리를 차지하면 안 된다.
   check('판매법인 폴백은 H01(상품)만', pickFallbackDispo(['M33', 'H01', 'M36']) === 'H01');
+
+  // 자재코드 6 대역(상품)은 DISPO 보다 앞선다. 사내 생산 라인 코드가 달려 있어도 상품 행으로 센다
+  // (실측 7품목·1.13억 — 이마트 남대문가메골손만두, 하림 맥시칸 통살 …).
+  check('6 대역은 DISPO 보다 앞서 상품',
+    categoryOfMaterial('60001392', 'M03') === '상품' && plantOfCategory(categoryOfMaterial('60001392', 'M03')) === '기타' &&
+    categoryOfMaterial('60001488', 'M09') === '상품' && categoryOfMaterial('60000324', null) === '상품');
+  check('5 대역은 6 대역 규칙을 타지 않는다',
+    categoryOfMaterial('50002493', 'M03') === '냉동' && !isMerchandiseMaterial('50002493') &&
+    isMerchandiseMaterial('60000324') && !isMerchandiseMaterial('69999999x') && !isMerchandiseMaterial(null));
+  check('상품 CM 은 6 대역에서도 CM1~3 과 분리', cmOfCategory(categoryOfMaterial('60001392', 'M03')) === '상품');
+
+  // 한시 매핑표(category-overrides). 기준정보가 정비될 때까지만 쓰는 임시 표라,
+  // 정식 DISPO 를 절대 가리지 않는다는 것과 CM·공장 기본값이 엑셀과 어긋나지 않는다는 것을 지킨다.
+  const overrideCodes = Object.keys(MATERIAL_CATEGORY_OVERRIDES);
+  // 6 대역이 임시표에 섞이면 두 규칙이 같은 SKU 를 두고 다툰다. 임시표는 완제품 대역 전용이다.
+  check('한시 매핑표에 6 대역(상품)이 섞이지 않았다',
+    overrideCodes.every((code) => !isMerchandiseMaterial(code)));
+  check('한시 매핑표가 비어 있지 않다', overrideCodes.length > 0, `${overrideCodes.length}품목`);
+  check('한시 매핑은 카테고리 4축 안에만 있다',
+    Object.values(MATERIAL_CATEGORY_OVERRIDES).every((category) =>
+      ['냉동', 'HMI', '즉석밥', '라면'].includes(category)));
+  check('DISPO 가 있으면 한시 매핑을 보지 않는다 (폴백이지 우선순위가 아니다)',
+    overrideCodes.every((code) => categoryOfMaterial(code, 'M07') === 'HMI') &&
+    categoryOfMaterial(overrideCodes[0], 'H01') === '상품');
+  check('DISPO 가 없을 때만 한시 매핑이 적용된다',
+    overrideCodes.every((code) => categoryOfMaterial(code, null) === MATERIAL_CATEGORY_OVERRIDES[code]) &&
+    categoryOfMaterial('99999999', null) === '기타');
+  check('한시 매핑 SKU 의 CM·공장은 카테고리 기본값과 같다 (엑셀 CM·공장 열과 일치)',
+    overrideCodes.every((code) => {
+      const category = MATERIAL_CATEGORY_OVERRIDES[code];
+      const expectedCm = { 냉동: 'CM1', HMI: 'CM2', 즉석밥: 'CM2', 라면: 'CM3' }[category];
+      const expectedPlant = { 냉동: 'K1', HMI: 'K1', 즉석밥: 'K2', 라면: 'K3' }[category];
+      return cmOfCategory(category) === expectedCm && plantOfCategory(category) === expectedPlant;
+    }));
+  check('한시 매핑 코드는 전부 완제품 대역(5xxxxxxx)',
+    overrideCodes.every((code) => /^5\d{7}$/.test(code)));
+  check('isOverriddenMaterial 은 표에 있는 코드만 참',
+    isOverriddenMaterial(overrideCodes[0]) && !isOverriddenMaterial('99999999') &&
+    !isOverriddenMaterial(null));
   check('영업 코드만 있으면 폴백 없음 (기타로 남긴다)',
     pickFallbackDispo(['M33', 'M36', 'M34']) === null && pickFallbackDispo([]) === null);
   check('저장위치 그룹', storageScopeOfLgort('2210') === 'PLANT' && storageScopeOfLgort('9100') === 'OTHER');
@@ -266,10 +307,10 @@ console.log('\n[5] 집계 (화면이 보는 형태)');
     `구간 ${Math.round(bucketTotal).toLocaleString('ko-KR')} / 재고 ${Math.round(board.totals.stockValue).toLocaleString('ko-KR')}`);
 
   // 적재 당시 굳은 category 열이 아니라 지금의 dispo 판정으로 접혀야 한다(매핑을 넓히면 과거 주차도 따라온다).
-  const staleRows = rows.filter((row) => row.category !== categoryOfDispo(row.dispo));
+  const staleRows = rows.filter((row) => row.category !== categoryOfMaterial(row.material_code, row.dispo));
   const byDerivedCategory = new Map();
   rows.forEach((row) => {
-    const category = categoryOfDispo(row.dispo);
+    const category = categoryOfMaterial(row.material_code, row.dispo);
     byDerivedCategory.set(category, (byDerivedCategory.get(category) || 0) + row.stock_value);
   });
   const foldedMismatch = board.rows.reduce((worst, row) => {
@@ -279,8 +320,20 @@ console.log('\n[5] 집계 (화면이 보는 형태)');
       .reduce((sum, other) => sum + other.stockValue, 0);
     return Math.max(worst, Math.abs(expected - actual));
   }, 0);
-  check('집계는 저장 열이 아니라 dispo 로 다시 판정', foldedMismatch < 5,
+  check('집계는 저장 열이 아니라 dispo(+한시 매핑)로 다시 판정', foldedMismatch < 5,
     staleRows.length ? `적재 열과 다른 ${staleRows.length}행도 새 기준으로 접힘` : '적재 열과 동일');
+
+  // 한시 매핑으로 자리를 잡은 몫은 「미매핑」에서 빠지는 대신 별도 값으로 드러나야 한다.
+  // 숨기면 사용자가 기준정보와 손으로 적은 값을 구분할 수 없다.
+  const expectedOverride = rows
+    .filter((row) => categoryOfDispo(row.dispo) === '기타' && isOverriddenMaterial(row.material_code))
+    .reduce((sum, row) => sum + (row.stock_value || 0), 0);
+  check('한시 매핑 금액이 board.overrideMapped 로 드러난다',
+    Math.abs(board.overrideMapped.value - expectedOverride) < 5,
+    `${Math.round(board.overrideMapped.value).toLocaleString('ko-KR')} 원 · ${board.overrideMapped.itemCount}품목`);
+  check('한시 매핑 SKU 는 미매핑 목록에 남지 않는다',
+    rows.every((row) =>
+      !(isOverriddenMaterial(row.material_code) && categoryOfMaterial(row.material_code, row.dispo) === '기타')));
 
   console.log('\n  [참고] CM × 공장 × 카테고리');
   board.rows.forEach((row) => {

@@ -87,9 +87,12 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
   if (alreadyCaptured && !provisional && !staleMidWeekCapture) {
     // 마감된 주차의 재고는 "그때의 재고"라 다시 찍으면 값이 달라진다. 흐름 열만 갱신한다.
     //
-    // ⚠️ 딱 하나 예외가 **분류 열(dispo·plant·category)** 이다. 이건 측정값이 아니라 기준정보라
-    // 소급 갱신이 맞다 — 자재의 DISPO 가 바로잡히면 지난 주차도 같은 칸에 들어가야
+    // ⚠️ 예외는 **기준정보 열(dispo·plant·category·product_name)** 이다. 이건 측정값이 아니라
+    // 마스터라 소급 갱신이 맞다 — 자재의 DISPO 가 바로잡히면 지난 주차도 같은 칸에 들어가야
     // 「전주 재고·전주 比」가 같은 모수 위에서 비교된다. 재고·수량 열은 그대로 둔다.
+    //
+    // ⚠️ **`unit` 은 일부러 뺐다.** 품명과 달리 단위는 옆 칸의 `stock_qty` 가 무엇으로 세어졌는지를
+    // 말하는 값이다. 수량을 그대로 둔 채 단위만 갈아끼우면 그 수량이 거짓이 된다.
     //
     // ⚠️ 행마다 PK 가 달라 한 방 UPDATE 로 못 접는다. 그렇다고 **순차로 돌리면 안 된다** —
     // 2천 행 × 왕복 지연이 그대로 쌓여 수 분이 걸리고, 라우트의 maxDuration(300초)에 걸릴 수 있다.
@@ -105,6 +108,7 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
               dispo: row.dispo,
               plant: row.plant,
               category: row.category,
+              product_name: row.product_name,
               shipped_qty: row.shipped_qty,
               shipped_value: row.shipped_value,
               produced_qty: row.produced_qty,

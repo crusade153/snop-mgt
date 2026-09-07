@@ -251,3 +251,28 @@ export function buildMonthToDateShipmentQuery(fromCompact: string, toCompact: st
     GROUP BY A.MATNR
   `;
 }
+
+/**
+ * 자재 → 제품계층 마스터. **채널별 탭의 분류 원천**이다.
+ *
+ * 이 결과는 `snop_material_hierarchy` 로 복사돼 조회 때 조인된다(`lib/material-hierarchy.ts`).
+ * 주간 장표가 BigQuery 를 안 읽기 때문에 마스터를 Supabase 쪽에 한 벌 두는 것이다.
+ *
+ * ⚠️ **`ANY_VALUE` 로 접어도 안전하다** — 완제품 대역에서 자재 하나에 `PRDHA_2_T` 가 둘 이상
+ * 달린 경우가 실측 0건이다(DISPO 와 다른 점이고, 그래서 채널 축에는 대표값 선택이 없다).
+ *
+ * ⚠️ 품명(`MATNR_T`)은 여기서 가져오지 않는다. 화면 품명의 원천은 스냅샷 행 하나뿐이어야 한다.
+ * 이름이 필요하면 `buildWeeklyMaterialNameQuery` 를 쓴다.
+ */
+export function buildMaterialHierarchyQuery(): string {
+  return `
+    SELECT
+      MATNR,
+      ANY_VALUE(PRDHA_1_T) AS PRDHA_1_T,
+      ANY_VALUE(PRDHA_2_T) AS PRDHA_2_T,
+      ANY_VALUE(PRDHA_3_T) AS PRDHA_3_T
+    FROM \`${DATASET}.SD_MARA\`
+    WHERE MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
+    GROUP BY MATNR
+  `;
+}

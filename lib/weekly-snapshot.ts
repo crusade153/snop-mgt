@@ -9,6 +9,7 @@
  */
 
 import { createAdminSupabaseClient } from '@/lib/admin-auth';
+import { syncMaterialHierarchy } from '@/lib/material-hierarchy';
 import { buildWeeklySnapshotRows } from '@/lib/weekly/snapshot-builder';
 import {
   canReplaceMidWeekStock,
@@ -32,6 +33,11 @@ export interface CaptureResult {
   /** 아직 안 끝난 주차인지. true 면 잠정치이고 다시 돌릴 때마다 재고까지 갱신된다 */
   provisional: boolean;
   unpricedItemCount: number;
+  /**
+   * 함께 갱신한 제품계층 마스터 품목 수(채널별 탭의 분류 원천).
+   * 실패해도 적재는 계속하므로 0 일 수 있다 — 그때는 서버 로그에 경고가 남는다.
+   */
+  hierarchySynced: number;
 }
 
 /**
@@ -83,6 +89,22 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
   const rows = await buildWeeklySnapshotRows(week);
 
   if (rows.length === 0) throw new Error('적재할 재고가 없습니다. BigQuery 조회 결과를 확인하세요.');
+
+  /**
+   * 채널별 탭이 쓰는 제품계층 마스터를 같이 갱신한다.
+   *
+   * ⚠️ **실패해도 적재를 막지 않는다.** 채널 축은 부가 축이고, 여기서 던지면 재고 스냅샷
+   * 자체가 안 쌓인다 — 재고는 소급 생성이 불가능해 그 주차를 영영 잃는다.
+   */
+  let hierarchySynced = 0;
+  try {
+    hierarchySynced = (await syncMaterialHierarchy()).written;
+  } catch (error) {
+    console.warn(
+      '⚠️ 제품계층 마스터 동기화 실패(적재는 계속합니다):',
+      error instanceof Error ? error.message : error
+    );
+  }
 
   if (alreadyCaptured && !provisional && !staleMidWeekCapture) {
     // 마감된 주차의 재고는 "그때의 재고"라 다시 찍으면 값이 달라진다. 흐름 열만 갱신한다.
@@ -170,5 +192,6 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
     replacedMidWeekStock: staleMidWeekCapture && !provisional,
     provisional,
     unpricedItemCount: rows.filter((row) => row.price_source !== 'ENDING_INVENTORY').length,
+    hierarchySynced,
   };
 }

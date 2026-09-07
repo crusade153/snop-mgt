@@ -140,3 +140,35 @@ alter table public.snop_weekly_inventory_snapshots
   add column if not exists bucket_qty_70_75 numeric not null default 0,
   add column if not exists bucket_qty_75_85 numeric not null default 0,
   add column if not exists bucket_qty_85_over numeric not null default 0;
+
+-- ---------------------------------------------------------------------------
+-- 7. 자재 → 제품계층 마스터 (채널별 재고현황 탭의 분류 원천)
+--
+-- `/weekly` 의 「채널별」 탭은 제품계층 2레벨(SD_MARA.PRDHA_2_T)로 재고를 찢는다.
+-- 그런데 이 장표는 **BigQuery 를 읽지 않는다**(주 1회 적재된 스냅샷만 읽는다).
+-- 그래서 자재 → 제품계층 마스터를 여기에 한 벌 복사해 두고 조회 때 조인한다.
+--
+-- ⚠️ **스냅샷 행에 LV2 를 박지 않고 별도 표로 둔 것은 의도다.**
+--    제품계층은 측정값이 아니라 기준정보라 소급 적용이 맞다. 별도 표로 두면
+--    이 표를 한 번 갱신하는 것만으로 **이미 적재된 과거 주차까지 같은 채널로 접힌다** —
+--    스냅샷 열이었다면 주차마다 다시 적재해야 하는데 재고는 소급 생성이 불가능하다.
+--    (`dispo` 원본을 보관해 카테고리를 다시 판정하는 것과 같은 원칙이다.)
+--
+-- 갱신은 주간 적재(`lib/weekly-snapshot.ts`)가 매번 함께 돌리고,
+-- 관리자가 화면에서 따로 누를 수도 있다(`refreshMaterialHierarchyAction`).
+-- ---------------------------------------------------------------------------
+create table if not exists public.snop_material_hierarchy (
+  material_code text primary key,
+  prdha_1 text,                         -- 브랜드
+  prdha_2 text,                         -- 카테고리. 채널 판정의 원천이다
+  prdha_3 text,                         -- 제품군
+  -- ⚠️ 품명은 일부러 두지 않는다. 화면의 품명은 스냅샷 행(`product_name`)이 원천이고,
+  --    여기에 한 벌 더 두면 두 값이 갈렸을 때 어느 쪽이 맞는지 알 수 없게 된다.
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists snop_material_hierarchy_prdha2_idx
+  on public.snop_material_hierarchy (prdha_2);
+
+alter table public.snop_material_hierarchy enable row level security;
+revoke all on table public.snop_material_hierarchy from anon, authenticated;

@@ -77,8 +77,10 @@ const {
 } = await import('@/lib/weekly/classification');
 const { MATERIAL_CATEGORY_OVERRIDES, isOverriddenMaterial } =
   await import('@/lib/weekly/category-overrides');
-const { buildDispoMasterQuery } = await import('@/lib/weekly/queries');
-const { buildWeeklyBoard, buildWeeklyDetail, resolveCm, sumBuckets } = await import('@/lib/weekly/board');
+const { buildDispoMasterQuery, buildMaterialHierarchyQuery } = await import('@/lib/weekly/queries');
+const { buildWeeklyBoard, buildWeeklyChannelBoard, buildWeeklyDetail, resolveCm, sumBuckets } =
+  await import('@/lib/weekly/board');
+const { CHANNEL_BY_LV2, WEEKLY_CHANNEL_ORDER, channelOfLv2 } = await import('@/lib/weekly/channel');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -484,6 +486,102 @@ console.log('\n[6] 카테고리 드릴다운 상세 (메인 표와 모수가 같
       ` 잔여 ${String(Math.round(row.minRemainDay)).padStart(5)}일` +
       ` 재고 ${Math.round(row.stockValue).toLocaleString('ko-KR').padStart(13)} 원` +
       ` (${row.category})`,
+    );
+  });
+}
+
+console.log('\n[7] 채널 축 (제품계층 LV2)');
+{
+  // 7-1. 매핑 규칙 자체. 접두 매칭으로 줄이면 아래 두 줄이 같은 칸으로 뭉개진다.
+  check('OEM 면 = 수출 / OEM 만두 = B2B (접두 매칭 금지)',
+    channelOfLv2('OEM 면') === '수출' && channelOfLv2('OEM 만두') === 'B2B');
+
+  // 마스터 표기에 공백이 두 칸인 값이 실재한다. 정규화하면 이 줄이 통째로 미분류가 된다.
+  check('공백 두 칸 키가 살아 있음', channelOfLv2('The미식  냉동') === 'B2C',
+    `'The미식  냉동' → ${channelOfLv2('The미식  냉동')}`);
+
+  // 표에 없는 값은 「기타」가 아니라 「미분류」다. 섞으면 진짜 기타와 매핑 누락을 구분할 수 없다.
+  check('모르는 LV2 는 기타가 아니라 미분류',
+    channelOfLv2('없는값') === '미분류' && channelOfLv2('') === '미분류' && channelOfLv2(null) === '미분류');
+
+  // 사업부가 지정한 행 순서. 바뀌면 화면 표의 줄 순서가 달라진다.
+  check('행 순서 = B2C·B2B·수출·NPB/PB·기타·미분류',
+    WEEKLY_CHANNEL_ORDER.join(',') === 'B2C,B2B,수출,NPB/PB,기타,미분류',
+    WEEKLY_CHANNEL_ORDER.join(' → '));
+
+  check('매핑표가 5개 채널만 쓴다',
+    Object.values(CHANNEL_BY_LV2).every((channel) => WEEKLY_CHANNEL_ORDER.includes(channel) && channel !== '미분류'),
+    `${Object.keys(CHANNEL_BY_LV2).length}개 LV2`);
+
+  // 7-2. 실데이터. 마스터를 읽어 LV2 를 붙인다.
+  const bigqueryClient = (await import('@/lib/bigquery')).default;
+  const [hierarchyRows] = await bigqueryClient.query({ query: buildMaterialHierarchyQuery() });
+  const lv2Map = new Map();
+  hierarchyRows.forEach((row) => {
+    const lv2 = String(row.PRDHA_2_T || '').trim();
+    if (lv2) lv2Map.set(String(row.MATNR), lv2);
+  });
+  check('제품계층 마스터를 읽었다', lv2Map.size > 100, `${lv2Map.size.toLocaleString('ko-KR')}품목`);
+
+  const scopes = ['PLANT', 'LOGISTICS'];
+  const teamBoard = buildWeeklyBoard({ current: rows, previous: [], cmMapping: new Map(), scopes });
+  const channelBoard = buildWeeklyChannelBoard({ current: rows, previous: [], lv2Map, scopes });
+
+  /*
+   * ⚠️ 이 검사가 이 절의 핵심이다. 두 탭은 같은 재고를 다르게 묶은 것뿐이라
+   *    합계가 어긋나면 사용자가 어느 탭을 믿어야 할지 알 수 없다.
+   *    한쪽 축에만 필터를 더하면 여기서 바로 잡힌다.
+   */
+  const axisGap = (pick) => Math.abs(pick(teamBoard.totals) - pick(channelBoard.totals));
+  check('두 축의 재고 합계 일치', axisGap((t) => t.stockValue) < 5,
+    `팀별 ${Math.round(teamBoard.totals.stockValue).toLocaleString('ko-KR')} / 채널별 ${Math.round(channelBoard.totals.stockValue).toLocaleString('ko-KR')} 원`);
+  check('두 축의 출고·생산 합계 일치',
+    axisGap((t) => t.shippedValue) < 5 && axisGap((t) => t.producedValue) < 5,
+    `출고 ${Math.round(channelBoard.totals.shippedValue).toLocaleString('ko-KR')} · 생산 ${Math.round(channelBoard.totals.producedValue).toLocaleString('ko-KR')} 원`);
+  check('두 축의 구간별 금액 일치',
+    Math.abs(sumBuckets(teamBoard.totals.buckets) - sumBuckets(channelBoard.totals.buckets)) < 5);
+
+  // 7-3. 커버리지. 미분류가 커지면 매핑표에 줄을 더해야 한다는 신호다.
+  const unmappedValue =
+    channelBoard.unmappedLv2.reduce((sum, entry) => sum + entry.value, 0) +
+    channelBoard.missingHierarchy.value;
+  const unmappedRate = channelBoard.totals.stockValue > 0
+    ? unmappedValue / channelBoard.totals.stockValue
+    : 0;
+  check('채널 미분류가 재고금액의 3% 미만', unmappedRate < 0.03,
+    `${(unmappedRate * 100).toFixed(2)}% · ${Math.round(unmappedValue).toLocaleString('ko-KR')} 원` +
+    (channelBoard.unmappedLv2.length
+      ? ` (상위: ${channelBoard.unmappedLv2.slice(0, 3).map((e) => e.lv2).join(', ')})`
+      : ''));
+
+  // 7-4. 드릴다운. 상세 합계는 채널 표의 그 줄과 같아야 한다(팀별 축과 같은 원칙).
+  let worstGap = 0;
+  let worstLabel = '';
+  channelBoard.rows.forEach((boardRow) => {
+    const detail = buildWeeklyDetail({
+      current: rows,
+      previous: [],
+      cmMapping: new Map(),
+      scopes,
+      lv2Map,
+      channel: boardRow.channel,
+    });
+    const gap = Math.abs(detail.totals.stockValue - boardRow.stockValue);
+    if (gap > worstGap) {
+      worstGap = gap;
+      worstLabel = boardRow.channel;
+    }
+  });
+  check('채널 상세 합계 = 채널 표 그 줄', worstGap < 5,
+    worstGap < 5 ? `${channelBoard.rows.length}개 채널 전부 일치` : `${worstLabel} 차이 ${Math.round(worstGap)}`);
+
+  console.log('\n  [참고] 채널별 재고 (플랜트+물류)');
+  channelBoard.rows.forEach((row) => {
+    console.log(
+      `    ${String(row.channel).padEnd(8)}` +
+      ` 재고 ${(row.stockValue / 1e8).toFixed(2).padStart(8)}억` +
+      ` 출고 ${(row.shippedValue / 1e8).toFixed(2).padStart(7)}억` +
+      ` 생산 ${(row.producedValue / 1e8).toFixed(2).padStart(7)}억`,
     );
   });
 }

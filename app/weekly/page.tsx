@@ -15,6 +15,7 @@ import {
   DatabaseZap,
   Download,
   Info,
+  Layers,
   RefreshCw,
   X,
 } from 'lucide-react';
@@ -22,6 +23,8 @@ import {
   captureWeeklySnapshotAction,
   getWeeklyBoard,
   getWeeklyCategoryDetail,
+  getWeeklyChannelBoard,
+  refreshMaterialHierarchyAction,
 } from '@/actions/weekly-actions';
 import CanvasStackedBarChart from '@/components/charts/canvas-stacked-bar-chart';
 import { exportToExcel } from '@/lib/excel-export';
@@ -32,9 +35,11 @@ import {
   WEEKLY_RISK_BUCKET_KEYS,
   formatNoteAmount,
   toEok,
+  type WeeklyBoardMetrics,
   type WeeklyBuckets,
 } from '@/lib/weekly/board';
 import type { WeeklyDetailRow } from '@/lib/weekly/board';
+import type { WeeklyChannel } from '@/lib/weekly/channel';
 import { isOverriddenMaterial } from '@/lib/weekly/category-overrides';
 import {
   isMerchandiseMaterial,
@@ -71,6 +76,63 @@ const BUCKET_CELL_TONE: Record<keyof WeeklyBuckets, string> = {
 };
 
 type MoneyUnit = 'million' | 'won';
+
+/**
+ * 표를 접는 축.
+ *
+ * ⚠️ **두 축은 같은 주차·같은 스냅샷·같은 스코프를 본다.** 축만 다르게 묶는 것이라
+ * 합계(재고·출고·생산·구간액)는 원 단위까지 같아야 한다 — 탭을 바꿨는데 총액이 달라지면
+ * 사용자는 어느 쪽을 믿어야 할지 알 수 없다.
+ *   - team    = CM × 공장 × 카테고리 (DISPO 기준, 생산 조직)
+ *   - channel = 판매 채널 (제품계층 LV2 기준)
+ */
+type BoardAxis = 'team' | 'channel';
+
+const AXIS_TABS: { key: BoardAxis; label: string; hint: string }[] = [
+  {
+    key: 'team',
+    label: '팀별',
+    hint: 'MRP 관리자 코드(DISPO)로 판정한 CM × 공장 × 카테고리 축입니다. 생산 조직 기준입니다.',
+  },
+  {
+    key: 'channel',
+    label: '채널별',
+    hint:
+      '제품계층 2레벨(PRDHA_2_T)로 판정한 판매 채널 축입니다(B2C·B2B·수출·NPB/PB·기타). ' +
+      '같은 재고를 다르게 묶은 것이라 합계는 팀별 탭과 정확히 같습니다.',
+  },
+];
+
+/** 펼친 칸. 축마다 좌표가 다르다 */
+type Drill =
+  | { axis: 'team'; cm: WeeklyCm | null; category: WeeklyCategory }
+  | { axis: 'channel'; channel: WeeklyChannel };
+
+const drillKey = (drill: Drill) =>
+  drill.axis === 'channel' ? `channel:${drill.channel}` : `team:${drill.cm ?? 'ALL'}:${drill.category}`;
+
+const drillLabel = (drill: Drill) =>
+  drill.axis === 'channel'
+    ? drill.channel
+    : `${drill.cm ? `${drill.cm} · ` : ''}${drill.category}`;
+
+/**
+ * 표의 한 줄을 축과 무관하게 그리기 위한 표시용 행.
+ *
+ * 집계 값(`WeeklyBoardMetrics`)은 두 축이 같은 코어에서 나오므로 그대로 펼쳐 쓰고,
+ * 축마다 다른 것은 **왼쪽 「구분」 칸 몇 개와 드릴다운 좌표뿐**이다.
+ * 표를 축별로 두 벌 만들면 열 하나를 고칠 때마다 두 곳을 고쳐야 하고, 곧 어긋난다.
+ */
+type DisplayRow = WeeklyBoardMetrics & {
+  key: string;
+  /** 「구분」 열에 들어갈 셀들. 팀별 3칸(CM·공장·카테고리) / 채널별 1칸(채널) */
+  groupCells: { text: string; tone: 'badge' | 'muted' | 'plain'; caret?: boolean }[];
+  /** 생산 축 밖의 행(상품·미분류)인지. 위에 구분선을 넣는다 */
+  showDivider: boolean;
+  isOpen: boolean;
+  title: string;
+  drill: Drill;
+};
 
 /**
  * 상세표 정렬 축.
@@ -120,14 +182,16 @@ function capturedLabel(iso: string) {
 }
 
 export default function WeeklyBoardPage() {
+  const [axis, setAxis] = useState<BoardAxis>('team');
   const [weekEnd, setWeekEnd] = useState<string | undefined>(undefined);
   const [unit, setUnit] = useState<MoneyUnit>('million');
   const [isAdmin, setIsAdmin] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [captureMessage, setCaptureMessage] = useState<string | null>(null);
 
-  /** 펼친 카테고리 칸. 메인 표의 한 줄(CM × 카테고리)과 1:1 로 대응한다 */
-  const [drill, setDrill] = useState<{ cm: WeeklyCm | null; category: WeeklyCategory } | null>(null);
+  /** 펼친 칸. 메인 표의 한 줄과 1:1 로 대응한다(팀별 = CM × 카테고리, 채널별 = 채널) */
+  const [drill, setDrill] = useState<Drill | null>(null);
+  const [refreshingHierarchy, setRefreshingHierarchy] = useState(false);
   const [detailSort, setDetailSort] = useState<DetailSortKey>('stockValue');
   const [detailPage, setDetailPage] = useState(0);
   const [detailQuery, setDetailQuery] = useState('');
@@ -136,6 +200,20 @@ export default function WeeklyBoardPage() {
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['weekly-board', weekEnd ?? 'latest'],
     queryFn: () => getWeeklyBoard(weekEnd, [...WEEKLY_DEFAULT_SCOPES]),
+    staleTime: 1000 * 60 * 10,
+    refetchOnWindowFocus: false,
+  });
+
+  // 채널별 표는 탭을 열었을 때만 부른다. 팀별만 보는 사용자에게 조회를 늘리지 않는다.
+  const {
+    data: channelData,
+    isLoading: channelLoading,
+    refetch: refetchChannel,
+    isRefetching: channelRefetching,
+  } = useQuery({
+    queryKey: ['weekly-channel-board', weekEnd ?? 'latest'],
+    queryFn: () => getWeeklyChannelBoard(weekEnd, [...WEEKLY_DEFAULT_SCOPES]),
+    enabled: axis === 'channel',
     staleTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
   });
@@ -162,26 +240,69 @@ export default function WeeklyBoardPage() {
     try {
       const result = await captureWeeklySnapshotAction(weekEnd);
       setCaptureMessage(result.message);
-      if (result.ok) await refetch();
+      // 적재는 제품계층 마스터도 함께 갱신하므로 두 축을 다 다시 받는다.
+      if (result.ok) await Promise.all([refetch(), refetchChannel()]);
     } finally {
       setCapturing(false);
     }
   };
 
-  const board = data?.board ?? null;
+  /**
+   * 제품계층 기준정보만 다시 받는다(관리자).
+   * 마스터는 기준정보라 갱신하면 **이미 적재된 과거 주차까지** 같은 채널로 다시 접힌다.
+   */
+  const handleRefreshHierarchy = async () => {
+    setRefreshingHierarchy(true);
+    setCaptureMessage(null);
+    try {
+      const result = await refreshMaterialHierarchyAction();
+      setCaptureMessage(result.message);
+      if (result.ok) await refetchChannel();
+    } finally {
+      setRefreshingHierarchy(false);
+    }
+  };
+
+  const teamBoard = data?.board ?? null;
+  const channelBoard = channelData?.board ?? null;
+
+  /**
+   * 지금 보고 있는 축의 결과.
+   *
+   * `totals`·`movement`·`hasPrevious` 는 두 축이 **같은 타입·같은 계산**이라 그대로 공유한다.
+   * 축마다 다른 것은 행 구성과 아래 안내 블록뿐이다.
+   */
+  const board = axis === 'channel' ? channelBoard : teamBoard;
+  /** 제목·주차·비고 등 표 바깥 정보. 축에 따라 문구가 다르다 */
+  const meta = axis === 'channel' ? channelData : data;
   const hasPrevious = board?.hasPrevious ?? false;
   const activeWeek = data?.weekEnd ?? null;
+  const boardLoading = axis === 'channel' ? channelLoading : isLoading;
+  const boardRefetching = axis === 'channel' ? channelRefetching : isRefetching;
+  /** 「구분」 열 개수. 헤더 colSpan 과 합계행이 이 값을 따른다 */
+  const groupColCount = axis === 'channel' ? 1 : 3;
 
-  // 주차를 바꾸면 펼쳐 둔 상세는 다른 주차의 것이라 닫는다.
+  // 주차를 바꾸거나 축을 바꾸면 펼쳐 둔 상세는 좌표가 다른 것이라 닫는다.
   useEffect(() => {
     setDrill(null);
-  }, [activeWeek]);
+  }, [activeWeek, axis]);
 
   // 상세는 행을 눌렀을 때만 부른다. 첫 화면 로딩에는 영향이 없다.
   const { data: detailData, isFetching: detailLoading } = useQuery({
-    queryKey: ['weekly-detail', activeWeek, drill?.cm ?? 'ALL', drill?.category ?? 'ALL'],
-    queryFn: () =>
-      getWeeklyCategoryDetail(activeWeek!, drill!.category, drill!.cm, [...WEEKLY_DEFAULT_SCOPES]),
+    queryKey: ['weekly-detail', activeWeek, drill ? drillKey(drill) : 'none'],
+    queryFn: () => {
+      const target = drill!;
+      // 채널 드릴다운은 카테고리·CM 을 걸지 않는다. 필터를 겹치면 상세 합계가 위 표의 그 줄과 어긋난다.
+      return target.axis === 'channel'
+        ? getWeeklyCategoryDetail(activeWeek!, null, null, [...WEEKLY_DEFAULT_SCOPES], target.channel)
+        : getWeeklyCategoryDetail(
+            activeWeek!,
+            target.category,
+            target.cm,
+            [...WEEKLY_DEFAULT_SCOPES],
+            null
+          );
+    },
     enabled: !!activeWeek && !!drill,
     staleTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
@@ -248,7 +369,7 @@ export default function WeeklyBoardPage() {
    */
   const handleDownloadDetail = () => {
     if (!detail || detailRows.length === 0) return;
-    const label = [drill?.cm, drill?.category].filter(Boolean).join('_') || '전체';
+    const label = (drill ? drillLabel(drill).replace(/ · /g, '_') : '전체').replace(/\//g, '-');
 
     exportToExcel(
       detailRows.map((row) => ({
@@ -268,6 +389,9 @@ export default function WeeklyBoardPage() {
         'CM': row.cm,
         '공장': row.plant,
         '카테고리': row.category,
+        // 채널 축은 제품계층 LV2 하나로 판정한다. 근거 열(LV2)을 함께 내려 받아서 다시 피벗할 수 있게 둔다.
+        '제품계층 LV2': row.lv2 || '(마스터없음)',
+        '채널': row.channel,
         '창고그룹': row.scopes.map((scope) => WEEKLY_STORAGE_SCOPE_LABELS[scope]).join(', '),
         '단위': row.unit,
         '재고수량': Math.round(row.stockQty),
@@ -299,13 +423,11 @@ export default function WeeklyBoardPage() {
     );
   };
 
-  /** 같은 칸을 다시 누르면 접는다 */
-  const toggleDrill = (cm: WeeklyCm | null, category: WeeklyCategory) => {
+  /** 같은 칸을 다시 누르면 접는다. 축이 달라지면 좌표도 달라지므로 키로 비교한다 */
+  const toggleDrill = (next: Drill) => {
     setDetailPage(0);
     setDetailQuery('');
-    setDrill((current) =>
-      current && current.cm === cm && current.category === category ? null : { cm, category }
-    );
+    setDrill((current) => (current && drillKey(current) === drillKey(next) ? null : next));
   };
 
   /** 금액 표기. 백만원 모드는 자릿수를 줄여 한 화면에 열을 더 넣기 위한 것이다. */
@@ -358,22 +480,119 @@ export default function WeeklyBoardPage() {
     return { value, ratio: stockValue > 0 ? value / stockValue : 0 };
   };
 
-  const chartSeries = useMemo(() => {
-    if (!board) return [];
-    return WEEKLY_BUCKET_KEYS.map((key) => ({
-      label: WEEKLY_BUCKET_LABELS[key],
-      color: BUCKET_COLORS[key],
-      emphasis: RISK_BUCKET_KEYS.includes(key),
-      values: board.categoryBuckets.map((entry) => toEok(entry.buckets[key])),
+  /**
+   * 차트·「상세 보기」 칩이 쓰는 구간 묶음. 팀별은 카테고리, 채널별은 채널이 한 조각이다.
+   * 두 축이 같은 컴포넌트를 쓰도록 여기서 한 번만 이름을 맞춘다.
+   */
+  const segments = useMemo(() => {
+    if (axis === 'channel') {
+      return (channelBoard?.channelBuckets ?? []).map((entry) => ({
+        key: entry.channel as string,
+        label: entry.channel as string,
+        buckets: entry.buckets,
+        total: entry.total,
+        drill: { axis: 'channel', channel: entry.channel } as Drill,
+      }));
+    }
+    return (teamBoard?.categoryBuckets ?? []).map((entry) => ({
+      key: entry.category as string,
+      label: entry.category as string,
+      buckets: entry.buckets,
+      total: entry.total,
+      drill: { axis: 'team', cm: null, category: entry.category } as Drill,
     }));
-  }, [board]);
+  }, [axis, channelBoard, teamBoard]);
+
+  /** 메인 표의 행. 축마다 「구분」 칸만 다르고 나머지 열은 완전히 같다 */
+  const displayRows = useMemo<DisplayRow[]>(() => {
+    if (axis === 'channel') {
+      return (channelBoard?.rows ?? []).map((row) => {
+        const target: Drill = { axis: 'channel', channel: row.channel };
+        return {
+          ...row,
+          key: row.channel,
+          groupCells: [
+            {
+              text: row.channel,
+              // 미분류는 매핑이 빠진 자리라 성격이 다르다. 칩으로 눈에 띄게 둔다.
+              tone: row.channel === '미분류' ? ('badge' as const) : ('plain' as const),
+              caret: true,
+            },
+          ],
+          showDivider: row.channel === '미분류',
+          isOpen: !!drill && drillKey(drill) === drillKey(target),
+          title: `${row.channel} 상세 보기`,
+          drill: target,
+        };
+      });
+    }
+
+    const rows = teamBoard?.rows ?? [];
+    return rows.map((row, index) => {
+      const target: Drill = { axis: 'team', cm: row.cm, category: row.category };
+      // 생산 CM 행과 상품·미분류 행 사이에 선을 하나 넣어 성격이 다른 행임을 드러낸다.
+      const isAside = row.cm === '상품' || row.cm === '미분류';
+      const previousIsAside =
+        index > 0 && (rows[index - 1].cm === '상품' || rows[index - 1].cm === '미분류');
+      return {
+        ...row,
+        key: `${row.cm}-${row.plant}-${row.category}`,
+        groupCells: [
+          { text: row.cm, tone: isAside ? ('badge' as const) : ('plain' as const) },
+          { text: row.plant, tone: 'muted' as const },
+          { text: row.category, tone: 'plain' as const, caret: true },
+        ],
+        showDivider: isAside && !previousIsAside,
+        isOpen: !!drill && drillKey(drill) === drillKey(target),
+        title: `${row.cm} ${row.category} 상세 보기`,
+        drill: target,
+      };
+    });
+  }, [axis, channelBoard, teamBoard, drill]);
+
+  const chartSeries = useMemo(
+    () =>
+      WEEKLY_BUCKET_KEYS.map((key) => ({
+        label: WEEKLY_BUCKET_LABELS[key],
+        color: BUCKET_COLORS[key],
+        emphasis: RISK_BUCKET_KEYS.includes(key),
+        values: segments.map((entry) => toEok(entry.buckets[key])),
+      })),
+    [segments]
+  );
 
   return (
     <div className="p-3 lg:p-5 space-y-3">
+      {/*
+        축 전환 탭.
+
+        ⚠️ 두 탭은 **같은 주차·같은 스냅샷·같은 스코프**를 보고 묶는 축만 다르다.
+        그래서 탭을 바꿔도 합계(재고·출고·생산·구간액)는 원 단위까지 같아야 한다.
+        한쪽에만 필터를 더하고 싶어지면 그 순간 두 숫자가 갈린다 — 축은 여기서만 갈라진다.
+      */}
+      <div className="flex items-center gap-1 border-b border-neutral-200">
+        {AXIS_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setAxis(tab.key)}
+            title={tab.hint}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-bold transition-colors ${
+              axis === tab.key
+                ? 'border-[#1565C0] text-[#1565C0]'
+                : 'border-transparent text-neutral-400 hover:text-neutral-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+        <InfoTooltip text={AXIS_TABS.find((tab) => tab.key === axis)?.hint || ''} />
+      </div>
+
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-bold text-neutral-900">
-            1. {data?.labels.title || '완제품 재고현황'}
+            {axis === 'channel' ? '' : '1. '}
+            {meta?.labels.title || (axis === 'channel' ? '채널별 재고현황' : '완제품 재고현황')}
           </h1>
           <span className="text-[11px] text-neutral-400">
             {unit === 'million' ? '백만원' : '원'}
@@ -387,9 +606,9 @@ export default function WeeklyBoardPage() {
               '이후 벌어지는 차이는 통합 장표가 실시간, 이 장표가 적재 시점 고정이라서 생기는 시간차입니다.'
             }
           />
-          {data?.capturedAt && (
+          {meta?.capturedAt && (
             <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
-              적재 {capturedLabel(data.capturedAt)}
+              적재 {capturedLabel(meta.capturedAt)}
             </span>
           )}
         </div>
@@ -434,8 +653,20 @@ export default function WeeklyBoardPage() {
             title="새로고침"
             className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-neutral-700 hover:bg-neutral-50"
           >
-            <RefreshCw size={13} className={isRefetching ? 'animate-spin' : ''} />
+            <RefreshCw size={13} className={boardRefetching ? 'animate-spin' : ''} />
           </button>
+
+          {isAdmin && axis === 'channel' && (
+            <button
+              onClick={handleRefreshHierarchy}
+              disabled={refreshingHierarchy}
+              title="자재 → 제품계층 마스터를 BigQuery 에서 다시 받습니다. 기준정보라 과거 주차도 함께 다시 분류됩니다."
+              className="flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+            >
+              <Layers size={13} className={refreshingHierarchy ? 'animate-pulse' : ''} />
+              {refreshingHierarchy ? '갱신 중' : '제품계층 갱신'}
+            </button>
+          )}
 
           {isAdmin && (
             <button
@@ -457,16 +688,16 @@ export default function WeeklyBoardPage() {
         </p>
       )}
 
-      {isLoading && (
+      {boardLoading && (
         <div className="rounded-lg border border-neutral-200 bg-white p-8 text-center text-sm text-neutral-500">
           불러오는 중…
         </div>
       )}
 
-      {!isLoading && data && !data.board && (
+      {!boardLoading && meta && !meta.board && (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-8 text-center">
           <p className="text-sm font-medium text-neutral-700">
-            {data.message || '아직 적재된 주차가 없습니다.'}
+            {meta.message || '아직 적재된 주차가 없습니다.'}
           </p>
           {isAdmin && (
             <p className="mt-2 text-xs text-[#1565C0]">
@@ -476,24 +707,48 @@ export default function WeeklyBoardPage() {
         </div>
       )}
 
+      {/*
+        제품계층 마스터가 비어 있으면 채널 표는 전부 「미분류」가 된다.
+        그럴듯한 빈 표를 보여주는 대신 무엇을 해야 하는지 그 자리에서 알려준다.
+      */}
+      {axis === 'channel' && channelData?.hierarchyEmpty && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <b>제품계층 기준정보가 아직 없습니다.</b> 채널 분류의 원천인 자재 → 제품계층 마스터
+          (snop_material_hierarchy)가 비어 있어 모든 재고가 미분류로 잡힙니다.
+          {isAdmin
+            ? ' 위 「제품계층 갱신」 버튼을 한 번 누르면 채워지고, 이미 적재된 과거 주차도 함께 분류됩니다.'
+            : ' 관리자에게 갱신을 요청해 주세요.'}
+        </div>
+      )}
+
       {board && (
         <>
           {/* 1. 메인 표 */}
           <section className="rounded-lg border border-neutral-200 bg-white">
             <div className="grid grid-cols-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_230px]">
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1120px] text-right text-xs">
+                <table
+                  className={`w-full text-right text-xs ${
+                    axis === 'channel' ? 'min-w-[1000px]' : 'min-w-[1120px]'
+                  }`}
+                >
                   <thead>
                     {/* 열이 많아 그룹 머리행으로 흐름·연령·재고 지표 경계를 고정한다. */}
                     <tr className="bg-neutral-100 text-[10px] text-neutral-500">
-                      <th className="px-1.5 pt-1.5 text-center font-bold" colSpan={3} rowSpan={2}>
-                        <span className="text-[11px] text-neutral-700">구분</span>
+                      <th
+                        className="px-1.5 pt-1.5 text-center font-bold"
+                        colSpan={groupColCount}
+                        rowSpan={2}
+                      >
+                        <span className="text-[11px] text-neutral-700">
+                          {axis === 'channel' ? '채널' : '구분'}
+                        </span>
                       </th>
                       <th
                         className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
                         colSpan={3}
                       >
-                        주간 흐름 <span className="text-neutral-400">{data?.labels.flow}</span>
+                        주간 흐름 <span className="text-neutral-400">{meta?.labels.flow}</span>
                       </th>
                       <th
                         className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
@@ -510,7 +765,7 @@ export default function WeeklyBoardPage() {
                     </tr>
                     <tr className="bg-neutral-100 text-[11px] text-neutral-700">
                       <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold">
-                        {data?.labels.previousStock}
+                        {meta?.labels.previousStock}
                       </th>
                       <th className="px-1.5 pb-1.5 font-bold">출고</th>
                       <th className="px-1.5 pb-1.5 font-bold">생산</th>
@@ -529,7 +784,7 @@ export default function WeeklyBoardPage() {
                         </th>
                       ))}
                       <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold">
-                        {data?.labels.currentStock}
+                        {meta?.labels.currentStock}
                       </th>
                       <th className="px-1.5 pb-1.5 font-bold">
                         <span className="flex items-center justify-end gap-1">
@@ -554,44 +809,43 @@ export default function WeeklyBoardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {board.rows.map((row, index) => {
+                    {displayRows.map((row) => {
                       const risk = riskOf(row.buckets, row.stockValue);
-                      // 생산 CM 행과 상품·미분류 행 사이에 선을 하나 넣어 성격이 다른 행임을 드러낸다.
-                      const isAside = row.cm === '상품' || row.cm === '미분류';
-                      const previousIsAside =
-                        index > 0 &&
-                        (board.rows[index - 1].cm === '상품' || board.rows[index - 1].cm === '미분류');
-                      const isOpen = drill?.cm === row.cm && drill?.category === row.category;
+                      const isOpen = row.isOpen;
                       return (
                         <tr
-                          key={`${row.cm}-${row.plant}-${row.category}`}
+                          key={row.key}
                           // 행 전체가 드릴다운 버튼이다 — 「어느 칸의 상세인가」가 표에서 바로 보여야 한다.
-                          onClick={() => toggleDrill(row.cm, row.category)}
-                          title={`${row.cm} ${row.category} 상세 보기`}
+                          onClick={() => toggleDrill(row.drill)}
+                          title={row.title}
                           className={`cursor-pointer border-b border-neutral-100 hover:bg-[#E3F2FD]/40 ${
                             isOpen ? 'bg-[#E3F2FD]/70' : ''
-                          } ${isAside && !previousIsAside ? 'border-t-2 border-t-neutral-200' : ''}`}
+                          } ${row.showDivider ? 'border-t-2 border-t-neutral-200' : ''}`}
                         >
-                          <td className="px-1.5 py-1.5 text-center font-medium">
-                            {isAside ? (
-                              <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">
-                                {row.cm}
+                          {row.groupCells.map((cell, cellIndex) => (
+                            <td
+                              key={cellIndex}
+                              className={`px-1.5 py-1.5 text-center ${
+                                cell.tone === 'muted' ? 'text-neutral-500' : 'font-medium'
+                              }`}
+                            >
+                              <span className="inline-flex items-center gap-0.5">
+                                {cell.caret &&
+                                  (isOpen ? (
+                                    <ChevronDown size={11} className="text-[#1565C0]" />
+                                  ) : (
+                                    <ChevronRight size={11} className="text-neutral-300" />
+                                  ))}
+                                {cell.tone === 'badge' ? (
+                                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">
+                                    {cell.text}
+                                  </span>
+                                ) : (
+                                  cell.text
+                                )}
                               </span>
-                            ) : (
-                              row.cm
-                            )}
-                          </td>
-                          <td className="px-1.5 py-1.5 text-center text-neutral-500">{row.plant}</td>
-                          <td className="px-1.5 py-1.5 text-center font-medium">
-                            <span className="inline-flex items-center gap-0.5">
-                              {isOpen ? (
-                                <ChevronDown size={11} className="text-[#1565C0]" />
-                              ) : (
-                                <ChevronRight size={11} className="text-neutral-300" />
-                              )}
-                              {row.category}
-                            </span>
-                          </td>
+                            </td>
+                          ))}
                           <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-500">
                             {hasPrevious ? moneyCell(row.previousStockValue) : '-'}
                           </td>
@@ -640,7 +894,7 @@ export default function WeeklyBoardPage() {
                       );
                     })}
                     <tr className="bg-[#FFF3E0] font-bold">
-                      <td className="px-1.5 py-2 text-center" colSpan={3}>
+                      <td className="px-1.5 py-2 text-center" colSpan={groupColCount}>
                         합계
                       </td>
                       <td className="border-l border-neutral-200 px-1.5 py-2 tabular-nums">
@@ -734,7 +988,7 @@ export default function WeeklyBoardPage() {
               <aside className="rounded-md border border-neutral-200 bg-neutral-50 p-2.5">
                 <div className="mb-1 text-[10px] font-bold text-neutral-500">비고</div>
                 <pre className="whitespace-pre-wrap break-words font-sans text-[11px] leading-relaxed text-neutral-700">
-                  {data?.notes.stock}
+                  {meta?.notes.stock}
                 </pre>
               </aside>
             </div>
@@ -744,19 +998,19 @@ export default function WeeklyBoardPage() {
           <section className="rounded-lg border border-neutral-200 bg-white">
             <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 px-3 py-2">
               <span className="text-[11px] font-bold text-neutral-500">상세 보기</span>
-              {board.categoryBuckets.map((entry) => {
-                const isOpen = drill?.cm === null && drill?.category === entry.category;
+              {segments.map((entry) => {
+                const isOpen = !!drill && drillKey(drill) === drillKey(entry.drill);
                 return (
                   <button
-                    key={entry.category}
-                    onClick={() => toggleDrill(null, entry.category)}
+                    key={entry.key}
+                    onClick={() => toggleDrill(entry.drill)}
                     className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
                       isOpen
                         ? 'border-[#1565C0] bg-[#1565C0] text-white'
                         : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50'
                     }`}
                   >
-                    {entry.category}
+                    {entry.label}
                     <span
                       className={`ml-1 tabular-nums ${isOpen ? 'text-white/70' : 'text-neutral-400'}`}
                     >
@@ -765,7 +1019,13 @@ export default function WeeklyBoardPage() {
                   </button>
                 );
               })}
-              <InfoTooltip text="카테고리 전체를 펼칩니다. 위 표의 행을 직접 누르면 그 CM × 카테고리 칸만 펼쳐집니다." />
+              <InfoTooltip
+                text={
+                  axis === 'channel'
+                    ? '채널 전체를 펼칩니다. 위 표의 행을 눌러도 같은 칸이 펼쳐집니다.'
+                    : '카테고리 전체를 펼칩니다. 위 표의 행을 직접 누르면 그 CM × 카테고리 칸만 펼쳐집니다.'
+                }
+              />
               {drill && (
                 <button
                   onClick={() => setDrill(null)}
@@ -778,7 +1038,8 @@ export default function WeeklyBoardPage() {
 
             {!drill && (
               <p className="px-3 py-4 text-center text-[11px] text-neutral-400">
-                카테고리를 누르거나 위 표의 행을 누르면 SKU 별 재고수량·금액·소비기한이 펼쳐집니다.
+                {axis === 'channel' ? '채널' : '카테고리'}를 누르거나 위 표의 행을 누르면 SKU 별
+                재고수량·금액·소비기한이 펼쳐집니다.
               </p>
             )}
 
@@ -786,8 +1047,7 @@ export default function WeeklyBoardPage() {
               <div className="p-3">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <h2 className="text-xs font-bold text-neutral-800">
-                    {drill.cm ? `${drill.cm} · ` : ''}
-                    {drill.category}
+                    {drillLabel(drill)}
                     <span className="ml-1.5 font-normal text-neutral-400">
                       {detail ? `${detail.totals.itemCount.toLocaleString('ko-KR')}품목` : ''}
                     </span>
@@ -903,11 +1163,21 @@ export default function WeeklyBoardPage() {
                               <td className="px-1.5 py-1.5 text-left font-mono text-[11px] text-neutral-500">
                                 {row.materialCode}
                               </td>
+                              {/*
+                                품명 아래에 **반대 축**을 작게 붙인다.
+                                팀별로 펼쳤으면 그 SKU 의 채널을, 채널별로 펼쳤으면 CM·카테고리를 보여
+                                「이 냉동 재고 중 무엇이 B2B 인가」를 한 줄에서 대조할 수 있게 한다.
+                              */}
                               <td
-                                className="max-w-[220px] truncate px-1.5 py-1.5 text-left font-medium text-neutral-800"
-                                title={row.productName}
+                                className="max-w-[220px] px-1.5 py-1.5 text-left font-medium text-neutral-800"
+                                title={`${row.productName} · ${row.channel} · ${row.cm} ${row.category}`}
                               >
-                                {row.productName}
+                                <span className="block truncate">{row.productName}</span>
+                                <span className="mt-0.5 block truncate text-[9px] font-normal text-neutral-400">
+                                  {axis === 'channel'
+                                    ? `${row.cm} · ${row.category}`
+                                    : `${row.channel}${row.lv2 ? ` · ${row.lv2}` : ''}`}
+                                </span>
                               </td>
                               <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-600">
                                 {Math.round(row.stockQty).toLocaleString('ko-KR')}
@@ -1093,12 +1363,12 @@ export default function WeeklyBoardPage() {
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             <section className="rounded-lg border border-neutral-200 bg-white p-3">
               <h2 className="mb-2 text-xs font-bold text-neutral-800">
-                카테고리별 소비기한별 재고금액
+                {axis === 'channel' ? '채널별' : '카테고리별'} 소비기한별 재고금액
                 <span className="ml-1.5 font-normal text-neutral-400">억원</span>
               </h2>
-              {board.categoryBuckets.length > 0 ? (
+              {segments.length > 0 ? (
                 <CanvasStackedBarChart
-                  labels={board.categoryBuckets.map((entry) => entry.category)}
+                  labels={segments.map((entry) => entry.label)}
                   series={chartSeries}
                   height={280}
                 />
@@ -1127,7 +1397,7 @@ export default function WeeklyBoardPage() {
                   <tbody>
                     <tr className="border-b border-neutral-100">
                       <td className="px-1.5 py-1.5 text-center font-medium">
-                        {data?.labels.previousStock}
+                        {meta?.labels.previousStock}
                       </td>
                       {WEEKLY_BUCKET_KEYS.map((key) => (
                         <td key={key} className="px-1.5 py-1.5 tabular-nums text-neutral-500">
@@ -1140,7 +1410,7 @@ export default function WeeklyBoardPage() {
                     </tr>
                     <tr className="border-b border-neutral-100">
                       <td className="px-1.5 py-1.5 text-center font-medium">
-                        {data?.labels.currentStock}
+                        {meta?.labels.currentStock}
                       </td>
                       {WEEKLY_BUCKET_KEYS.map((key) => (
                         <td key={key} className="px-1.5 py-1.5 tabular-nums">
@@ -1187,33 +1457,33 @@ export default function WeeklyBoardPage() {
               </div>
 
               <pre className="mt-2 whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-neutral-50 p-2.5 font-sans text-[11px] leading-relaxed text-neutral-700">
-                {data?.notes.bucket}
+                {meta?.notes.bucket}
               </pre>
             </section>
           </div>
 
           {/* 3-0. 한시 매핑으로 자리를 잡은 재고 — 기준정보가 아니라 손으로 적은 값임을 숨기지 않는다 */}
-          {board.overrideMapped.itemCount > 0 && (
+          {axis === 'team' && teamBoard && teamBoard.overrideMapped.itemCount > 0 && (
             <section className="rounded-lg border border-sky-200 bg-sky-50 p-2.5 text-[11px] text-sky-900">
               <h2 className="mb-1 flex items-center gap-1 text-xs font-bold">
                 <Info size={13} />
                 임시 카테고리 매핑 적용 중
               </h2>
-              DISPO(생산 라인 코드)가 아직 없는 SKU {board.overrideMapped.itemCount}품목 ·{' '}
-              <b>{formatNoteAmount(board.overrideMapped.value)}</b> 은 사업부 확인 목록으로 CM·공장·카테고리를
+              DISPO(생산 라인 코드)가 아직 없는 SKU {teamBoard.overrideMapped.itemCount}품목 ·{' '}
+              <b>{formatNoteAmount(teamBoard.overrideMapped.value)}</b> 은 사업부 확인 목록으로 CM·공장·카테고리를
               배정했습니다. 기준정보가 정비돼 DISPO 가 붙으면 그 값이 자동으로 우선합니다.
             </section>
           )}
 
           {/* 3. 카테고리 축에 못 담긴 재고 — 매핑 누락을 금액으로 드러낸다 */}
-          {board.unmappedDispo.length > 0 && (
+          {axis === 'team' && teamBoard && teamBoard.unmappedDispo.length > 0 && (
             <section className="rounded-lg border border-amber-200 bg-amber-50 p-2.5">
               <h2 className="mb-1.5 flex items-center gap-1 text-xs font-bold text-amber-900">
                 <AlertTriangle size={13} />
                 카테고리 미매핑 (DISPO)
               </h2>
               <div className="flex flex-wrap gap-1.5">
-                {board.unmappedDispo.slice(0, 12).map((entry) => (
+                {teamBoard.unmappedDispo.slice(0, 12).map((entry) => (
                   <span
                     key={entry.dispo}
                     className="rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] text-amber-900"
@@ -1222,6 +1492,40 @@ export default function WeeklyBoardPage() {
                   </span>
                 ))}
               </div>
+            </section>
+          )}
+          {/* 3-1. 채널 축에 못 담긴 재고 — 팀별 축의 「미매핑」과 같은 역할이다 */}
+          {axis === 'channel' && channelBoard && channelBoard.unmappedLv2.length > 0 && (
+            <section className="rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+              <h2 className="mb-1.5 flex items-center gap-1 text-xs font-bold text-amber-900">
+                <AlertTriangle size={13} />
+                채널 미매핑 (제품계층 LV2)
+                <InfoTooltip text="제품계층 2레벨 값이 채널 매핑표(lib/weekly/channel.ts)에 없는 재고입니다. 표에 줄을 더하면 다시 적재하지 않아도 과거 주차까지 함께 옮겨갑니다." />
+              </h2>
+              <div className="flex flex-wrap gap-1.5">
+                {channelBoard.unmappedLv2.slice(0, 12).map((entry) => (
+                  <span
+                    key={entry.lv2}
+                    className="rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] text-amber-900"
+                  >
+                    <b>{entry.lv2}</b> {formatNoteAmount(entry.value)} · {entry.itemCount}품목
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* 3-2. 제품계층 마스터에 아예 없는 SKU — 매핑 누락과 원인이 다르므로 따로 알린다 */}
+          {axis === 'channel' && channelBoard && channelBoard.missingHierarchy.itemCount > 0 && (
+            <section className="rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 text-[11px] text-neutral-700">
+              <h2 className="mb-1 flex items-center gap-1 text-xs font-bold text-neutral-800">
+                <Info size={13} />
+                제품계층 마스터 없음
+              </h2>
+              {channelBoard.missingHierarchy.itemCount}품목 ·{' '}
+              <b>{formatNoteAmount(channelBoard.missingHierarchy.value)}</b> 은 자재마스터(SD_MARA)에
+              제품계층이 없어 채널을 판정하지 못했습니다. 매핑 누락이 아니라 기준정보 자체가 비어 있는
+              경우입니다{isAdmin ? ' — 「제품계층 갱신」을 눌러 마스터를 다시 받아보세요.' : '.'}
             </section>
           )}
         </>

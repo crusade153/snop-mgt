@@ -8,6 +8,12 @@
 
 import { isOverriddenMaterial } from '@/lib/weekly/category-overrides';
 import {
+  channelOfLv2,
+  channelSortWeight,
+  WEEKLY_CHANNEL_ORDER,
+  type WeeklyChannel,
+} from '@/lib/weekly/channel';
+import {
   categoryOfDispo,
   categoryOfMaterial,
   cmOfCategory,
@@ -114,11 +120,14 @@ export interface WeeklySnapshotRow {
   avg_remain_rate?: number | null;
 }
 
-/** 화면 표의 한 줄 (CM × 공장 × 카테고리) */
-export interface WeeklyBoardRow {
-  cm: WeeklyCm;
-  plant: WeeklyPlant;
-  category: WeeklyCategory;
+/**
+ * 축과 무관한 집계 값 — 팀별 표와 채널별 표가 **같은 계산을 공유**한다.
+ *
+ * ⚠️ 두 축은 같은 재고를 다르게 접은 것뿐이라 합계가 원 단위까지 같아야 한다.
+ * 그래서 집계·비율·대차 계산은 여기 한 벌만 두고 축별 빌더는 「무엇으로 묶을지」만 정한다.
+ * 축마다 따로 더하기 시작하면 두 탭의 합계가 갈려 사용자가 어느 쪽을 믿어야 할지 알 수 없게 된다.
+ */
+export interface WeeklyBoardMetrics {
   previousStockValue: number;
   shippedValue: number;
   producedValue: number;
@@ -141,7 +150,19 @@ export interface WeeklyBoardRow {
   balanceGap: number;
 }
 
-export interface WeeklyBoardTotals extends Omit<WeeklyBoardRow, 'cm' | 'plant' | 'category'> {
+/** 팀별 축 표의 한 줄 (CM × 공장 × 카테고리) */
+export interface WeeklyBoardRow extends WeeklyBoardMetrics {
+  cm: WeeklyCm;
+  plant: WeeklyPlant;
+  category: WeeklyCategory;
+}
+
+/** 채널별 축 표의 한 줄 (채널 하나). 제품계층 LV2 로 판정한다 */
+export interface WeeklyChannelRow extends WeeklyBoardMetrics {
+  channel: WeeklyChannel;
+}
+
+export interface WeeklyBoardTotals extends WeeklyBoardMetrics {
   rowCount: number;
 }
 
@@ -238,10 +259,14 @@ export interface WeeklyBoardResult {
   overrideMapped: { value: number; itemCount: number };
 }
 
-const emptyRow = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory): WeeklyBoardRow => ({
-  cm,
-  plant,
-  category,
+/* ------------------------------------------------------------------ */
+/* 축 공용 집계 코어                                                      */
+/*                                                                      */
+/* 팀별(CM×공장×카테고리)과 채널별(제품계층 LV2) 두 축이 이 함수들을 공유한다.  */
+/* 묶는 키만 다르고 더하는 방식·비율·대차는 완전히 같아야 두 탭의 합계가 일치한다. */
+/* ------------------------------------------------------------------ */
+
+const emptyMetrics = (): WeeklyBoardMetrics => ({
   previousStockValue: 0,
   shippedValue: 0,
   producedValue: 0,
@@ -253,6 +278,91 @@ const emptyRow = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory): W
   stockToSalesRatio: null,
   balanceGap: 0,
 });
+
+const emptyRow = (cm: WeeklyCm, plant: WeeklyPlant, category: WeeklyCategory): WeeklyBoardRow => ({
+  cm,
+  plant,
+  category,
+  ...emptyMetrics(),
+});
+
+/** 당주 행 하나를 누적. 전주 행은 `previousStockValue` 만 더하므로 호출부에서 따로 처리한다 */
+function accumulateCurrent(target: WeeklyBoardMetrics, row: WeeklySnapshotRow) {
+  target.stockValue += row.stock_value || 0;
+  target.shippedValue += row.shipped_value || 0;
+  target.producedValue += row.produced_value || 0;
+  target.shipmentMtd += row.shipped_mtd_value || 0;
+  target.salesMtd += row.sales_mtd || 0;
+  addBuckets(target.buckets, bucketsOfRow(row));
+}
+
+/** 누적이 끝난 값에 비율·대차를 채운다 */
+function finalizeMetrics<T extends WeeklyBoardMetrics>(row: T): T {
+  return {
+    ...row,
+    stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
+    stockToSalesRatio: row.salesMtd > 0 ? row.stockValue / row.salesMtd : null,
+    balanceGap: row.previousStockValue + row.producedValue - row.shippedValue - row.stockValue,
+  };
+}
+
+/** 재고도 흐름도 전혀 없는 조합은 표를 늘리기만 한다 */
+function hasAnyValue(row: WeeklyBoardMetrics) {
+  return (
+    row.stockValue !== 0 ||
+    row.previousStockValue !== 0 ||
+    row.shippedValue !== 0 ||
+    row.producedValue !== 0
+  );
+}
+
+/** 표 합계. 행에서 다시 더하므로 표에 보이는 숫자와 구조적으로 일치한다 */
+function totalsOf(rows: WeeklyBoardMetrics[]): WeeklyBoardTotals {
+  const totals: WeeklyBoardTotals = {
+    ...emptyMetrics(),
+    rowCount: rows.length,
+    previousStockValue: rows.reduce((sum, row) => sum + row.previousStockValue, 0),
+    shippedValue: rows.reduce((sum, row) => sum + row.shippedValue, 0),
+    producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
+    stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
+    shipmentMtd: rows.reduce((sum, row) => sum + row.shipmentMtd, 0),
+    salesMtd: rows.reduce((sum, row) => sum + row.salesMtd, 0),
+  };
+  rows.forEach((row) => addBuckets(totals.buckets, row.buckets));
+  return { ...finalizeMetrics(totals), rowCount: rows.length };
+}
+
+/**
+ * 구간별 주간 재고변동 표.
+ *
+ * 전주 구간액은 전주 스냅샷에서 그대로 접는다. 원본 엑셀은 이 표의 합계가 상단 표와
+ * 어긋나 있었는데(계산오류), 같은 원천을 쓰면 구조적으로 일치한다.
+ */
+function bucketMovementOf(
+  previousBuckets: WeeklyBuckets,
+  currentBuckets: WeeklyBuckets
+): WeeklyBucketMovement {
+  const delta = createWeeklyBuckets();
+  const rate = createWeeklyBuckets();
+  WEEKLY_BUCKET_KEYS.forEach((key) => {
+    delta[key] = currentBuckets[key] - previousBuckets[key];
+    rate[key] = previousBuckets[key] > 0 ? delta[key] / previousBuckets[key] : 0;
+  });
+
+  const previousTotal = sumBuckets(previousBuckets);
+  const currentTotal = sumBuckets(currentBuckets);
+
+  return {
+    previous: previousBuckets,
+    current: currentBuckets,
+    delta,
+    rate,
+    previousTotal,
+    currentTotal,
+    deltaTotal: currentTotal - previousTotal,
+    rateTotal: previousTotal > 0 ? (currentTotal - previousTotal) / previousTotal : 0,
+  };
+}
 
 export function buildWeeklyBoard({
   current,
@@ -287,13 +397,7 @@ export function buildWeeklyBoard({
   });
 
   current.filter(inScope).forEach((row) => {
-    const target = touch(row);
-    target.stockValue += row.stock_value || 0;
-    target.shippedValue += row.shipped_value || 0;
-    target.producedValue += row.produced_value || 0;
-    target.shipmentMtd += row.shipped_mtd_value || 0;
-    target.salesMtd += row.sales_mtd || 0;
-    addBuckets(target.buckets, bucketsOfRow(row));
+    accumulateCurrent(touch(row), row);
 
     if (categoryOfDispo(row.dispo) === '기타' && isOverriddenMaterial(row.material_code)) {
       // DISPO 없이 한시 매핑표로 자리를 잡은 몫. 「미매핑」에서 빠진 대신 여기로 드러난다.
@@ -313,56 +417,14 @@ export function buildWeeklyBoard({
   });
 
   const rows = [...byKey.values()]
-    .map((row) => ({
-      ...row,
-      stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
-      stockToSalesRatio: row.salesMtd > 0 ? row.stockValue / row.salesMtd : null,
-      balanceGap: row.previousStockValue + row.producedValue - row.shippedValue - row.stockValue,
-    }))
-    // 재고도 흐름도 전혀 없는 조합은 표를 늘리기만 한다
-    .filter(
-      (row) =>
-        row.stockValue !== 0 ||
-        row.previousStockValue !== 0 ||
-        row.shippedValue !== 0 ||
-        row.producedValue !== 0
-    )
+    .map(finalizeMetrics)
+    .filter(hasAnyValue)
     .sort((a, b) => rowSortWeight(a.cm, a.category) - rowSortWeight(b.cm, b.category));
 
-  const totals: WeeklyBoardTotals = {
-    rowCount: rows.length,
-    previousStockValue: rows.reduce((sum, row) => sum + row.previousStockValue, 0),
-    shippedValue: rows.reduce((sum, row) => sum + row.shippedValue, 0),
-    producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
-    stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
-    buckets: createWeeklyBuckets(),
-    shipmentMtd: rows.reduce((sum, row) => sum + row.shipmentMtd, 0),
-    salesMtd: rows.reduce((sum, row) => sum + row.salesMtd, 0),
-    stockToShipmentRatio: null,
-    stockToSalesRatio: null,
-    balanceGap: 0,
-  };
-  rows.forEach((row) => addBuckets(totals.buckets, row.buckets));
-  totals.stockToShipmentRatio =
-    totals.shipmentMtd > 0 ? totals.stockValue / totals.shipmentMtd : null;
-  totals.stockToSalesRatio = totals.salesMtd > 0 ? totals.stockValue / totals.salesMtd : null;
-  totals.balanceGap =
-    totals.previousStockValue + totals.producedValue - totals.shippedValue - totals.stockValue;
+  const totals = totalsOf(rows);
 
-  // 전주 구간액은 전주 스냅샷에서 그대로 접는다.
-  // 원본 엑셀은 이 표의 합계가 상단 표와 어긋나 있었는데(계산오류), 같은 원천을 쓰면 구조적으로 일치한다.
   const previousBuckets = createWeeklyBuckets();
   previous.filter(inScope).forEach((row) => addBuckets(previousBuckets, bucketsOfRow(row)));
-
-  const delta = createWeeklyBuckets();
-  const rate = createWeeklyBuckets();
-  WEEKLY_BUCKET_KEYS.forEach((key) => {
-    delta[key] = totals.buckets[key] - previousBuckets[key];
-    rate[key] = previousBuckets[key] > 0 ? delta[key] / previousBuckets[key] : 0;
-  });
-
-  const previousTotal = sumBuckets(previousBuckets);
-  const currentTotal = sumBuckets(totals.buckets);
 
   const categoryTotals = new Map<WeeklyCategory, WeeklyBuckets>();
   rows.forEach((row) => {
@@ -375,16 +437,7 @@ export function buildWeeklyBoard({
     hasPrevious: previous.length > 0,
     rows,
     totals,
-    movement: {
-      previous: previousBuckets,
-      current: totals.buckets,
-      delta,
-      rate,
-      previousTotal,
-      currentTotal,
-      deltaTotal: currentTotal - previousTotal,
-      rateTotal: previousTotal > 0 ? (currentTotal - previousTotal) / previousTotal : 0,
-    },
+    movement: bucketMovementOf(previousBuckets, totals.buckets),
     categoryBuckets: WEEKLY_CATEGORY_ORDER.map((category) => {
       const buckets = categoryTotals.get(category) || createWeeklyBuckets();
       return { category, buckets, total: sumBuckets(buckets) };
@@ -394,6 +447,173 @@ export function buildWeeklyBoard({
       .sort((a, b) => b.value - a.value),
     overrideMapped: { value: overridden.value, itemCount: overridden.codes.size },
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 채널별 축 — 제품계층 LV2                                              */
+/* ------------------------------------------------------------------ */
+
+export interface BuildWeeklyChannelBoardInput {
+  current: WeeklySnapshotRow[];
+  previous: WeeklySnapshotRow[];
+  /**
+   * 자재코드 → 제품계층 LV2(`PRDHA_2_T`). `snop_material_hierarchy` 에서 읽어 넘긴다.
+   *
+   * ⚠️ 스냅샷 열이 아니라 **조회 시점의 마스터**다. 그래서 마스터를 갱신하면
+   * 이미 적재된 과거 주차까지 같은 채널로 다시 접힌다 — 팀별 축이 `dispo` 원본에서
+   * 카테고리를 다시 판정하는 것과 같은 원칙이다.
+   */
+  lv2Map: Map<string, string>;
+  scopes: WeeklyStorageScope[];
+}
+
+export interface WeeklyChannelBoardResult {
+  hasPrevious: boolean;
+  rows: WeeklyChannelRow[];
+  totals: WeeklyBoardTotals;
+  movement: WeeklyBucketMovement;
+  /** 채널별 구간 재고금액 — 차트가 그대로 쓴다 */
+  channelBuckets: { channel: WeeklyChannel; buckets: WeeklyBuckets; total: number }[];
+  /**
+   * 채널 매핑표에 없는 LV2 별 재고금액.
+   *
+   * 팀별 축의 `unmappedDispo` 와 같은 역할이다 — 분류가 안 된 금액을 숨기지 않고 드러낸다.
+   * `lib/weekly/channel.ts` 에 줄을 더하면 재적재 없이 과거 주차까지 함께 옮겨간다.
+   */
+  unmappedLv2: { lv2: string; value: number; itemCount: number }[];
+  /**
+   * 제품계층 마스터에 아예 없는 SKU 의 재고금액.
+   *
+   * 「매핑이 빠졌다」와 「마스터를 아직 동기화하지 않았다」는 원인이 달라 따로 센다.
+   * 이 값이 전액이면 `snop_material_hierarchy` 가 비어 있다는 뜻이다(적재 한 번이면 채워진다).
+   */
+  missingHierarchy: { value: number; itemCount: number };
+}
+
+/**
+ * 채널별 표를 접는다.
+ *
+ * ⚠️ **팀별 표와 같은 집계 코어(`accumulateCurrent`·`totalsOf`·`bucketMovementOf`)를 쓴다.**
+ * 같은 재고를 다르게 묶은 것뿐이므로 두 탭의 합계는 원 단위까지 같아야 한다.
+ * 여기서만 다른 필터를 걸거나 따로 더하기 시작하면 두 숫자가 갈려
+ * 사용자가 어느 쪽을 믿어야 할지 알 수 없게 된다(`verify:weekly` [7]이 이 일치를 지킨다).
+ */
+export function buildWeeklyChannelBoard({
+  current,
+  previous,
+  lv2Map,
+  scopes,
+}: BuildWeeklyChannelBoardInput): WeeklyChannelBoardResult {
+  const scopeSet = scopes.length ? new Set(scopes) : null;
+  const inScope = (row: WeeklySnapshotRow) => !scopeSet || scopeSet.has(row.storage_scope);
+
+  const byChannel = new Map<WeeklyChannel, WeeklyChannelRow>();
+  const unmapped = new Map<string, { value: number; codes: Set<string> }>();
+  const missing = { value: 0, codes: new Set<string>() };
+
+  const channelOf = (row: WeeklySnapshotRow) => channelOfLv2(lv2Map.get(row.material_code));
+
+  const touch = (row: WeeklySnapshotRow) => {
+    const channel = channelOf(row);
+    let target = byChannel.get(channel);
+    if (!target) {
+      target = { channel, ...emptyMetrics() };
+      byChannel.set(channel, target);
+    }
+    return target;
+  };
+
+  previous.filter(inScope).forEach((row) => {
+    touch(row).previousStockValue += row.stock_value || 0;
+  });
+
+  current.filter(inScope).forEach((row) => {
+    accumulateCurrent(touch(row), row);
+
+    if (channelOf(row) !== '미분류') return;
+
+    const lv2 = String(lv2Map.get(row.material_code) ?? '').trim();
+    if (!lv2) {
+      // 마스터에 없는 SKU. 매핑 누락과 원인이 다르므로 섞지 않는다.
+      missing.value += row.stock_value || 0;
+      missing.codes.add(row.material_code);
+      return;
+    }
+    const bucket = unmapped.get(lv2) || { value: 0, codes: new Set<string>() };
+    bucket.value += row.stock_value || 0;
+    bucket.codes.add(row.material_code);
+    unmapped.set(lv2, bucket);
+  });
+
+  const rows = [...byChannel.values()]
+    .map(finalizeMetrics)
+    .filter(hasAnyValue)
+    .sort((a, b) => channelSortWeight(a.channel) - channelSortWeight(b.channel));
+
+  const totals = totalsOf(rows);
+
+  const previousBuckets = createWeeklyBuckets();
+  previous.filter(inScope).forEach((row) => addBuckets(previousBuckets, bucketsOfRow(row)));
+
+  const channelTotals = new Map<WeeklyChannel, WeeklyBuckets>();
+  rows.forEach((row) => {
+    const target = channelTotals.get(row.channel) || createWeeklyBuckets();
+    addBuckets(target, row.buckets);
+    channelTotals.set(row.channel, target);
+  });
+
+  return {
+    hasPrevious: previous.length > 0,
+    rows,
+    totals,
+    movement: bucketMovementOf(previousBuckets, totals.buckets),
+    channelBuckets: WEEKLY_CHANNEL_ORDER.map((channel) => {
+      const buckets = channelTotals.get(channel) || createWeeklyBuckets();
+      return { channel, buckets, total: sumBuckets(buckets) };
+    }).filter((entry) => entry.total > 0),
+    unmappedLv2: [...unmapped.entries()]
+      .map(([lv2, bucket]) => ({ lv2, value: bucket.value, itemCount: bucket.codes.size }))
+      .sort((a, b) => b.value - a.value),
+    missingHierarchy: { value: missing.value, itemCount: missing.codes.size },
+  };
+}
+
+/**
+ * 채널별 탭의 비고 문구. 팀별 문구(`buildStockSummaryNote`)와 같은 틀이고 나열 축만 채널이다.
+ */
+export function buildChannelStockSummaryNote(result: WeeklyChannelBoardResult) {
+  const { totals, rows } = result;
+
+  if (!result.hasPrevious) {
+    const flowDelta = totals.producedValue - totals.shippedValue;
+    return [
+      `* 전체 재고금액 ${formatNoteAmount(totals.stockValue)}`,
+      ' - 전주 스냅샷이 없어 전주 대비 증감은 다음 주차부터 표시됩니다',
+      '',
+      `* 생산량 대비 출고량 ${formatSignedNoteAmount(-flowDelta)}`,
+    ].join('\n');
+  }
+
+  const totalDelta = totals.stockValue - totals.previousStockValue;
+  const channelText = rows
+    .map((row) => ({ channel: row.channel, delta: row.stockValue - row.previousStockValue }))
+    .filter((entry) => Math.round(entry.delta) !== 0)
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .map((entry) => `${entry.channel} ${formatSignedNoteAmount(entry.delta)}`)
+    .join(', ');
+
+  const flowDelta = totals.producedValue - totals.shippedValue;
+
+  const lines = [
+    `* 전체 재고금액은 전주 대비 ${formatNoteAmount(totalDelta)} ${totalDelta >= 0 ? '증가' : '감소'}`,
+  ];
+  if (channelText) lines.push(` - ${channelText}`);
+  lines.push('');
+  lines.push(
+    `* 생산량 대비 출고량 ${formatSignedNoteAmount(-flowDelta)}으로 전체 재고 ${flowDelta >= 0 ? '증가' : '감소'}`
+  );
+
+  return lines.join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -515,6 +735,10 @@ export interface WeeklyDetailRow {
   cm: WeeklyCm;
   plant: WeeklyPlant;
   category: WeeklyCategory;
+  /** 제품계층 LV2(`PRDHA_2_T`). 마스터에 없으면 null */
+  lv2: string | null;
+  /** LV2 로 판정한 판매 채널. 팀별 축으로 펼쳐도 함께 보여 두 축을 한 줄에서 대조할 수 있다 */
+  channel: WeeklyChannel;
   unit: string;
   stockQty: number;
   stockValue: number;
@@ -561,6 +785,13 @@ export interface BuildWeeklyDetailInput extends BuildWeeklyBoardInput {
   category?: WeeklyCategory | null;
   /** 이 CM 만. 카테고리와 함께 주면 메인 표의 그 한 줄과 정확히 같은 모수가 된다 */
   cm?: WeeklyCm | null;
+  /**
+   * 자재코드 → 제품계층 LV2. 채널 열·채널 필터의 원천이다.
+   * 없으면 채널이 전부 `미분류` 로 나오므로 채널 드릴다운에서는 반드시 넘겨야 한다.
+   */
+  lv2Map?: Map<string, string>;
+  /** 이 채널만. 채널별 표의 한 줄을 펼칠 때 쓴다 */
+  channel?: WeeklyChannel | null;
 }
 
 export interface WeeklyDetailResult {
@@ -604,7 +835,13 @@ export function buildWeeklyDetail({
   scopes,
   category = null,
   cm = null,
+  lv2Map,
+  channel = null,
 }: BuildWeeklyDetailInput): WeeklyDetailResult {
+  const lv2Of = (materialCode: string) => {
+    const value = String(lv2Map?.get(materialCode) ?? '').trim();
+    return value || null;
+  };
   const scopeSet = scopes.length ? new Set(scopes) : null;
   const inScope = (row: WeeklySnapshotRow) => !scopeSet || scopeSet.has(row.storage_scope);
 
@@ -617,6 +854,8 @@ export function buildWeeklyDetail({
     const rowCategory = categoryOfMaterial(row.material_code, row.dispo);
     if (category && rowCategory !== category) return false;
     if (cm && resolveCm(row.material_code, rowCategory, cmMapping) !== cm) return false;
+    // 채널 필터는 메인 채널 표와 **같은 판정 함수**를 쓴다. 여기서만 다르게 걸면 합계가 갈린다.
+    if (channel && channelOfLv2(lv2Of(row.material_code)) !== channel) return false;
     return true;
   };
 
@@ -631,6 +870,8 @@ export function buildWeeklyDetail({
         cm: resolveCm(row.material_code, rowCategory, cmMapping),
         plant: plantOfCategory(rowCategory),
         category: rowCategory,
+        lv2: lv2Of(row.material_code),
+        channel: channelOfLv2(lv2Of(row.material_code)),
         unit: row.unit || 'EA',
         stockQty: 0,
         stockValue: 0,

@@ -14,7 +14,7 @@ npm run lint       # eslint (flat config, next core-web-vitals + typescript)
 npx tsc --noEmit   # 타입만 빠르게 확인
 npm run verify:bom # BOM 마트·자재 귀속 실데이터 검증 (아래 참고)
 npm run verify:ads # 재고 장표 ADS(판매출고+생산투입) 실데이터 검증
-npm run verify:weekly # 주간 요약장표(주차 계산·분류·적재 불변식) 실데이터 검증
+npm run verify:weekly # 주간 요약장표(주차 계산·분류·적재 불변식·두 축 합계 일치) 실데이터 검증
 npm run verify:sales  # 매출 리포트(부호 분해·축 합계·부분월·제품 중복) 실데이터 검증
 ```
 
@@ -41,7 +41,7 @@ npm run verify:sales  # 매출 리포트(부호 분해·축 합계·부분월·�
 **Supabase 프로젝트는 사내 다른 앱들과 공유한다.** 이 앱이 만드는 테이블은 전부 `snop_` 접두어를 붙인다
 (`snop_profiles`, `snop_bom_leaf`, `snop_bom_build_runs`, `snop_product_owners`, `snop_material_thresholds`,
 `snop_inventory_daily_snapshots`, `snop_weekly_inventory_snapshots`, `snop_cm_mapping`, `snop_weekly_board_notes`,
-`snop_user_favorites`, `snop_user_favorite_customers`).
+`snop_material_hierarchy`, `snop_user_favorites`, `snop_user_favorite_customers`).
 `auth.users` 도 공유되므로 로그인 계정은 회사 이메일이 아니라 `<login_id>@snop.local` 내부 주소로 만든다(`lib/pin-auth.ts`).
 스키마 변경은 `supabase/*.sql` 에 파일로 남기고 대시보드에서 수동 실행한다(마이그레이션 러너 없음).
 
@@ -70,6 +70,11 @@ middleware.ts             전 경로 인증 게이트
 이 장표는 BigQuery 를 읽지 않는다 — 주 1회 적재해 둔 `snop_weekly_inventory_snapshots` 만 읽는다.
 표의 행(또는 카테고리 칩)을 누르면 `getWeeklyCategoryDetail` 이 그 칸을 SKU 단위로 펼친다
 (재고수량·금액·전주 比·소비기한 잔여일·소진필요·출고·생산, 금액/임박 정렬 + 페이지네이션).
+
+이 장표에는 **축 전환 탭이 두 개**다 — 「팀별」(CM×공장×카테고리, DISPO 기준)과 「채널별」(판매 채널, 제품계층 LV2 기준).
+**같은 주차·같은 스냅샷·같은 스코프를 보고 묶는 축만 다르므로 두 탭의 합계는 원 단위까지 같아야 한다**(`verify:weekly` [7]).
+집계·비율·대차는 `lib/weekly/board.ts` 의 공용 코어(`accumulateCurrent`·`totalsOf`·`bucketMovementOf`) 한 벌을 쓰고,
+축별 빌더(`buildWeeklyBoard` / `buildWeeklyChannelBoard`)는 「무엇으로 묶을지」만 정한다. 축마다 따로 더하기 시작하면 두 탭이 갈린다.
 
 `/sales-report` 는 청구매출 단독 장표다(`lib/sales-report/`, `actions/sales-report-actions.ts`).
 **다른 화면과 데이터를 공유하지 않는다** — 전용 액션·전용 캐시 키를 쓰므로 대시보드 집계에 영향이 없다.
@@ -260,6 +265,17 @@ middleware.ts             전 경로 인증 게이트
   ⚠️ 이 두 열은 나중에 추가돼서 **그 전에 적재된 주차는 영원히 null** 이다(재고는 소급 불가). 화면은 그 주차에서
   「소비기한 임박」 정렬을 막는다. 잔여율은 상한으로 검증할 수 없다 — 실측에 130% 초과(기한 연장)와
   음수(기한 경과)가 정상적으로 있다. 대신 **분포가 0~1 에 몰렸는지**(normalizeRate 누락)로 검증한다.
+- **주간 장표 「채널별」 탭의 판정 기준** — `lib/weekly/channel.ts` 하나에 모여 있다.
+  판매 채널은 **제품계층 2레벨(`SD_MARA.PRDHA_2_T`)** 로만 판정한다(`channelOfLv2`). 화면 행 순서는 **B2C → B2B → 수출 → NPB/PB → 기타 → 미분류** 고정이다.
+  ⚠️ **LV2 는 자재 하나당 값이 정확히 하나다**(실측: 완제품 대역 5,808품목 중 복수값 0건). DISPO 와 달리 대표값 선택(`pickPrimaryDispo`) 문제가 없다.
+  ⚠️ **접두 매칭을 하지 말 것.** `OEM 면`은 수출인데 `OEM 만두`는 B2B 다 — 「OEM 으로 시작하면 B2B」로 줄이면 두 줄이 뭉개진다. 매핑은 사업부 확인표를 값 그대로 옮긴 것이다.
+  ⚠️ **키 문자열을 정리하지 말 것.** `The미식  냉동` 은 공백이 **두 칸**인 실제 마스터 값이고, 정규화하면 그 줄이 통째로 미분류가 된다(`verify:weekly` [7]이 지킨다).
+  ⚠️ **표에 없는 LV2 는 `기타` 가 아니라 `미분류`** 다. `기타`(반제품·부자재·계열사)는 사업부가 지정한 실제 채널이라, 매핑 누락과 섞이면 "이 8억이 진짜 기타인지 매핑이 빠진 건지" 구분할 수 없다.
+  원표에 없던 4종(`OEM`·`OEM 반찬류`→B2B, `The미식`·`푸디버디`→B2C)은 같은 브랜드의 다른 줄과 동일하게 채웠다. 실측 2026-09-06 주차 **미분류 0원**이다.
+  ⚠️ **분류 원천을 스냅샷 열에 박지 않고 `snop_material_hierarchy` 별도 표로 둔 것은 의도다.** 제품계층은 측정값이 아니라 기준정보라 소급 적용이 맞고,
+  표를 한 번 갱신하면 **이미 적재된 과거 주차까지 같은 채널로 다시 접힌다**(재고는 소급 생성이 불가능해 스냅샷 열이었다면 주차마다 재적재해야 한다).
+  갱신은 주간 적재(`lib/weekly-snapshot.ts`)가 매번 함께 돌리고, 관리자가 화면에서 「제품계층 갱신」으로 따로 누를 수도 있다.
+  ⚠️ 이 표는 완제품 대역 전체라 **6천 행에 가깝다.** PostgREST 서버 상한(max-rows = 1000)에 잘리면 뒤쪽 자재가 통째로 미분류가 되므로 `loadLv2Map` 은 `range()` 페이징으로 읽는다 — 한 방 `select` 로 되돌리지 말 것.
 - 자재 공용/전용(`SHARED`/`DEDICATED`)은 **BOM 사실**로, 담당자 지분은 **최근 실적**으로 판정한다. 서로 다른 기준이며 의도된 것이다.
 
 ## 환경변수 (`.env.local`, 커밋 금지)

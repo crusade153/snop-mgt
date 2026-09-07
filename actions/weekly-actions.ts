@@ -12,13 +12,17 @@ import { unstable_cache, updateTag } from 'next/cache';
 import { createAdminSupabaseClient, getAdminContext } from '@/lib/admin-auth';
 import {
   buildBucketMovementNote,
+  buildChannelStockSummaryNote,
   buildStockSummaryNote,
   buildWeeklyBoard,
+  buildWeeklyChannelBoard,
   buildWeeklyDetail,
   type WeeklyBoardResult,
+  type WeeklyChannelBoardResult,
   type WeeklyDetailResult,
   type WeeklySnapshotRow,
 } from '@/lib/weekly/board';
+import type { WeeklyChannel } from '@/lib/weekly/channel';
 import type { WeeklyCategory, WeeklyCm, WeeklyStorageScope } from '@/lib/weekly/classification';
 import { isConsecutiveWeek, rangeLabel, seoulToday, shortDateLabel, weekRangeOf } from '@/lib/weekly/week';
 
@@ -112,6 +116,40 @@ async function loadCmMapping(): Promise<Map<string, WeeklyCm>> {
   return new Map((data || []).map((row) => [String(row.material_code), row.cm_code as WeeklyCm]));
 }
 
+/**
+ * 자재코드 → 제품계층 LV2(`PRDHA_2_T`). 채널 축의 분류 원천이다.
+ *
+ * ⚠️ **한 번에 긁으면 안 된다.** PostgREST 서버 상한(max-rows = 1000)에서 응답이 잘리는데
+ * 이 표는 완제품 대역 전체라 6천 행이 넘는다(실측 5,8xx품목). 잘리면 뒤쪽 자재가
+ * 통째로 「미분류」로 떨어져 채널 표가 조용히 어긋난다 — 주차 목록에서 겪은 것과 같은 함정이다.
+ * 그래서 `range()` 페이징으로 전부 읽는다.
+ *
+ * 마스터가 아직 동기화되지 않았거나 테이블이 없으면 **빈 맵**을 돌려준다.
+ * 화면은 그때 「제품계층 기준정보가 아직 없습니다」 안내를 띄운다(빈 표를 던지지 않는다).
+ */
+async function loadLv2Map(): Promise<Map<string, string>> {
+  const supabase = createAdminSupabaseClient();
+  const map = new Map<string, string>();
+  const pageSize = 1000;
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('snop_material_hierarchy')
+      .select('material_code, prdha_2')
+      .order('material_code')
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.warn('⚠️ 제품계층 마스터 조회 실패, 채널 분류를 건너뜁니다:', error.message);
+      return map;
+    }
+    (data || []).forEach((row) => {
+      const lv2 = String(row.prdha_2 ?? '').trim();
+      if (lv2) map.set(String(row.material_code), lv2);
+    });
+    if ((data || []).length < pageSize) return map;
+  }
+}
+
 async function loadNotes(weekEnd: string) {
   const supabase = createAdminSupabaseClient();
   const { data, error } = await supabase
@@ -162,23 +200,35 @@ async function loadWeeks(limit = 26): Promise<string[]> {
   return weeks;
 }
 
+/**
+ * 주차 해석 — 두 축(팀별·채널별)이 **같은 주차·같은 전주**를 보게 하는 단일 지점.
+ * 여기서만 정하면 탭을 바꿔도 비교 모수가 흔들리지 않는다.
+ */
+async function resolveWeekContext(weekEnd: string | null) {
+  const weeks = await loadWeeks();
+  if (weeks.length === 0) return { weeks, targetWeek: null, priorWeek: null, hasComparable: false };
+
+  const targetWeek = weekEnd && weeks.includes(weekEnd) ? weekEnd : weeks[0];
+  const priorWeek = weeks.find((week) => week < targetWeek) || null;
+  return {
+    weeks,
+    targetWeek,
+    priorWeek,
+    hasComparable: !!priorWeek && isConsecutiveWeek(priorWeek, targetWeek),
+  };
+}
+
+const NO_WEEK_MESSAGE =
+  '아직 적재된 주차가 없습니다. 첫 주간 스냅샷이 쌓이면 표가 채워집니다(월요일 새벽 자동 적재).';
+
 async function buildPayload(
   weekEnd: string | null,
   scopes: WeeklyStorageScope[]
 ): Promise<WeeklyBoardPayload> {
-  const weeks = await loadWeeks();
-  if (weeks.length === 0) {
-    return {
-      ...EMPTY,
-      success: true,
-      message:
-        '아직 적재된 주차가 없습니다. 첫 주간 스냅샷이 쌓이면 표가 채워집니다(월요일 새벽 자동 적재).',
-    };
+  const { weeks, targetWeek, priorWeek, hasComparable } = await resolveWeekContext(weekEnd);
+  if (!targetWeek) {
+    return { ...EMPTY, success: true, message: NO_WEEK_MESSAGE };
   }
-
-  const targetWeek = weekEnd && weeks.includes(weekEnd) ? weekEnd : weeks[0];
-  const priorWeek = weeks.find((week) => week < targetWeek) || null;
-  const hasComparable = !!priorWeek && isConsecutiveWeek(priorWeek, targetWeek);
 
   // 연속하지 않은 주차를 「전주」로 쓰면 증감이 엉뚱해진다. 비교 가능할 때만 불러온다.
   const [current, previous, cmMapping, notes, capturedAt] = await Promise.all([
@@ -251,6 +301,160 @@ export async function getWeeklyBoard(
 }
 
 /* ------------------------------------------------------------------ */
+/* 채널별 축 (제품계층 LV2)                                              */
+/* ------------------------------------------------------------------ */
+
+export interface WeeklyChannelBoardPayload {
+  success: boolean;
+  message?: string;
+  weeks: string[];
+  weekEnd: string | null;
+  previousWeekEnd: string | null;
+  hasComparable: boolean;
+  labels: { title: string; previousStock: string; flow: string; currentStock: string };
+  board: WeeklyChannelBoardResult | null;
+  notes: { stock: string; bucket: string; issue: string };
+  overriddenNoteSections: string[];
+  capturedAt: string | null;
+  /**
+   * 제품계층 마스터(`snop_material_hierarchy`)가 비어 있는지.
+   *
+   * 비어 있으면 모든 재고가 「미분류」로 떨어진다. 표를 그럴듯하게 보여 주는 대신
+   * 화면에서 「기준정보를 먼저 갱신하세요」로 끊는다.
+   */
+  hierarchyEmpty: boolean;
+}
+
+const EMPTY_CHANNEL: WeeklyChannelBoardPayload = {
+  success: false,
+  weeks: [],
+  weekEnd: null,
+  previousWeekEnd: null,
+  hasComparable: false,
+  labels: { title: '', previousStock: '', flow: '', currentStock: '' },
+  board: null,
+  notes: { stock: '', bucket: '', issue: '' },
+  overriddenNoteSections: [],
+  capturedAt: null,
+  hierarchyEmpty: false,
+};
+
+/**
+ * 채널별 비고 문구는 팀별과 **다른 섹션 키**에 저장한다.
+ * 두 탭이 나열하는 축이 달라 같은 칸을 쓰면 한쪽 문구가 다른 탭에 그대로 나온다.
+ */
+const CHANNEL_NOTE_SECTIONS = { stock: 'stock_channel', bucket: 'bucket_channel', issue: 'issue_channel' };
+
+async function buildChannelPayload(
+  weekEnd: string | null,
+  scopes: WeeklyStorageScope[]
+): Promise<WeeklyChannelBoardPayload> {
+  const { weeks, targetWeek, priorWeek, hasComparable } = await resolveWeekContext(weekEnd);
+  if (!targetWeek) {
+    return { ...EMPTY_CHANNEL, success: true, message: NO_WEEK_MESSAGE };
+  }
+
+  const [current, previous, lv2Map, notes, capturedAt] = await Promise.all([
+    loadSnapshotRows(targetWeek),
+    hasComparable && priorWeek ? loadSnapshotRows(priorWeek) : Promise.resolve([]),
+    loadLv2Map(),
+    loadNotes(targetWeek),
+    loadCapturedAt(targetWeek),
+  ]);
+
+  const board = buildWeeklyChannelBoard({ current, previous, lv2Map, scopes });
+  const range = weekRangeOf(targetWeek);
+
+  return {
+    success: true,
+    weeks,
+    weekEnd: targetWeek,
+    previousWeekEnd: priorWeek,
+    hasComparable,
+    labels: {
+      title: `채널별 재고현황 (${shortDateLabel(targetWeek)} 기준)`,
+      previousStock: hasComparable && priorWeek ? `${shortDateLabel(priorWeek)} 재고` : '전주 재고',
+      flow: rangeLabel(range),
+      currentStock: `${shortDateLabel(targetWeek)} 재고`,
+    },
+    board,
+    notes: {
+      stock: notes.get(CHANNEL_NOTE_SECTIONS.stock) || buildChannelStockSummaryNote(board),
+      bucket:
+        notes.get(CHANNEL_NOTE_SECTIONS.bucket) ||
+        buildBucketMovementNote(board.movement, board.hasPrevious),
+      issue: notes.get(CHANNEL_NOTE_SECTIONS.issue) || '',
+    },
+    overriddenNoteSections: [...notes.keys()].filter((key) => key.endsWith('_channel')),
+    capturedAt,
+    hierarchyEmpty: lv2Map.size === 0,
+  };
+}
+
+/**
+ * 채널별 재고현황.
+ *
+ * ⚠️ **팀별 표와 같은 스냅샷·같은 스코프를 쓴다.** 축만 다르게 접은 것이라
+ * 두 탭의 합계(재고·출고·생산·구간액)는 원 단위까지 같아야 한다.
+ * 판정은 `lib/weekly/channel.ts`, 집계는 `lib/weekly/board.ts` 의 공용 코어에 있다.
+ */
+export async function getWeeklyChannelBoard(
+  weekEnd?: string,
+  scopes: WeeklyStorageScope[] = ['PLANT', 'LOGISTICS']
+): Promise<WeeklyChannelBoardPayload> {
+  try {
+    return await unstable_cache(
+      () => buildChannelPayload(weekEnd || null, scopes),
+      // v1: 제품계층 LV2 → 채널(B2C·B2B·수출·NPB/PB·기타) 축 신설
+      [`weekly-channel-board-v1-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      { revalidate: 600, tags: ['report-data'] }
+    )();
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : '채널별 장표를 불러오지 못했습니다.';
+    const missingTable =
+      /snop_material_hierarchy|snop_weekly_inventory_snapshots/.test(raw) &&
+      /find the table|does not exist/i.test(raw);
+    return {
+      ...EMPTY_CHANNEL,
+      message: missingTable
+        ? '테이블이 아직 없습니다. Supabase 대시보드에서 supabase/weekly-summary-board.sql 을 실행해 주세요.'
+        : raw,
+    };
+  }
+}
+
+/**
+ * 제품계층 마스터 수동 갱신 (관리자).
+ *
+ * 주간 적재가 매번 함께 돌리지만, 적재를 기다리지 않고 채널 분류만 새로 받고 싶을 때 쓴다.
+ * 마스터는 기준정보라 갱신하면 **이미 적재된 과거 주차까지 같은 채널로 다시 접힌다.**
+ */
+export async function refreshMaterialHierarchyAction(): Promise<CaptureActionResult> {
+  const context = await getAdminContext();
+  if (!context.isAdmin) {
+    return { ok: false, message: context.reason || '관리자만 갱신할 수 있습니다.' };
+  }
+  try {
+    const { syncMaterialHierarchy } = await import('@/lib/material-hierarchy');
+    const result = await syncMaterialHierarchy();
+    updateTag('report-data');
+    if (result.written === 0 && result.fetched > 0) {
+      return {
+        ok: false,
+        message:
+          'snop_material_hierarchy 테이블이 없습니다. supabase/weekly-summary-board.sql 의 7번 블록을 실행해 주세요.',
+      };
+    }
+    return {
+      ok: true,
+      message: `제품계층 기준정보 ${result.written.toLocaleString('ko-KR')}품목 갱신 완료 · 과거 주차도 함께 다시 분류됩니다`,
+    };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : '갱신에 실패했습니다.' };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 카테고리 드릴다운                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -261,6 +465,8 @@ export interface WeeklyDetailPayload {
   previousWeekEnd: string | null;
   category: WeeklyCategory | null;
   cm: WeeklyCm | null;
+  /** 채널별 탭에서 펼친 경우의 채널. 팀별 탭에서는 null */
+  channel: WeeklyChannel | null;
   detail: WeeklyDetailResult | null;
 }
 
@@ -277,7 +483,8 @@ export async function getWeeklyCategoryDetail(
   weekEnd: string,
   category: WeeklyCategory | null,
   cm: WeeklyCm | null = null,
-  scopes: WeeklyStorageScope[] = ['PLANT', 'LOGISTICS']
+  scopes: WeeklyStorageScope[] = ['PLANT', 'LOGISTICS'],
+  channel: WeeklyChannel | null = null
 ): Promise<WeeklyDetailPayload> {
   try {
     return await unstable_cache(
@@ -291,6 +498,7 @@ export async function getWeeklyCategoryDetail(
             previousWeekEnd: null,
             category,
             cm,
+            channel,
             detail: null,
           } satisfies WeeklyDetailPayload;
         }
@@ -298,10 +506,13 @@ export async function getWeeklyCategoryDetail(
         const priorWeek = weeks.find((week) => week < weekEnd) || null;
         const comparable = !!priorWeek && isConsecutiveWeek(priorWeek, weekEnd);
 
-        const [current, previous, cmMapping] = await Promise.all([
+        // 제품계층은 두 탭 모두에서 읽는다 — 팀별로 펼쳐도 SKU 마다 채널을 함께 보여
+        // 「이 냉동 재고 중 무엇이 B2B 인가」를 한 줄에서 대조할 수 있게 하기 위한 것이다.
+        const [current, previous, cmMapping, lv2Map] = await Promise.all([
           loadSnapshotRows(weekEnd),
           comparable && priorWeek ? loadSnapshotRows(priorWeek) : Promise.resolve([]),
           loadCmMapping(),
+          loadLv2Map(),
         ]);
 
         return {
@@ -310,12 +521,24 @@ export async function getWeeklyCategoryDetail(
           previousWeekEnd: comparable ? priorWeek : null,
           category,
           cm,
-          detail: buildWeeklyDetail({ current, previous, cmMapping, scopes, category, cm }),
+          channel,
+          detail: buildWeeklyDetail({
+            current,
+            previous,
+            cmMapping,
+            scopes,
+            category,
+            cm,
+            lv2Map,
+            channel,
+          }),
         } satisfies WeeklyDetailPayload;
       },
       [
-        // v5: 메인 표와 같은 분류(6 대역 상품 + 한시 매핑)가 상세에도 그대로 걸린다.
-        `weekly-detail-v5-merchandise-band-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${[...scopes]
+        // v6: 채널 축(제품계층 LV2) 열·필터 추가. v5 = 6 대역 상품 + 한시 매핑.
+        `weekly-detail-v6-channel-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
+          ...scopes,
+        ]
           .sort()
           .join('+')}`,
       ],
@@ -329,6 +552,7 @@ export async function getWeeklyCategoryDetail(
       previousWeekEnd: null,
       category,
       cm,
+      channel,
       detail: null,
     };
   }

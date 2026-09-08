@@ -190,10 +190,12 @@ M18 (라인표에 없음 — 실측상 쌀밥 전용이라 이 장표에서는 �
 | 주간 생산 | 해당 주 `MM_MB51` BWART 101 − 102 수량 × **원가단가** (BOX 는 `SD_MARA.UMREZ_BOX` 로 EA 환산) |
 | 당주 재고 | 해당 주차 스냅샷의 재고금액 |
 | 소비기한 구간 | 잔여율 5구간 — `~50%` / `50~70%` / `70~75%` / `75~85%` / `85%~`. **기존 `lib/inventory-board.ts:191` 로직 그대로 재사용** |
-| 월매출 비 재고금액 | 당주 재고금액 ÷ **당월 납품매출 실적 누계** (`SUM(NETWR)`, VDATU, 당월 1일~기준일) |
+| 전월 출고 비 재고금액 | 당주 재고금액 ÷ **전월 전체 출고금액** (VDATU, 전월 1일~말일, 원가단가 환산) |
+| 전월 매출 비 재고금액 | 당주 재고금액 ÷ **전월 전체 납품매출 실적** (`SUM(NETWR)`, VDATU, 전월 1일~말일) |
 
 **단가 기준 통일(확정): 재고·출고·생산 세 열 모두 `ending_inventory` 원가단가를 쓴다.**
-납품매출액(`NETWR`)은 「월매출 비」의 **분모 전용**이며, 출고 금액과 섞지 않는다.
+납품매출액(`NETWR`)은 「전월 매출 비」의 **분모 전용**이며, 출고 금액과 섞지 않는다.
+운영 재고량 판단은 원가 기준이 같은 「전월 출고 비」를 주지표로 보고, 「전월 매출 비」는 현금 흐름 부담을 보는 보조지표로 쓴다.
 
 「소진 필요」는 소비기한 잔여율 **75% 미만** 세 구간(`~50%`, `50~70%`, `70~75%`)의
 재고금액 합계와 전체 재고 대비 비중으로 계산한다.
@@ -343,7 +345,12 @@ snop_weekly_inventory_snapshots
   produced_qty     numeric   -- 주간 생산 (MB51 101-102)
   produced_value   numeric   -- 원가단가 환산
   sales_amount     numeric   -- 해당 주 납품매출액(NETWR)
-  sales_mtd        numeric   -- 당월 누적 납품매출액(NETWR) — 월매출 비 분모
+  shipped_mtd_qty  numeric   -- 과거 당월 누적 지표 보존용 (현재 화면 미사용)
+  shipped_mtd_value numeric  -- 과거 당월 누적 지표 보존용 (현재 화면 미사용)
+  sales_mtd        numeric   -- 과거 당월 누적 지표 보존용 (현재 화면 미사용)
+  shipped_previous_month_qty numeric   -- 전월 전체 출고수량
+  shipped_previous_month_value numeric -- 원가단가 환산 — 전월 출고 비 분모
+  sales_previous_month numeric         -- 전월 전체 납품매출액(NETWR) — 전월 매출 비 분모
 
   unit_price       numeric
   price_month      text      -- 실제 적용된 단가 기준월 (예: 202606)
@@ -565,6 +572,18 @@ H01 외의 코드는 받지 않는다. 여기를 넓히면 영업 코드가 생�
 - 누적 출고는 주간 출고와 같은 기준(`SD_ZASSDDV0020`, VDATU, BOX→기본단위 환산)이며 기간만 당월 1일~주차 종료일이다.
 - 적재 열이 `shipped_mtd_qty` / `shipped_mtd_value` 로 늘었다. **`supabase/weekly-summary-board.sql` 의 4절 ALTER 를 먼저 실행해야 적재가 된다.**
 - NETWR 은 `sales_amount`·`sales_mtd` 로 적재하며, `sales_mtd` 는 별도 「월 매출 比 재고금액」의 분모로 쓴다.
+
+### 전월 출고·매출 比 재고금액 (2026-09 변경)
+
+월초에는 당월 1일~기준일까지 며칠치 실적만 분모에 들어가 비율이 과도하게 높아지는 문제가 있었다.
+두 지표 모두 완료된 **직전 달 1일~말일**을 분모로 고정했다.
+
+- `전월 출고 比` = 현재 재고금액 ÷ 전월 출고수량의 원가단가 환산액
+- `전월 매출 比` = 현재 재고금액 ÷ 전월 실제 납품매출액(`NETWR`)
+- 9/6 주차라면 두 지표 모두 8/1~8/31 실적을 사용한다. 주차 안에서는 같은 한 달 분모라 월초 왜곡이 없다.
+- 새 열은 `shipped_previous_month_qty` / `shipped_previous_month_value` / `sales_previous_month`다.
+- 기존 `*_mtd` 열은 과거 데이터 의미 보존을 위해 삭제하거나 재사용하지 않는다.
+- `supabase/weekly-summary-board.sql`의 8절 ALTER를 코드 배포·재적재보다 먼저 실행한다.
 
 ### 남은 일 ② — 이슈재고 소진 구글시트 (8절)
 

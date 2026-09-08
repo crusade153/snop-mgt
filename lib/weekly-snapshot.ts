@@ -135,10 +135,10 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
               shipped_value: row.shipped_value,
               produced_qty: row.produced_qty,
               produced_value: row.produced_value,
-              shipped_mtd_qty: row.shipped_mtd_qty,
-              shipped_mtd_value: row.shipped_mtd_value,
               sales_amount: row.sales_amount,
-              sales_mtd: row.sales_mtd,
+              shipped_previous_month_qty: row.shipped_previous_month_qty,
+              shipped_previous_month_value: row.shipped_previous_month_value,
+              sales_previous_month: row.sales_previous_month,
             })
             .eq('week_end_date', row.week_end_date)
             .eq('material_code', row.material_code)

@@ -148,7 +148,7 @@ const DETAIL_SORTS: { key: DetailSortKey; label: string; hint: string }[] = [
   { key: 'riskRatio', label: '소진필요 비중', hint: '재고 대비 잔여율 75% 미만 비중이 높은 순' },
   { key: 'remain', label: '소비기한 임박', hint: '가장 임박한 배치의 잔여일이 짧은 순' },
   { key: 'shipped', label: '주간 출고', hint: '이번 주 출고금액이 큰 순' },
-  { key: 'ratio', label: '월 출고 比', hint: '재고금액 ÷ 당월 누적 출고금액이 높은 순' },
+  { key: 'ratio', label: '전월 출고 比', hint: '재고금액 ÷ 전월 전체 출고금액이 높은 순' },
   { key: 'delta', label: '전주 比 증가', hint: '전주 대비 재고금액이 많이 늘어난 순' },
 ];
 
@@ -340,11 +340,14 @@ export default function WeeklyBoardPage() {
         case 'shipped':
           return b.shippedValue - a.shippedValue;
         case 'ratio':
-          if (a.stockToShipmentRatio === null && b.stockToShipmentRatio === null)
+          if (
+            a.stockToPreviousMonthShipmentRatio === null &&
+            b.stockToPreviousMonthShipmentRatio === null
+          )
             return b.stockValue - a.stockValue;
-          if (a.stockToShipmentRatio === null) return 1;
-          if (b.stockToShipmentRatio === null) return -1;
-          return b.stockToShipmentRatio - a.stockToShipmentRatio;
+          if (a.stockToPreviousMonthShipmentRatio === null) return 1;
+          if (b.stockToPreviousMonthShipmentRatio === null) return -1;
+          return b.stockToPreviousMonthShipmentRatio - a.stockToPreviousMonthShipmentRatio;
         case 'delta':
           return (b.stockDelta ?? 0) - (a.stockDelta ?? 0);
         default:
@@ -413,9 +416,11 @@ export default function WeeklyBoardPage() {
         '주간 출고수량': Math.round(row.shippedQty),
         '주간 생산금액': Math.round(row.producedValue),
         '주간 생산수량': Math.round(row.producedQty),
-        '월 누적 출고금액': Math.round(row.shipmentMtd),
-        '월 출고 比(%)':
-          row.stockToShipmentRatio === null ? null : Math.round(row.stockToShipmentRatio * 100),
+        '전월 출고금액': Math.round(row.previousMonthShipmentValue),
+        '전월 출고 比(%)':
+          row.stockToPreviousMonthShipmentRatio === null
+            ? null
+            : Math.round(row.stockToPreviousMonthShipmentRatio * 100),
         '단가': Math.round(row.unitPrice),
         '단가 기준월': row.priceMonth || '',
       })),
@@ -794,15 +799,15 @@ export default function WeeklyBoardPage() {
                       </th>
                       <th className="px-1.5 pb-1.5 font-bold">
                         <span className="flex items-center justify-end gap-1">
-                          월 출고 比
-                          <InfoTooltip text="재고금액 ÷ 당월 누적 출고금액입니다. 출고금액도 재고와 똑같이 완제품 재고단가로 환산하므로, 200% 는 '이번 달 출고량의 2배를 쌓아두고 있다'로 읽으면 됩니다. 매출액(판매가)이 분모였을 때는 마진율만큼 비율이 눌려 이렇게 읽을 수 없었습니다." />
+                          전월 출고 比
+                          <InfoTooltip text="현재 재고금액 ÷ 직전 달 1일~말일 출고금액입니다. 출고금액도 재고와 똑같이 완제품 재고단가로 환산하므로, 200%는 '전월 한 달 출고량의 2배를 쌓아두고 있다'로 읽습니다. 완료된 한 달을 분모로 써 월초에도 비율이 흔들리지 않습니다." />
                         </span>
                         재고금액
                       </th>
                       <th className="px-1.5 pb-1.5 font-bold">
                         <span className="flex items-center justify-end gap-1">
-                          월 매출 比
-                          <InfoTooltip text="재고금액 ÷ 당월 누적 실제 납품매출액(NETWR)입니다. 판매가 기준의 실제 매출과 현재 재고자산을 비교해 현금 흐름 부담을 판단합니다." />
+                          전월 매출 比
+                          <InfoTooltip text="현재 재고금액 ÷ 직전 달 1일~말일 실제 납품매출액(NETWR)입니다. 완료된 전월 매출과 현재 재고자산을 비교해 현금 흐름 부담을 판단합니다." />
                         </span>
                         재고금액
                       </th>
@@ -885,10 +890,10 @@ export default function WeeklyBoardPage() {
                             </div>
                           </td>
                           <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
-                            {percent(row.stockToShipmentRatio)}
+                            {percent(row.stockToPreviousMonthShipmentRatio)}
                           </td>
                           <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
-                            {percent(row.stockToSalesRatio)}
+                            {percent(row.stockToPreviousMonthSalesRatio)}
                           </td>
                         </tr>
                       );
@@ -942,10 +947,10 @@ export default function WeeklyBoardPage() {
                         </div>
                       </td>
                       <td className="px-1.5 py-2 tabular-nums">
-                        {percent(board.totals.stockToShipmentRatio)}
+                        {percent(board.totals.stockToPreviousMonthShipmentRatio)}
                       </td>
                       <td className="px-1.5 py-2 tabular-nums">
-                        {percent(board.totals.stockToSalesRatio)}
+                        {percent(board.totals.stockToPreviousMonthSalesRatio)}
                       </td>
                     </tr>
                   </tbody>
@@ -1151,7 +1156,7 @@ export default function WeeklyBoardPage() {
                               주간 출고
                             </th>
                             <th className="px-1.5 py-1.5 font-bold">주간 생산</th>
-                            <th className="px-1.5 py-1.5 font-bold">월 출고 比</th>
+                            <th className="px-1.5 py-1.5 font-bold">전월 출고 比</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1253,7 +1258,7 @@ export default function WeeklyBoardPage() {
                                 {moneyCell(row.producedValue)}
                               </td>
                               <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
-                                {percent(row.stockToShipmentRatio)}
+                                {percent(row.stockToPreviousMonthShipmentRatio)}
                               </td>
                             </tr>
                           ))}

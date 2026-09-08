@@ -68,7 +68,7 @@ for (const line of readFileSync(`${ROOT}/.env.local`, 'utf8').split(/\r?\n/)) {
 }
 
 const {
-  weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, monthToDateRange,
+  weekRangeOf, completedWeekOf, previousWeekEnd, isWeekEnd, previousMonthRange,
   canReplaceMidWeekStock,
 } = await import('@/lib/weekly/week');
 const {
@@ -107,8 +107,12 @@ console.log('\n[1] 주차 계산 (월~일)');
   check('전주 종료일', previousWeekEnd('2026-08-23') === '2026-08-16');
   check('주차 키 가드', isWeekEnd('2026-08-23') && !isWeekEnd('2026-08-19'));
 
-  const mtd = monthToDateRange('2026-08-23');
-  check('월매출 누계 구간', mtd.from === '2026-08-01' && mtd.to === '2026-08-23', `${mtd.from} ~ ${mtd.to}`);
+  const previousMonth = previousMonthRange('2026-09-06');
+  check(
+    '전월 전체 비교 구간',
+    previousMonth.from === '2026-08-01' && previousMonth.to === '2026-08-31',
+    `${previousMonth.from} ~ ${previousMonth.to}`,
+  );
 }
 
 console.log('\n[1-1] 주중 잠정 재고 교체 판정 (소급 불가 원칙)');
@@ -250,7 +254,11 @@ console.log('\n[4] 불변식');
   // 출고·생산·매출은 SKU 당 한 창고그룹에만 실려야 한다(창고그룹으로 나눌 수 없는 값이라서).
   const flowScopes = new Map();
   rows.forEach((row) => {
-    if (row.shipped_qty === 0 && row.produced_qty === 0 && row.shipped_mtd_qty === 0) return;
+    if (
+      row.shipped_qty === 0 &&
+      row.produced_qty === 0 &&
+      row.shipped_previous_month_qty === 0
+    ) return;
     flowScopes.set(row.material_code, (flowScopes.get(row.material_code) || 0) + 1);
   });
   const duplicated = [...flowScopes.entries()].filter(([, count]) => count > 1);
@@ -425,12 +433,24 @@ console.log('\n[6] 카테고리 드릴다운 상세 (메인 표와 모수가 같
   check('소진필요 = 잔여율 75% 미만', riskMismatch.length === 0);
   check('상세 구간 수량 사용 가능', all.hasBucketQuantities);
 
-  const ratioMismatch = board.rows.filter((row) =>
-    row.salesMtd > 0
-      ? Math.abs(row.stockToSalesRatio - row.stockValue / row.salesMtd) > 1e-9
-      : row.stockToSalesRatio !== null,
+  const shipmentRatioMismatch = board.rows.filter((row) =>
+    row.previousMonthShipmentValue > 0
+      ? Math.abs(
+          row.stockToPreviousMonthShipmentRatio -
+            row.stockValue / row.previousMonthShipmentValue,
+        ) > 1e-9
+      : row.stockToPreviousMonthShipmentRatio !== null,
   );
-  check('월 매출 比 = 재고금액 ÷ 실제 월 매출액', ratioMismatch.length === 0);
+  check('전월 출고 比 = 재고금액 ÷ 전월 출고금액', shipmentRatioMismatch.length === 0);
+
+  const salesRatioMismatch = board.rows.filter((row) =>
+    row.previousMonthSales > 0
+      ? Math.abs(
+          row.stockToPreviousMonthSalesRatio - row.stockValue / row.previousMonthSales,
+        ) > 1e-9
+      : row.stockToPreviousMonthSalesRatio !== null,
+  );
+  check('전월 매출 比 = 재고금액 ÷ 전월 실제 매출액', salesRatioMismatch.length === 0);
 
   // ⚠️ 잔여일이 없는 재고(기한없음)를 0 으로 채우면 '오늘 폐기'로 맨 위에 온다. null 로 남아야 한다.
   const zeroDay = all.rows.filter((row) => row.minRemainDay === 0);

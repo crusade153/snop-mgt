@@ -45,6 +45,9 @@ create table if not exists public.snop_weekly_inventory_snapshots (
   shipped_mtd_value numeric not null default 0,-- 원가단가 환산. 「월 출고 比 재고금액」의 분모다
   sales_amount numeric not null default 0,     -- 해당 주 납품매출액(NETWR). 참고용
   sales_mtd numeric not null default 0,        -- 당월 누적 납품매출액(NETWR). 「월 매출 比」의 분모
+  shipped_previous_month_qty numeric not null default 0,  -- 직전 달 1일~말일 출고 수량
+  shipped_previous_month_value numeric not null default 0,-- 원가단가 환산. 「전월 출고 比」의 분모
+  sales_previous_month numeric not null default 0,        -- 직전 달 실제 납품매출액(NETWR)
 
   unit_price numeric not null default 0,
   price_month text,                     -- 실제 적용된 단가 기준월 (예: 202606)
@@ -172,3 +175,18 @@ create index if not exists snop_material_hierarchy_prdha2_idx
 
 alter table public.snop_material_hierarchy enable row level security;
 revoke all on table public.snop_material_hierarchy from anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 8. 전월 출고·매출 열 (2026-09, 월초 분모 왜곡 제거)
+--
+-- 현재 재고를 당월 1일~주차 종료일의 짧은 누계와 나누면 월초 비율이 과도하게 커진다.
+-- 완료된 직전 달 전체 실적을 별도 저장해 주차 내내 같은 한 달 분모로 비교한다.
+-- 기존 *_mtd 열은 과거 스냅샷의 의미를 보존하기 위해 삭제하거나 재사용하지 않는다.
+--
+-- ⚠️ 새 코드 배포 및 재적재보다 먼저 실행해야 한다.
+-- 과거 주차는 기본값 0이라 비율이 `-`로 나오며, 해당 주차를 다시 적재하면 전월 실적이 채워진다.
+-- ---------------------------------------------------------------------------
+alter table public.snop_weekly_inventory_snapshots
+  add column if not exists shipped_previous_month_qty numeric not null default 0,
+  add column if not exists shipped_previous_month_value numeric not null default 0,
+  add column if not exists sales_previous_month numeric not null default 0;

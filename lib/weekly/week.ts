@@ -8,7 +8,7 @@
  * 즉 "월요일 아침에 뜬 재고" = "일요일 마감 재고" 로 본다.
  */
 
-import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns';
+import { addDays, differenceInCalendarDays, endOfMonth, format, parseISO, startOfMonth, subMonths } from 'date-fns';
 
 export interface WeekRange {
   /** 주 시작 월요일 (yyyy-MM-dd) */
@@ -72,9 +72,13 @@ export function rangeLabel(range: WeekRange) {
   return `${shortDateLabel(range.weekStart)}~${shortDateLabel(range.weekEnd)}`;
 }
 
-/** 해당 주차의 월매출 누계 구간 = 그 달 1일 ~ 주차 종료일 */
-export function monthToDateRange(weekEnd: string): { from: string; to: string } {
-  return { from: `${weekEnd.slice(0, 7)}-01`, to: weekEnd };
+/** 해당 주차의 비교 기준월 = 주차 종료일이 속한 달의 직전 달 1일 ~ 말일 */
+export function previousMonthRange(weekEnd: string): { from: string; to: string } {
+  const previousMonth = subMonths(parseISO(weekEnd), 1);
+  return {
+    from: format(startOfMonth(previousMonth), 'yyyy-MM-dd'),
+    to: format(endOfMonth(previousMonth), 'yyyy-MM-dd'),
+  };
 }
 
 /** 주차 키가 실제로 일요일인지. 손으로 넣은 값을 막는 가드다. */

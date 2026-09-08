@@ -98,13 +98,18 @@ export interface WeeklySnapshotRow {
   bucket_qty_85_over?: number;
   shipped_qty: number;
   shipped_value: number;
-  /** 당월 1일~주차 종료일 누적 출고. 금액은 주간 출고와 같은 재고단가 환산이다 */
-  shipped_mtd_qty: number;
-  shipped_mtd_value: number;
+  /** 기존 당월 누적 출고 열. 2026-09 이후 화면 계산에는 쓰지 않는다 */
+  shipped_mtd_qty?: number;
+  shipped_mtd_value?: number;
   produced_qty: number;
   produced_value: number;
   sales_amount: number;
-  sales_mtd: number;
+  sales_mtd?: number;
+  /** 직전 달 1일~말일 출고. 금액은 주간 출고와 같은 재고단가 환산이다 */
+  shipped_previous_month_qty?: number;
+  shipped_previous_month_value?: number;
+  /** 직전 달 1일~말일 실제 납품매출액(NETWR) */
+  sales_previous_month?: number;
   unit_price: number;
   price_month: string | null;
   price_source: string;
@@ -133,19 +138,19 @@ export interface WeeklyBoardMetrics {
   producedValue: number;
   stockValue: number;
   buckets: WeeklyBuckets;
-  /** 당월 누적 출고금액 (재고와 같은 단가) */
-  shipmentMtd: number;
-  /** 당월 누적 실제 납품매출액(NETWR). 「월 매출 比 재고금액」의 분모 */
-  salesMtd: number;
+  /** 전월 출고금액 (재고와 같은 단가) */
+  previousMonthShipmentValue: number;
+  /** 전월 실제 납품매출액(NETWR). 「전월 매출 比 재고금액」의 분모 */
+  previousMonthSales: number;
   /**
-   * 재고금액 ÷ 당월 누적 출고금액. 분모가 0 이면 null.
+   * 재고금액 ÷ 전월 출고금액. 분모가 0 이면 null.
    *
    * 분자·분모가 **둘 다 완제품 재고단가**라 배수를 그대로 "월 출고량의 몇 배를 쌓아두고 있는가"로 읽는다.
    * 예전 분모였던 매출액(NETWR)은 판매가라 마진율만큼 비율이 눌렸다.
   */
-  stockToShipmentRatio: number | null;
-  /** 재고금액 ÷ 당월 누적 실제 납품매출액(NETWR). 분모가 0 이면 null */
-  stockToSalesRatio: number | null;
+  stockToPreviousMonthShipmentRatio: number | null;
+  /** 재고금액 ÷ 전월 실제 납품매출액(NETWR). 분모가 0 이면 null */
+  stockToPreviousMonthSalesRatio: number | null;
   /** 전주 재고 + 생산 − 출고 와 당주 재고의 차이. 폐기·반품·재평가가 섞여 0 이 되지 않는다 */
   balanceGap: number;
 }
@@ -272,10 +277,10 @@ const emptyMetrics = (): WeeklyBoardMetrics => ({
   producedValue: 0,
   stockValue: 0,
   buckets: createWeeklyBuckets(),
-  shipmentMtd: 0,
-  salesMtd: 0,
-  stockToShipmentRatio: null,
-  stockToSalesRatio: null,
+  previousMonthShipmentValue: 0,
+  previousMonthSales: 0,
+  stockToPreviousMonthShipmentRatio: null,
+  stockToPreviousMonthSalesRatio: null,
   balanceGap: 0,
 });
 
@@ -291,8 +296,8 @@ function accumulateCurrent(target: WeeklyBoardMetrics, row: WeeklySnapshotRow) {
   target.stockValue += row.stock_value || 0;
   target.shippedValue += row.shipped_value || 0;
   target.producedValue += row.produced_value || 0;
-  target.shipmentMtd += row.shipped_mtd_value || 0;
-  target.salesMtd += row.sales_mtd || 0;
+  target.previousMonthShipmentValue += row.shipped_previous_month_value || 0;
+  target.previousMonthSales += row.sales_previous_month || 0;
   addBuckets(target.buckets, bucketsOfRow(row));
 }
 
@@ -300,8 +305,10 @@ function accumulateCurrent(target: WeeklyBoardMetrics, row: WeeklySnapshotRow) {
 function finalizeMetrics<T extends WeeklyBoardMetrics>(row: T): T {
   return {
     ...row,
-    stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
-    stockToSalesRatio: row.salesMtd > 0 ? row.stockValue / row.salesMtd : null,
+    stockToPreviousMonthShipmentRatio:
+      row.previousMonthShipmentValue > 0 ? row.stockValue / row.previousMonthShipmentValue : null,
+    stockToPreviousMonthSalesRatio:
+      row.previousMonthSales > 0 ? row.stockValue / row.previousMonthSales : null,
     balanceGap: row.previousStockValue + row.producedValue - row.shippedValue - row.stockValue,
   };
 }
@@ -325,8 +332,8 @@ function totalsOf(rows: WeeklyBoardMetrics[]): WeeklyBoardTotals {
     shippedValue: rows.reduce((sum, row) => sum + row.shippedValue, 0),
     producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
     stockValue: rows.reduce((sum, row) => sum + row.stockValue, 0),
-    shipmentMtd: rows.reduce((sum, row) => sum + row.shipmentMtd, 0),
-    salesMtd: rows.reduce((sum, row) => sum + row.salesMtd, 0),
+    previousMonthShipmentValue: rows.reduce((sum, row) => sum + row.previousMonthShipmentValue, 0),
+    previousMonthSales: rows.reduce((sum, row) => sum + row.previousMonthSales, 0),
   };
   rows.forEach((row) => addBuckets(totals.buckets, row.buckets));
   return { ...finalizeMetrics(totals), rowCount: rows.length };
@@ -757,8 +764,8 @@ export interface WeeklyDetailRow {
   shippedValue: number;
   producedQty: number;
   producedValue: number;
-  shipmentMtd: number;
-  stockToShipmentRatio: number | null;
+  previousMonthShipmentValue: number;
+  stockToPreviousMonthShipmentRatio: number | null;
   unitPrice: number;
   priceMonth: string | null;
   priceSource: string;
@@ -886,8 +893,8 @@ export function buildWeeklyDetail({
         shippedValue: 0,
         producedQty: 0,
         producedValue: 0,
-        shipmentMtd: 0,
-        stockToShipmentRatio: null,
+        previousMonthShipmentValue: 0,
+        stockToPreviousMonthShipmentRatio: null,
         unitPrice: row.unit_price || 0,
         priceMonth: row.price_month || null,
         priceSource: row.price_source || 'UNKNOWN',
@@ -923,7 +930,7 @@ export function buildWeeklyDetail({
       target.shippedValue += row.shipped_value || 0;
       target.producedQty += row.produced_qty || 0;
       target.producedValue += row.produced_value || 0;
-      target.shipmentMtd += row.shipped_mtd_value || 0;
+      target.previousMonthShipmentValue += row.shipped_previous_month_value || 0;
       addBuckets(target.buckets, bucketsOfRow(row));
       const bucketQuantities = bucketQuantitiesOfRow(row);
       addBuckets(target.bucketQuantities, bucketQuantities);
@@ -964,7 +971,10 @@ export function buildWeeklyDetail({
         riskValue,
         riskRatio: row.stockValue > 0 ? riskValue / row.stockValue : 0,
         stockDelta: previous.length > 0 ? row.stockValue - row.previousStockValue : null,
-        stockToShipmentRatio: row.shipmentMtd > 0 ? row.stockValue / row.shipmentMtd : null,
+        stockToPreviousMonthShipmentRatio:
+          row.previousMonthShipmentValue > 0
+            ? row.stockValue / row.previousMonthShipmentValue
+            : null,
         avgRemainRate: accum && accum.weight > 0 ? accum.weighted / accum.weight : null,
         scopes: row.scopes.sort(),
       };

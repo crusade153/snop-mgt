@@ -172,7 +172,7 @@ export function buildWeeklyFbhInventoryQuery(): string {
  * 주간 출고 — 납품 실적(LFIMG_LIPS)과 납품매출액(NETWR).
  *
  * 수량은 ADS 와 같은 기준(실제 나간 수량)을 쓰고, 금액은 원가단가로 따로 환산한다.
- * NETWR 은 「월매출 比」의 분모 전용이며 출고 금액과 섞지 않는다.
+ * NETWR 은 「전월 매출 比」의 분모 전용이며 출고 금액과 섞지 않는다.
  * BOX 전기분은 SD_MARA.UMREZ_BOX 로 기본단위에 맞춘다.
  */
 export function buildWeeklyShipmentQuery(fromCompact: string, toCompact: string): string {
@@ -219,36 +219,6 @@ export function buildWeeklyProductionQuery(fromCompact: string, toCompact: strin
       AND B.AUFNR IS NOT NULL
       AND B.MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
     GROUP BY B.MATNR
-  `;
-}
-
-/**
- * 당월 1일 ~ 주차 종료일의 **누적 출고** — 「월 출고 比 재고금액」의 분모.
- *
- * ⚠️ 수량(LFIMG_LIPS)을 뽑는 것이 핵심이다. 금액은 호출부에서 **완제품 재고단가**로 환산한다.
- * 예전에는 매출액(NETWR)을 분모로 썼는데, 분자인 재고금액은 원가이고 분모는 판매가라
- * 마진율만큼 비율이 눌려 "재고가 몇 주치인가"로 읽을 수 없었다.
- * NETWR 도 함께 돌려주며 별도 「월 매출 比 재고금액」의 분모로 쓴다.
- *
- * 주간 출고와 완전히 같은 기준(VDATU, BOX 환산)이어야 두 열을 나란히 놓고 볼 수 있다.
- */
-export function buildMonthToDateShipmentQuery(fromCompact: string, toCompact: string): string {
-  return `
-    SELECT
-      A.MATNR,
-      SUM(
-        CASE
-          WHEN A.VRKME = 'BOX' AND IFNULL(M.MEINS, '') <> 'BOX'
-            THEN IFNULL(A.LFIMG_LIPS, 0) * IFNULL(M.UMREZ_BOX, 1)
-          ELSE IFNULL(A.LFIMG_LIPS, 0)
-        END
-      ) AS SHIPPED_QTY,
-      SUM(IFNULL(A.NETWR, 0)) AS SALES_AMOUNT
-    FROM \`${DATASET}.SD_ZASSDDV0020\` AS A
-    LEFT JOIN \`${DATASET}.SD_MARA\` AS M ON A.MATNR = M.MATNR
-    WHERE A.VDATU BETWEEN '${fromCompact}' AND '${toCompact}'
-      AND A.MATNR BETWEEN '${MATNR_FROM}' AND '${MATNR_TO}'
-    GROUP BY A.MATNR
   `;
 }
 

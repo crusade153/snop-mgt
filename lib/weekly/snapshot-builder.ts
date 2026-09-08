@@ -29,14 +29,13 @@ import {
 } from '@/lib/weekly/board';
 import {
   buildDispoMasterQuery,
-  buildMonthToDateShipmentQuery,
   buildWeeklyFbhInventoryQuery,
   buildWeeklyMaterialNameQuery,
   buildWeeklyPlantInventoryQuery,
   buildWeeklyProductionQuery,
   buildWeeklyShipmentQuery,
 } from '@/lib/weekly/queries';
-import { monthToDateRange, toCompactDate, type WeekRange } from '@/lib/weekly/week';
+import { previousMonthRange, toCompactDate, type WeekRange } from '@/lib/weekly/week';
 
 interface DispoRow {
   MATNR: string;
@@ -188,9 +187,9 @@ async function runQuery<T>(query: string): Promise<T[]> {
 export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySnapshotRow[]> {
   const from = toCompactDate(week.weekStart);
   const to = toCompactDate(week.weekEnd);
-  const mtd = monthToDateRange(week.weekEnd);
+  const previousMonth = previousMonthRange(week.weekEnd);
 
-  const [dispoRows, nameRows, plantRows, fbhRows, shipmentRows, productionRows, mtdRows, prices] =
+  const [dispoRows, nameRows, plantRows, fbhRows, shipmentRows, productionRows, previousMonthRows, prices] =
     await Promise.all([
       runQuery<DispoRow>(buildDispoMasterQuery()),
       runQuery<{ MATNR: string; MATNR_T: string; MEINS: string }>(buildWeeklyMaterialNameQuery()),
@@ -205,7 +204,7 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       ),
       runQuery<{ MATNR: string; PRODUCED_QTY: number }>(buildWeeklyProductionQuery(from, to)),
       runQuery<{ MATNR: string; SHIPPED_QTY: number; SALES_AMOUNT: number }>(
-        buildMonthToDateShipmentQuery(toCompactDate(mtd.from), toCompactDate(mtd.to))
+        buildWeeklyShipmentQuery(toCompactDate(previousMonth.from), toCompactDate(previousMonth.to))
       ),
       getEndingInventoryPrices(),
     ]);
@@ -334,8 +333,8 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
   const production = new Map(
     productionRows.map((row) => [String(row.MATNR), Number(row.PRODUCED_QTY || 0)])
   );
-  const mtdShipments = new Map(
-    mtdRows.map((row) => [
+  const previousMonthShipments = new Map(
+    previousMonthRows.map((row) => [
       String(row.MATNR),
       { qty: Number(row.SHIPPED_QTY || 0), sales: Number(row.SALES_AMOUNT || 0) },
     ])
@@ -394,10 +393,10 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
 
     const isPrimary = primaryScope.get(code) === entry.scope;
     const shipment = isPrimary ? shipments.get(code) : undefined;
-    const mtdShipment = isPrimary ? mtdShipments.get(code) : undefined;
+    const previousMonthShipment = isPrimary ? previousMonthShipments.get(code) : undefined;
     const producedQty = isPrimary ? production.get(code) || 0 : 0;
     const shippedQty = shipment?.qty || 0;
-    const shippedMtdQty = mtdShipment?.qty || 0;
+    const shippedPreviousMonthQty = previousMonthShipment?.qty || 0;
 
     return {
       week_end_date: week.weekEnd,
@@ -424,12 +423,12 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       shipped_value: Math.round(shippedQty * unitPrice),
       produced_qty: Math.round(producedQty * 1000) / 1000,
       produced_value: Math.round(producedQty * unitPrice),
-      // 출고 금액은 주간·누적 모두 재고와 같은 단가로 환산한다. 그래야 「재고 ÷ 출고」가 기간 배수로 읽힌다.
-      shipped_mtd_qty: Math.round(shippedMtdQty * 1000) / 1000,
-      shipped_mtd_value: Math.round(shippedMtdQty * unitPrice),
+      // 전월 출고도 주간 출고와 같은 단가로 환산한다. 그래야 「재고 ÷ 출고」가 월 재고 배수로 읽힌다.
+      shipped_previous_month_qty: Math.round(shippedPreviousMonthQty * 1000) / 1000,
+      shipped_previous_month_value: Math.round(shippedPreviousMonthQty * unitPrice),
       sales_amount: Math.round(shipment?.sales || 0),
-      // 매출액(NETWR)은 원가 환산 출고와 섞지 않고 「월 매출 比 재고금액」의 분모로만 쓴다.
-      sales_mtd: Math.round(mtdShipment?.sales || 0),
+      // 매출액(NETWR)은 원가 환산 출고와 섞지 않고 「전월 매출 比 재고금액」의 분모로만 쓴다.
+      sales_previous_month: Math.round(previousMonthShipment?.sales || 0),
       // 여러 플랜트에 걸친 자재는 재고금액이 플랜트별 단가로 쌓이므로 `stock_qty × unit_price` 와 몇 원 어긋난다.
       unit_price: unitPrice,
       price_month: priceMonth || null,
@@ -441,4 +440,3 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     } satisfies WeeklySnapshotRow;
   });
 }
-

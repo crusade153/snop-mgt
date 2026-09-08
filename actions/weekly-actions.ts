@@ -282,9 +282,9 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v12: 자재코드 6 대역을 DISPO 보다 앞서 상품으로 본다 + DISPO 없는 SKU 의 한시 매핑표.
-      //      (v10 = 18=즉석밥·H01 폴백, v9 = 75% 미만 소진 기준·월 매출 比, v8 = 주차 목록 1000행 상한)
-      [`weekly-board-v12-merchandise-band-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v13: 재고 비율의 분모를 당월 누적에서 완료된 전월 전체 출고·매출로 변경.
+      //      (v12 = 상품 6 대역·DISPO 없는 SKU 매핑, v9 = 75% 미만 소진 기준·월 매출 比)
+      [`weekly-board-v13-previous-month-ratios-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -405,8 +405,8 @@ export async function getWeeklyChannelBoard(
   try {
     return await unstable_cache(
       () => buildChannelPayload(weekEnd || null, scopes),
-      // v1: 제품계층 LV2 → 채널(B2C·B2B·수출·NPB/PB·기타) 축 신설
-      [`weekly-channel-board-v1-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // v2: 재고 비율의 분모를 완료된 전월 전체 출고·매출로 변경.
+      [`weekly-channel-board-v2-previous-month-ratios-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -535,8 +535,8 @@ export async function getWeeklyCategoryDetail(
         } satisfies WeeklyDetailPayload;
       },
       [
-        // v6: 채널 축(제품계층 LV2) 열·필터 추가. v5 = 6 대역 상품 + 한시 매핑.
-        `weekly-detail-v6-channel-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
+        // v7: 상세의 출고 비율을 완료된 전월 전체 출고 기준으로 변경.
+        `weekly-detail-v7-previous-month-ratio-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
           ...scopes,
         ]
           .sort()

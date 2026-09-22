@@ -15,6 +15,8 @@
  *   6. 월 추이의 합이 총계와 맞는가
  *   7. 전년 동기 구간이 겹칠 때도 집계가 깨지지 않는가
  *   8. 결과 크기가 캐시 항목 2MB 제한 안인가
+ *   9. 제품 구분(완제품·상품·기타)을 쪼개도 합이 전체와 같은가
+ *  10. 팀·채널 판정이 `/weekly` 와 같은 기준인가 (미분류가 새어 나오지 않는가)
  */
 
 import { readFileSync } from 'node:fs';
@@ -67,9 +69,18 @@ for (const line of readFileSync(`${ROOT}/.env.local`, 'utf8').split(/\r?\n/)) {
 }
 
 const { BigQuery } = await import('@google-cloud/bigquery');
-const { buildSalesReportQuery, buildSalesReportParams, resolvePreset, previousYearRange, PRODUCT_ROW_LIMIT } =
-  await import('@/lib/sales-report/query');
+const {
+  buildSalesReportQuery,
+  buildSalesReportParams,
+  buildSalesDispoMasterQuery,
+  resolvePreset,
+  previousYearRange,
+  PRODUCT_ROW_LIMIT,
+} = await import('@/lib/sales-report/query');
 const { buildSalesBoard, daySpan, shiftYmYear } = await import('@/lib/sales-report/board');
+const { buildSalesMasterMaps, productScopeOfMaterial } = await import('@/lib/sales-report/segment');
+// 채널 판정의 원천은 `/weekly` 와 같은 마스터 쿼리다(액션도 이 둘을 그대로 쓴다).
+const { buildMaterialHierarchyQuery } = await import('@/lib/weekly/queries');
 
 const BACKSLASH = String.fromCharCode(92);
 const bigquery = new BigQuery({
@@ -123,8 +134,15 @@ console.log('\n[1] 기간 프리셋');
   check('ym 12개월 시프트', shiftYmYear('202601', -1) === '202501', shiftYmYear('202601', -1));
 }
 
+// 팀·채널 판정 재료. 조회마다 같은 값이라 한 번만 읽어 돌려 쓴다.
+const master = buildSalesMasterMaps(
+  await query(buildSalesDispoMasterQuery()),
+  await query(buildMaterialHierarchyQuery()),
+);
+console.log(`\n[0] 자재 마스터 — DISPO ${master.dispo.size.toLocaleString()}종 / 제품계층 LV2 ${master.lv2.size.toLocaleString()}종`);
+
 // ── 2~6. 실데이터 한 방 쿼리 ────────────────────────────────
-const params = { from: '2026-01-01', to: '2026-08-21', vtweg: 'ALL', channel: '' };
+const params = { from: '2026-01-01', to: '2026-08-21', vtweg: 'ALL', channel: '', scope: 'ALL' };
 console.log(`\n[2] 실데이터 조회 (${params.from} ~ ${params.to})`);
 
 const started = Date.now();
@@ -136,7 +154,7 @@ for (const k of ['TOTAL_CUR', 'TOTAL_PREV', 'MONTH_CUR', 'MONTH_PREV', 'CHANNEL'
   check(`kind ${k} 존재`, kinds.has(k));
 }
 
-const board = buildSalesBoard(rows, params);
+const board = buildSalesBoard(rows, params, master);
 
 console.log('\n[3] 차감후 매출액 부호 분해');
 {
@@ -181,10 +199,11 @@ console.log('\n[6] 월 추이');
 // 월 시작일로만 검증하면 이 버그가 통과해 버리므로 일부러 22일부터 조회한다.
 console.log('\n[6.2] 부분월 (월 시작일이 아닌 기간)');
 {
-  const partial = { from: '2025-08-22', to: '2026-08-21', vtweg: 'ALL', channel: '' };
+  const partial = { from: '2025-08-22', to: '2026-08-21', vtweg: 'ALL', channel: '', scope: 'ALL' };
   const partialBoard = buildSalesBoard(
     await query(buildSalesReportQuery(), buildSalesReportParams(partial)),
     partial,
+    master,
   );
 
   const monthSum = partialBoard.monthly.reduce((acc, m) => acc + m.net, 0);
@@ -218,9 +237,9 @@ console.log('\n[6.5] 제품 표 중복');
 // ── 7. 구간이 겹치는 장기 조회 ───────────────────────────────
 console.log('\n[7] 전년 구간이 당기와 겹치는 경우 (2년치)');
 {
-  const wide = { from: '2024-06-01', to: '2026-08-21', vtweg: 'ALL', channel: '' };
+  const wide = { from: '2024-06-01', to: '2026-08-21', vtweg: 'ALL', channel: '', scope: 'ALL' };
   const wideRows = await query(buildSalesReportQuery(), buildSalesReportParams(wide));
-  const wideBoard = buildSalesBoard(wideRows, wide);
+  const wideBoard = buildSalesBoard(wideRows, wide, master);
   const monthSum = wideBoard.monthly.reduce((acc, m) => acc + m.net, 0);
 
   check('겹쳐도 차감후 매출액 = 총매출액 − 차감', near(wideBoard.kpi.net, wideBoard.kpi.gross - wideBoard.kpi.deduction));
@@ -235,6 +254,74 @@ console.log('\n[8] 캐시 항목 크기');
   const bytes = Buffer.byteLength(JSON.stringify(board), 'utf8');
   check('직렬화 결과 < 2MB', bytes < 2 * 1024 * 1024, `${(bytes / 1024).toFixed(0)}KB`);
   check(`제품 행 ≤ 상한 ${PRODUCT_ROW_LIMIT}`, board.products.length <= PRODUCT_ROW_LIMIT, `${board.products.length}행`);
+}
+
+// ── 9. 제품 구분 필터 ───────────────────────────────────────
+// 완제품·상품·기타는 자재코드 대역으로 **겹치지 않게** 갈린다. 그러니 셋을 따로 조회해 더하면
+// 전체 조회와 원 단위까지 같아야 한다. 어긋나면 SQL 의 대역 경계가 새고 있다는 뜻이다.
+console.log('\n[9] 제품 구분(완제품·상품·기타)');
+{
+  const scopes = ['FERT', 'HAWA', 'ETC'];
+  const boards = {};
+  for (const scope of scopes) {
+    const p = { ...params, scope };
+    boards[scope] = buildSalesBoard(await query(buildSalesReportQuery(), buildSalesReportParams(p)), p, master);
+  }
+
+  const sum = scopes.reduce((acc, k) => acc + boards[k].kpi.net, 0);
+  check('완제품 + 상품 + 기타 = 전체', near(sum, board.kpi.net, 2), `${eok(sum)} vs ${eok(board.kpi.net)}`);
+
+  const qtySum = scopes.reduce((acc, k) => acc + boards[k].kpi.qty, 0);
+  check('수량도 합이 같다', near(qtySum, board.kpi.qty, 2));
+
+  for (const scope of scopes) {
+    const rows = boards[scope].products;
+    check(
+      `${scope} 조회에 다른 구분이 섞이지 않음`,
+      rows.every((r) => productScopeOfMaterial(r.matnr) === scope),
+      `${rows.length}종 / ${eok(boards[scope].kpi.net)}`,
+    );
+  }
+
+  // 셋으로 쪼갠 제품 종수의 합 = 전체 조회의 종수. 어느 대역도 빠지지 않았다는 확인이다.
+  const itemSum = scopes.reduce((acc, k) => acc + boards[k].products.length, 0);
+  check('제품 종수도 합이 같다', itemSum === board.products.length, `${itemSum}종 vs ${board.products.length}종`);
+}
+
+// ── 10. 팀 · 채널 판정 ──────────────────────────────────────
+// 두 축은 SD_SO 에 없는 값이라 자재 마스터를 붙여 판정한다. 합계 불변식은 [4]·[5]가 이미 보므로
+// 여기서는 **판정이 실제로 붙었는가**(미분류 금액이 새어 나오지 않는가)를 본다.
+console.log('\n[10] 팀 · 채널 판정');
+{
+  const fertParams = { ...params, scope: 'FERT' };
+  const fert = buildSalesBoard(
+    await query(buildSalesReportQuery(), buildSalesReportParams(fertParams)),
+    fertParams,
+    master,
+  );
+
+  const positive = fert.products.reduce((acc, r) => acc + Math.max(r.net, 0), 0);
+  const teamless = fert.products.filter((r) => r.cm === '미분류').reduce((acc, r) => acc + Math.max(r.net, 0), 0);
+  const channelless = fert.products.filter((r) => r.channel === '미분류').reduce((acc, r) => acc + Math.max(r.net, 0), 0);
+
+  // 완제품 대역은 자재마스터가 다 있어야 정상이다. 5%를 넘으면 마스터 조인이 깨진 것으로 본다.
+  check('완제품 팀 미분류 < 5%', teamless / positive < 0.05, `${((teamless / positive) * 100).toFixed(2)}% (${eok(teamless)})`);
+  check('완제품 채널 미분류 < 5%', channelless / positive < 0.05, `${((channelless / positive) * 100).toFixed(2)}% (${eok(channelless)})`);
+
+  // 상품 대역은 DISPO 와 무관하게 무조건 `상품` 팀이다(자재코드 6 대역이 DISPO 보다 앞선다).
+  const hawaParams = { ...params, scope: 'HAWA' };
+  const hawa = buildSalesBoard(
+    await query(buildSalesReportQuery(), buildSalesReportParams(hawaParams)),
+    hawaParams,
+    master,
+  );
+  check('상품 대역은 전부 팀 「상품」', hawa.products.every((r) => r.team === '상품'), `${hawa.products.length}종`);
+
+  const teamRows = board.ranks.team;
+  const channelRows = board.ranks.salesChannel;
+  check('팀 축에 행이 있다', teamRows.length > 0, teamRows.map((r) => `${r.key} ${eok(r.net)}`).join(' / '));
+  check('채널 축에 행이 있다', channelRows.length > 0, channelRows.map((r) => `${r.key} ${eok(r.net)}`).join(' / '));
+  check('팀·채널 축은 전표 건수를 세지 않는다', [...teamRows, ...channelRows].every((r) => r.docs === 0));
 }
 
 console.log(failed === 0 ? '\n✅ 전부 통과\n' : `\n❌ ${failed}건 실패\n`);

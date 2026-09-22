@@ -11,14 +11,26 @@ import { unstable_cache } from 'next/cache';
 import bigqueryClient from '@/lib/bigquery';
 import { buildSalesBoard, type SalesReportBoard } from '@/lib/sales-report/board';
 import {
+  buildSalesDispoMasterQuery,
   buildSalesReportParams,
   buildSalesReportQuery,
   isIsoDate,
   previousYearRange,
+  SALES_SCOPE_KEYS,
+  type SalesProductScope,
   type SalesRawRow,
   type SalesReportParams,
   type SalesVtweg,
 } from '@/lib/sales-report/query';
+import {
+  buildSalesMasterMaps,
+  type SalesDispoRow,
+  type SalesHierarchyRow,
+} from '@/lib/sales-report/segment';
+// 채널 판정의 원천은 `/weekly` 와 **같은 마스터 쿼리**다. 여기서 비슷한 쿼리를 새로 쓰면
+// 두 화면의 B2C·B2B 가 서로 다른 자재를 가리키게 된다.
+// (팀 쪽은 재고 없이 팔린 SKU 까지 받아야 해서 전용 쿼리를 쓴다 — buildSalesDispoMasterQuery 주석 참고.)
+import { buildMaterialHierarchyQuery } from '@/lib/weekly/queries';
 
 export interface SalesReportPayload {
   success: boolean;
@@ -49,17 +61,31 @@ function normalize(input: SalesReportParams): { ok: true; params: SalesReportPar
   const vtweg = VTWEG_VALUES.includes(input.vtweg) ? input.vtweg : 'ALL';
   // 채널명은 자유 문자열이라 길이만 막는다. 값 자체는 파라미터 바인딩으로 넘어간다.
   const channel = String(input.channel ?? '').slice(0, 60);
+  const scope: SalesProductScope = SALES_SCOPE_KEYS.includes(input.scope) ? input.scope : 'ALL';
 
-  return { ok: true, params: { from, to, vtweg, channel } };
+  return { ok: true, params: { from, to, vtweg, channel, scope } };
 }
 
+/**
+ * 조회 한 번 = BigQuery 3방.
+ *
+ * 매출 원장은 여전히 **한 번만** 스캔한다(SD_SO 는 2.5GB 라 축마다 쪼개면 그만큼 비용이 붙는다).
+ * 나머지 둘은 팀·채널 판정에 쓰는 자재 마스터인데 SD_SO 에 없는 값이라 따로 읽는다 —
+ * 실측 드라이런 기준 자재마스터 쪽 합이 1MB 미만이라 비용은 사실상 0 이고,
+ * 세 결과가 같은 캐시 항목 안에 들어간다.
+ */
 async function runSalesReport(params: SalesReportParams): Promise<SalesReportBoard> {
-  const [rows] = await bigqueryClient.query({
-    query: buildSalesReportQuery(),
-    params: buildSalesReportParams(params),
-  });
+  const [[rows], [dispoRows], [hierarchyRows]] = await Promise.all([
+    bigqueryClient.query({
+      query: buildSalesReportQuery(),
+      params: buildSalesReportParams(params),
+    }),
+    bigqueryClient.query({ query: buildSalesDispoMasterQuery() }),
+    bigqueryClient.query({ query: buildMaterialHierarchyQuery() }),
+  ]);
 
-  return buildSalesBoard(rows as SalesRawRow[], params);
+  const master = buildSalesMasterMaps(dispoRows as SalesDispoRow[], hierarchyRows as SalesHierarchyRow[]);
+  return buildSalesBoard(rows as SalesRawRow[], params, master);
 }
 
 /**
@@ -76,7 +102,7 @@ export async function getSalesReport(input: SalesReportParams): Promise<SalesRep
     return {
       success: false,
       message: checked.message,
-      params: { from: '', to: '', vtweg: 'ALL', channel: '' },
+      params: { from: '', to: '', vtweg: 'ALL', channel: '', scope: 'ALL' },
       previous: { from: '', to: '' },
       board: null,
       fetchedAt,
@@ -85,13 +111,14 @@ export async function getSalesReport(input: SalesReportParams): Promise<SalesRep
 
   const { params } = checked;
   const cacheKey = [
-    // v2: 월 추이를 당기·전년 각자의 구간에서 집계하도록 고침(부분월이 한 달치로 부풀던 문제) +
-    //     제품 표를 자재코드로만 묶음(한 코드에 이름이 여러 개라 줄이 쪼개지던 문제).
-    'sales-report-v2',
+    // v3: 제품 구분(완제품/상품/기타) 필터 + 팀·채널 축을 추가하면서 집계 결과 자체가 바뀌었다.
+    //     (v2: 월 추이를 당기·전년 각자의 구간에서 집계 + 제품 표를 자재코드로만 묶음)
+    'sales-report-v3',
     params.from,
     params.to,
     params.vtweg,
     params.channel || 'ALLCH',
+    params.scope,
   ].join('-');
 
   try {

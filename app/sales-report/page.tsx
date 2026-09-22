@@ -12,6 +12,7 @@ import {
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  Download,
   Minus,
   ReceiptText,
   RefreshCw,
@@ -25,6 +26,7 @@ import SalesTrendChart from '@/components/charts/sales-trend-chart';
 import InfoTooltip from '@/components/info-tooltip';
 import { useKoreanInput } from '@/hooks/use-korean-input';
 import { useUrlFilters } from '@/hooks/use-url-filters';
+import { exportToExcel } from '@/lib/excel-export';
 import {
   SALES_BASIS_TEXT,
   formatEok,
@@ -36,20 +38,49 @@ import {
 import {
   SALES_DIMENSION_LABELS,
   SALES_PRESET_LABELS,
+  SALES_SCOPE_KEYS,
+  SALES_SCOPE_LABELS,
   isIsoDate,
   resolvePreset,
   type SalesDimension,
   type SalesPresetKey,
+  type SalesProductScope,
   type SalesVtweg,
 } from '@/lib/sales-report/query';
 
 const PRESET_KEYS: SalesPresetKey[] = ['m3', 'm6', 'm12', 'thisYear', 'lastYear'];
-const DIMENSION_KEYS: SalesDimension[] = ['channel', 'brand', 'matkl', 'vkgrp'];
+
+/**
+ * 구성비 축 탭 순서. 「팀」·「채널」을 앞에 둔다 — 주간 요약 장표와 같은 축이라
+ * 재고를 그 두 축으로 보던 사람이 매출도 같은 자리에서 찾게 하기 위한 것이다.
+ */
+const DIMENSION_KEYS: SalesDimension[] = ['team', 'salesChannel', 'channel', 'brand', 'matkl', 'vkgrp'];
+
+/** URL 에 `dim` 이 없을 때의 축. 이 값만 URL 에서 생략된다. */
+const DEFAULT_DIMENSION: SalesDimension = 'team';
+
+/** 축마다 「무엇으로 판정했는가」를 옆에 붙인다 — 채널이 둘이라 설명 없이는 구분이 안 된다. */
+const DIMENSION_HINTS: Record<SalesDimension, string> = {
+  team: '자재마스터 DISPO 로 판정한 생산 CM × 카테고리입니다. 「주간 요약」 장표의 「팀별」과 같은 기준입니다.',
+  salesChannel: '제품계층 2레벨로 판정한 영업 채널(B2C·B2B·수출·NPB/PB)입니다. 「주간 요약」 장표의 「채널별」과 같은 기준입니다.',
+  channel: 'SAP 고객그룹1(KVGR1) 내역입니다 — 온라인·대형마트·CVS·SSM 처럼 파는 곳의 성격이고, 위의 「채널」과는 다른 축입니다.',
+  brand: '제품계층 1레벨(브랜드)입니다.',
+  matkl: 'SAP 자재그룹(MATKL) 내역입니다.',
+  vkgrp: 'SAP 영업그룹(VKGRP) 내역입니다.',
+};
 
 const VTWEG_LABELS: Record<SalesVtweg, string> = {
   ALL: '전체',
   '10': '내수',
   '20': '수출',
+};
+
+/** 제품 구분 버튼의 설명. 자재코드 대역이 곧 기준이라 그 대역을 그대로 적는다. */
+const SCOPE_HINTS: Record<SalesProductScope, string> = {
+  ALL: '완제품·상품·기타를 모두 포함합니다.',
+  FERT: '자재코드 5xxxxxxx — 직접 만들어 파는 완제품입니다.',
+  HAWA: '자재코드 6xxxxxxx — 사서 파는 상품입니다.',
+  ETC: '완제품·상품 대역 밖의 자재 판매입니다 — 포장재·부재료·원재료·반제품.',
 };
 
 const ROWS_PER_PAGE = 15;
@@ -74,7 +105,9 @@ function SalesReportInner() {
 
   const vtweg = (getParam('vtweg', 'ALL') || 'ALL') as SalesVtweg;
   const channel = getParam('ch', '');
-  const dimension = (getParam('dim', 'channel') || 'channel') as SalesDimension;
+  const scopeParam = getParam('scope', 'ALL') as SalesProductScope;
+  const scope: SalesProductScope = SALES_SCOPE_KEYS.includes(scopeParam) ? scopeParam : 'ALL';
+  const dimension = (getParam('dim', DEFAULT_DIMENSION) || DEFAULT_DIMENSION) as SalesDimension;
   const search = getParam('q', '');
   const page = getIntParam('page', 1);
 
@@ -82,8 +115,8 @@ function SalesReportInner() {
   const [showBasis, setShowBasis] = useState(false);
 
   const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['sales-report', from, to, vtweg, channel],
-    queryFn: () => getSalesReport({ from, to, vtweg, channel }),
+    queryKey: ['sales-report', from, to, vtweg, channel, scope],
+    queryFn: () => getSalesReport({ from, to, vtweg, channel, scope }),
     staleTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,
   });
@@ -132,7 +165,10 @@ function SalesReportInner() {
         row.name.toLowerCase().includes(keyword) ||
         row.matnr.includes(keyword) ||
         row.matkl.toLowerCase().includes(keyword) ||
-        row.brand.toLowerCase().includes(keyword),
+        row.brand.toLowerCase().includes(keyword) ||
+        // 열로 보이는 값은 검색도 되어야 한다 — 「CM2 즉석밥」·「B2B」로 걸러 내려받는 흐름을 막지 않기 위한 것.
+        row.team.toLowerCase().includes(keyword) ||
+        row.channel.toLowerCase().includes(keyword),
     );
   }, [board, search]);
 
@@ -140,12 +176,49 @@ function SalesReportInner() {
   const currentPage = Math.min(Math.max(page, 1), totalPages);
   const pageRows = filteredProducts.slice((currentPage - 1) * ROWS_PER_PAGE, currentPage * ROWS_PER_PAGE);
 
+  /**
+   * 엑셀 내려받기 — **화면에 걸린 필터(제품 구분·검색)를 그대로 태운다.**
+   * 페이지네이션은 태우지 않는다(보고 있는 15줄이 아니라 거른 전체가 파일이 되어야 한다).
+   *
+   * 화면에 없는 열(총매출액·차감·DISPO·제품계층)까지 싣는 것은 의도다 — 받아서 피벗할 때
+   * 「이 줄이 왜 이 팀·이 채널인가」를 파일 안에서 되짚을 수 있어야 하기 때문이다.
+   */
+  const handleDownloadExcel = () => {
+    exportToExcel(
+      filteredProducts.map((row) => ({
+        '자재코드': row.matnr,
+        '제품명': row.name,
+        '구분': SALES_SCOPE_LABELS[row.scope],
+        '팀': row.team,
+        'CM': row.cm,
+        '카테고리': row.category,
+        '채널': row.channel,
+        '제품군': row.matkl,
+        '브랜드': row.brand,
+        '차감후 매출액(원)': Math.round(row.net),
+        '총매출액(원)': Math.round(row.gross),
+        '반품·조정 차감(원)': Math.round(row.deduction),
+        '구성비(%)': Number(row.share.toFixed(3)),
+        '수량': Math.round(row.qty),
+        '전표건수': row.docs,
+        // 분류 근거. 빈 값이면 자재마스터에 없다는 뜻이라 팀·채널이 「미분류」로 잡힌 줄이다.
+        'DISPO': row.dispo,
+        '제품계층2': row.lv2,
+      })),
+      `매출리포트_제품별_${SALES_SCOPE_LABELS[scope]}_${from}~${to}`,
+    );
+  };
+
   const applyPreset = (key: SalesPresetKey) => {
     // 프리셋을 고르면 직접 입력한 날짜는 지운다 — 둘이 동시에 살아 있으면 어느 쪽이 이겼는지 알 수 없다.
     setParams({ preset: key, from: null, to: null, page: null });
   };
 
+  // 제품 구분을 좁히면 그 안에 없는 고객그룹은 목록에서 사라진다. 그런데 필터 값은 URL 에 남아
+  // 조회에는 계속 걸리므로, 목록에 없는 값이면 한 줄 끼워 넣어 「무엇으로 걸러져 있는지」를 보이게 한다.
   const channelOptions = board?.ranks.channel.map((row) => row.key) ?? [];
+  const channelSelectOptions =
+    channel && !channelOptions.includes(channel) ? [channel, ...channelOptions] : channelOptions;
 
   return (
     <div className="p-4 lg:p-6 space-y-4">
@@ -248,13 +321,37 @@ function SalesReportInner() {
           onChange={(e) => setParams({ ch: e.target.value || null, page: null })}
           className="px-2 py-1.5 text-xs border border-neutral-200 rounded text-neutral-700 max-w-[180px]"
         >
-          <option value="">판매채널 전체</option>
-          {channelOptions.map((option) => (
+          <option value="">고객그룹 전체</option>
+          {channelSelectOptions.map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
         </select>
+
+        <div className="h-5 w-px bg-neutral-200 mx-1" />
+
+        {/*
+          제품 구분 — 조회 자체를 좁힌다. 표만 거르면 상단 KPI·추이·구성비가 전체 모수로 남아
+          「상품만」을 눌렀는데 합계는 안 변하는 화면이 된다.
+        */}
+        <div className="flex items-center gap-1">
+          {SALES_SCOPE_KEYS.map((key) => (
+            <button
+              key={key}
+              onClick={() => setParams({ scope: key === 'ALL' ? null : key, page: null })}
+              title={SCOPE_HINTS[key]}
+              className={`px-2.5 py-1.5 text-xs font-medium rounded border transition-colors ${
+                scope === key
+                  ? 'bg-[#E3F2FD] text-[#1565C0] border-[#1565C0]/30'
+                  : 'text-neutral-600 border-neutral-200 hover:bg-neutral-100'
+              }`}
+            >
+              {SALES_SCOPE_LABELS[key]}
+            </button>
+          ))}
+          <InfoTooltip text="자재코드 대역으로 가릅니다 — 완제품 5xxxxxxx, 상품 6xxxxxxx, 기타는 그 밖(포장재·부재료·원재료·반제품 판매)입니다. 고른 구분이 화면 전체와 엑셀에 함께 걸립니다." size={13} />
+        </div>
       </div>
 
       {/* ── 오류 ────────────────────────────────────────── */}
@@ -319,11 +416,13 @@ function SalesReportInner() {
             <section className="rounded-lg border border-neutral-200 bg-white p-4">
               <div className="flex flex-wrap items-center gap-2 mb-4">
                 <h2 className="text-sm font-bold text-neutral-900">구성비</h2>
-                <div className="ml-auto flex items-center gap-1">
+                <InfoTooltip text={DIMENSION_HINTS[dimension]} />
+                <div className="ml-auto flex flex-wrap items-center gap-1">
                   {DIMENSION_KEYS.map((key) => (
                     <button
                       key={key}
-                      onClick={() => setParams({ dim: key === 'channel' ? null : key })}
+                      onClick={() => setParams({ dim: key === DEFAULT_DIMENSION ? null : key })}
+                      title={DIMENSION_HINTS[key]}
                       className={`px-2 py-1 text-[11px] font-medium rounded transition-colors ${
                         dimension === key
                           ? 'bg-[#E3F2FD] text-[#1565C0]'
@@ -351,17 +450,28 @@ function SalesReportInner() {
           <section className="rounded-lg border border-neutral-200 bg-white">
             <div className="p-4 flex flex-wrap items-center gap-3 border-b border-neutral-100">
               <h2 className="text-sm font-bold text-neutral-900">제품별 매출</h2>
+              <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-neutral-100 text-neutral-600">
+                {SALES_SCOPE_LABELS[scope]}
+              </span>
               <div className="relative ml-auto">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
                 <input
                   {...searchInput}
-                  placeholder="제품명 · 코드 · 제품군 · 브랜드 검색"
-                  className="pl-8 pr-3 py-1.5 w-[260px] text-xs border border-neutral-200 rounded text-neutral-700 focus:outline-none focus:ring-1 focus:ring-[#1565C0]"
+                  placeholder="제품명 · 코드 · 제품군 · 브랜드 · 팀 · 채널 검색"
+                  className="pl-8 pr-3 py-1.5 w-[280px] text-xs border border-neutral-200 rounded text-neutral-700 focus:outline-none focus:ring-1 focus:ring-[#1565C0]"
                 />
               </div>
               <span className="text-xs text-neutral-500 tabular-nums">
                 {filteredProducts.length.toLocaleString()}종
               </span>
+              <button
+                onClick={handleDownloadExcel}
+                disabled={filteredProducts.length === 0}
+                title="지금 걸린 제품 구분·검색 그대로, 보고 있는 쪽이 아니라 거른 전체를 내려받습니다"
+                className="px-3 py-1.5 text-xs font-medium rounded border border-green-200 bg-white text-green-700 hover:bg-green-50 flex items-center gap-1.5 disabled:opacity-40"
+              >
+                <Download size={13} /> 엑셀 다운로드
+              </button>
             </div>
 
             <div className="overflow-x-auto">
@@ -370,6 +480,8 @@ function SalesReportInner() {
                   <tr>
                     <th className="px-4 py-2.5 text-left font-medium w-[90px]">코드</th>
                     <th className="px-4 py-2.5 text-left font-medium">제품명</th>
+                    <th className="px-4 py-2.5 text-left font-medium w-[110px]">팀</th>
+                    <th className="px-4 py-2.5 text-left font-medium w-[80px]">채널</th>
                     <th className="px-4 py-2.5 text-left font-medium w-[130px]">제품군</th>
                     <th className="px-4 py-2.5 text-left font-medium w-[100px]">브랜드</th>
                     <th className="px-4 py-2.5 text-right font-medium w-[120px]">차감후 매출액</th>
@@ -382,6 +494,13 @@ function SalesReportInner() {
                     <tr key={row.matnr} className="hover:bg-neutral-50">
                       <td className="px-4 py-2.5 text-neutral-500 tabular-nums">{row.matnr}</td>
                       <td className="px-4 py-2.5 text-neutral-900 font-medium">{row.name}</td>
+                      {/* 미분류는 흐리게 두되 숨기지 않는다 — 자재마스터에 DISPO·제품계층이 없다는 표시다. */}
+                      <td className={`px-4 py-2.5 ${row.cm === '미분류' ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                        {row.team}
+                      </td>
+                      <td className={`px-4 py-2.5 ${row.channel === '미분류' ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                        {row.channel}
+                      </td>
                       <td className="px-4 py-2.5 text-neutral-500">{row.matkl}</td>
                       <td className="px-4 py-2.5 text-neutral-500">{row.brand}</td>
                       <td
@@ -401,7 +520,7 @@ function SalesReportInner() {
                   ))}
                   {pageRows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-neutral-400">
+                      <td colSpan={9} className="px-4 py-12 text-center text-neutral-400">
                         검색 결과가 없습니다.
                       </td>
                     </tr>

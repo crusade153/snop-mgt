@@ -6,6 +6,7 @@
 // canvas 로 그리면 길이를 몰라 잘리거나 겹치는데, HTML 이면 브라우저가 알아서 줄인다.
 // 값도 막대마다 직접 붙는다 — 팔레트 대비가 3:1 미만인 색을 쓰므로 라벨 노출이 의무다.
 
+import type { ReactNode } from 'react';
 import { formatEok } from '@/lib/sales-report/board';
 
 export interface RankBarItem {
@@ -22,9 +23,19 @@ interface Props {
   /** 막대 색 — 한 계열이므로 단색이다. 계열이 하나면 범례를 두지 않는다(제목이 이름을 말한다). */
   color?: string;
   emptyText?: string;
+  /** 주면 막대가 버튼이 된다(드릴다운용). 없으면 지금처럼 읽기 전용이다 */
+  onSelect?: (key: string) => void;
+  /** 선택된 막대 — 테두리로 표시한다 */
+  selectedKey?: string | null;
 }
 
-export default function SalesRankBars({ items, color = '#2a78d6', emptyText = '해당 기간에 자료가 없습니다.' }: Props) {
+export default function SalesRankBars({
+  items,
+  color = '#2a78d6',
+  emptyText = '해당 기간에 자료가 없습니다.',
+  onSelect,
+  selectedKey = null,
+}: Props) {
   if (items.length === 0) {
     return <div className="py-10 text-center text-sm text-neutral-400">{emptyText}</div>;
   }
@@ -41,6 +52,11 @@ export default function SalesRankBars({ items, color = '#2a78d6', emptyText = '�
 
         return (
           <li key={item.key} className="group">
+            <RowShell
+              onSelect={onSelect ? () => onSelect(item.key) : undefined}
+              selected={selectedKey === item.key}
+              label={item.label}
+            >
             <div className="flex items-baseline justify-between gap-3 mb-1">
               <span className="text-xs font-medium text-neutral-700 truncate" title={item.label}>
                 {item.label}
@@ -59,9 +75,38 @@ export default function SalesRankBars({ items, color = '#2a78d6', emptyText = '�
                 style={{ width: `${width}%`, background: negative ? '#e34948' : color }}
               />
             </div>
+            </RowShell>
           </li>
         );
       })}
     </ul>
+  );
+}
+
+/** 클릭 가능할 때만 버튼으로 감싼다. 읽기 전용 화면(매출 리포트)의 마크업은 그대로 둔다 */
+function RowShell({
+  onSelect,
+  selected,
+  label,
+  children,
+}: {
+  onSelect?: () => void;
+  selected: boolean;
+  label: string;
+  children: ReactNode;
+}) {
+  if (!onSelect) return <>{children}</>;
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      title={`${label} 상세 보기`}
+      className={`-mx-1.5 block w-[calc(100%+0.75rem)] rounded-md border px-1.5 py-1 text-left transition-colors duration-150 ${
+        selected ? 'border-neutral-400 bg-neutral-50' : 'border-transparent hover:bg-neutral-50'
+      }`}
+    >
+      {children}
+    </button>
   );
 }

@@ -4,7 +4,7 @@
 // 데이터는 주 1회 적재된 Supabase 스냅샷에서만 온다(BigQuery 를 때리지 않는다).
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -27,6 +27,8 @@ import {
   refreshMaterialHierarchyAction,
 } from '@/actions/weekly-actions';
 import CanvasStackedBarChart from '@/components/charts/canvas-stacked-bar-chart';
+import SalesRankBars, { type RankBarItem } from '@/components/charts/sales-rank-bars';
+import WeeklyFlowBridge from '@/components/charts/weekly-flow-bridge';
 import { exportToExcel } from '@/lib/excel-export';
 import InfoTooltip from '@/components/info-tooltip';
 import {
@@ -48,6 +50,7 @@ import {
   type WeeklyCategory,
   type WeeklyCm,
 } from '@/lib/weekly/classification';
+import { seoulToday } from '@/lib/weekly/week';
 
 /**
  * 구간 색 — 왼쪽(임박)이 붉고 오른쪽(안전)이 푸르다. 원본 엑셀 차트와 같은 방향이다.
@@ -566,6 +569,45 @@ export default function WeeklyBoardPage() {
     [segments]
   );
 
+  /**
+   * 소진필요(잔여율 75% 미만) 재고 순위. 누적막대와 같은 `segments` 를 접은 것이라 숫자가 갈릴 수 없다.
+   * 막대 길이는 위험 **금액**, 옆 %는 그 줄 재고 중 위험 **비중**이다 — 비중만 보면 작은 줄이 과대평가된다.
+   */
+  const riskRankItems = useMemo<RankBarItem[]>(
+    () =>
+      segments
+        .map((entry) => {
+          const risk = riskOf(entry.buckets, entry.total);
+          return {
+            key: entry.key,
+            label: entry.label,
+            sub: `재고 ${formatNoteAmount(entry.total)}`,
+            value: risk.value,
+            share: risk.ratio * 100,
+          };
+        })
+        .filter((item) => Math.round(item.value) > 0)
+        .sort((a, b) => b.value - a.value),
+    [segments]
+  );
+
+  const detailSectionRef = useRef<HTMLElement>(null);
+
+  /** 순위 막대 클릭 → 위쪽 상세 보기를 그 줄로 열고 그 자리로 스크롤한다(맨 아래에서 누르므로 안 보이면 반응이 없는 것처럼 보인다) */
+  const handleRiskSelect = (key: string) => {
+    const target = segments.find((entry) => entry.key === key);
+    if (!target) return;
+    const opening = !drill || drillKey(drill) !== drillKey(target.drill);
+    toggleDrill(target.drill);
+    if (opening) detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const selectedRiskKey =
+    drill ? segments.find((entry) => drillKey(entry.drill) === drillKey(drill))?.key ?? null : null;
+
+  /** 진행 중인 주차(주말이 아직 안 지남)면 흐름 열이 주중 누계라 잠정치다 */
+  const isProvisionalWeek = !!activeWeek && activeWeek >= seoulToday();
+
   return (
     <div className="p-3 lg:p-5 space-y-3">
       {/*
@@ -1000,7 +1042,7 @@ export default function WeeklyBoardPage() {
           </section>
 
           {/* 1-1. 카테고리 드릴다운 — 위 표의 한 칸을 SKU 단위로 펼친다 */}
-          <section className="rounded-lg border border-neutral-200 bg-white">
+          <section ref={detailSectionRef} className="scroll-mt-3 rounded-lg border border-neutral-200 bg-white">
             <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 px-3 py-2">
               <span className="text-[11px] font-bold text-neutral-500">상세 보기</span>
               {segments.map((entry) => {
@@ -1533,6 +1575,46 @@ export default function WeeklyBoardPage() {
               경우입니다{isAdmin ? ' — 「제품계층 갱신」을 눌러 마스터를 다시 받아보세요.' : '.'}
             </section>
           )}
+
+          {/*
+            4. 요약 차트 — 새 조회 없이 위에서 이미 계산된 값만 다시 그린다.
+            브리지는 메인 표 합계행(totals), 순위는 누적막대(segments)와 같은 원천이라 숫자가 갈릴 수 없다.
+            두 축이 같은 totals 를 쓰므로 브리지는 탭을 바꿔도 같은 그림이어야 정상이다.
+          */}
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <section className="rounded-lg border border-neutral-200 bg-white p-3">
+              <h2 className="mb-2 flex items-center gap-1 text-xs font-bold text-neutral-800">
+                이번 주 재고는 왜 변했나
+                <InfoTooltip text="전주 재고에서 출발해 생산(+)·출고(−)·기타(대차 차이)를 쌓으면 금주 재고가 됩니다. 막대는 0(전주 재고) 기준 증감만 그립니다. 금액은 전부 원가팀 기말재고 단가입니다." />
+              </h2>
+              <WeeklyFlowBridge
+                previousStockValue={board.totals.previousStockValue}
+                producedValue={board.totals.producedValue}
+                shippedValue={board.totals.shippedValue}
+                stockValue={board.totals.stockValue}
+                balanceGap={board.totals.balanceGap}
+                hasPrevious={hasPrevious}
+                provisional={isProvisionalWeek}
+              />
+            </section>
+
+            <section className="rounded-lg border border-neutral-200 bg-white p-3">
+              <h2 className="mb-2 flex items-center gap-1 text-xs font-bold text-neutral-800">
+                소진필요 재고 순위
+                <span className="font-normal text-neutral-400">
+                  {axis === 'channel' ? '채널별' : '카테고리별'} · 잔여율 75% 미만
+                </span>
+                <InfoTooltip text="막대는 소진필요(잔여율 75% 미만) 재고금액, 옆 %는 그 줄 재고 중 소진필요 비중입니다. 누르면 위 「상세 보기」가 그 줄의 SKU 로 열립니다." />
+              </h2>
+              <SalesRankBars
+                items={riskRankItems}
+                color={BUCKET_COLORS.r50_70}
+                emptyText="소진필요 재고가 없습니다."
+                onSelect={handleRiskSelect}
+                selectedKey={selectedRiskKey}
+              />
+            </section>
+          </div>
         </>
       )}
     </div>

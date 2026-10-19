@@ -106,18 +106,32 @@ const AXIS_TABS: { key: BoardAxis; label: string; hint: string }[] = [
   },
 ];
 
-/** 펼친 칸. 축마다 좌표가 다르다 */
+/**
+ * 펼친 칸. 축마다 좌표가 다르다.
+ *
+ * `all` 은 「전체보기」 — 카테고리·CM·채널을 하나도 걸지 않은 스코프 전체 SKU 목록이다.
+ * 같은 스냅샷·같은 판정 함수로 접으므로 합계가 위 표의 합계행과 같고, 축을 바꿔도 모수가 그대로다.
+ */
 type Drill =
   | { axis: 'team'; cm: WeeklyCm | null; category: WeeklyCategory }
-  | { axis: 'channel'; channel: WeeklyChannel };
+  | { axis: 'channel'; channel: WeeklyChannel }
+  | { axis: 'all' };
 
 const drillKey = (drill: Drill) =>
-  drill.axis === 'channel' ? `channel:${drill.channel}` : `team:${drill.cm ?? 'ALL'}:${drill.category}`;
+  drill.axis === 'all'
+    ? 'all'
+    : drill.axis === 'channel'
+      ? `channel:${drill.channel}`
+      : `team:${drill.cm ?? 'ALL'}:${drill.category}`;
 
 const drillLabel = (drill: Drill) =>
-  drill.axis === 'channel'
-    ? drill.channel
-    : `${drill.cm ? `${drill.cm} · ` : ''}${drill.category}`;
+  drill.axis === 'all'
+    ? '전체'
+    : drill.axis === 'channel'
+      ? drill.channel
+      : `${drill.cm ? `${drill.cm} · ` : ''}${drill.category}`;
+
+const ALL_DRILL: Drill = { axis: 'all' };
 
 /**
  * 표의 한 줄을 축과 무관하게 그리기 위한 표시용 행.
@@ -143,9 +157,22 @@ type DisplayRow = WeeklyBoardMetrics & {
  * ⚠️ `remain` 은 **소비기한 잔여 열이 채워진 주차에서만** 쓸 수 있다. 열이 추가되기 전에
  * 적재된 주차는 값이 null 인데, 그걸 0 으로 보고 정렬하면 기한없음 재고가 「오늘 폐기」로 맨 위에 온다.
  */
-type DetailSortKey = 'stockValue' | 'riskValue' | 'riskRatio' | 'remain' | 'shipped' | 'ratio' | 'delta';
+type DetailSortKey =
+  | 'group'
+  | 'stockValue'
+  | 'riskValue'
+  | 'riskRatio'
+  | 'remain'
+  | 'shipped'
+  | 'ratio'
+  | 'delta';
 
+/**
+ * `group` 은 「전체보기」에서만 쓴다 — 위 표의 행 순서(팀별 = CM·공장·카테고리, 채널별 = 채널)대로
+ * 묶고 그 안에서 재고금액 순으로 늘어놓는다. 받은 엑셀이 위 표와 같은 순서로 읽히게 하기 위한 것이다.
+ */
 const DETAIL_SORTS: { key: DetailSortKey; label: string; hint: string }[] = [
+  { key: 'group', label: '구분순', hint: '위 표의 행 순서대로 묶고, 그 안에서 재고금액이 큰 순' },
   { key: 'stockValue', label: '재고금액', hint: '재고금액이 큰 순' },
   { key: 'riskValue', label: '소진필요 금액', hint: '잔여율 75% 미만 재고금액이 큰 순' },
   { key: 'riskRatio', label: '소진필요 비중', hint: '재고 대비 잔여율 75% 미만 비중이 높은 순' },
@@ -286,8 +313,9 @@ export default function WeeklyBoardPage() {
   const groupColCount = axis === 'channel' ? 1 : 3;
 
   // 주차를 바꾸거나 축을 바꾸면 펼쳐 둔 상세는 좌표가 다른 것이라 닫는다.
+  // 「전체보기」만은 좌표가 없어 어느 주차·축에서도 같은 모수라 열어 둔다.
   useEffect(() => {
-    setDrill(null);
+    setDrill((current) => (current?.axis === 'all' ? current : null));
   }, [activeWeek, axis]);
 
   // 상세는 행을 눌렀을 때만 부른다. 첫 화면 로딩에는 영향이 없다.
@@ -295,6 +323,10 @@ export default function WeeklyBoardPage() {
     queryKey: ['weekly-detail', activeWeek, drill ? drillKey(drill) : 'none'],
     queryFn: () => {
       const target = drill!;
+      // 전체보기는 필터를 하나도 걸지 않는다 — 합계가 위 표의 합계행과 같아야 한다.
+      if (target.axis === 'all') {
+        return getWeeklyCategoryDetail(activeWeek!, null, null, [...WEEKLY_DEFAULT_SCOPES], null);
+      }
       // 채널 드릴다운은 카테고리·CM 을 걸지 않는다. 필터를 겹치면 상세 합계가 위 표의 그 줄과 어긋난다.
       return target.axis === 'channel'
         ? getWeeklyCategoryDetail(activeWeek!, null, null, [...WEEKLY_DEFAULT_SCOPES], target.channel)
@@ -327,9 +359,21 @@ export default function WeeklyBoardPage() {
         )
       : detail.rows;
 
+    /** 위 표의 행 순서. 표에 없는 조합은 맨 뒤로 보낸다 */
+    const groupKeyOf = (row: WeeklyDetailRow) =>
+      axis === 'channel' ? row.channel : `${row.cm}|${row.category}`;
+    const groupRank = new Map<string, number>(
+      axis === 'channel'
+        ? (channelBoard?.rows ?? []).map((row, index) => [row.channel as string, index])
+        : (teamBoard?.rows ?? []).map((row, index) => [`${row.cm}|${row.category}`, index])
+    );
+    const rankOf = (row: WeeklyDetailRow) => groupRank.get(groupKeyOf(row)) ?? Number.MAX_SAFE_INTEGER;
+
     const sorted = [...filtered];
     sorted.sort((a, b) => {
       switch (detailSort) {
+        case 'group':
+          return rankOf(a) - rankOf(b) || b.stockValue - a.stockValue;
         case 'riskValue':
           return b.riskValue - a.riskValue;
         case 'riskRatio':
@@ -358,7 +402,7 @@ export default function WeeklyBoardPage() {
       }
     });
     return sorted;
-  }, [detail, detailSort, detailQuery]);
+  }, [detail, detailSort, detailQuery, axis, channelBoard, teamBoard]);
 
   const detailPageCount = Math.max(1, Math.ceil(detailRows.length / DETAIL_PAGE_SIZE));
   const detailPageSafe = Math.min(detailPage, detailPageCount - 1);
@@ -376,9 +420,13 @@ export default function WeeklyBoardPage() {
   const handleDownloadDetail = () => {
     if (!detail || detailRows.length === 0) return;
     const label = (drill ? drillLabel(drill).replace(/ · /g, '_') : '전체').replace(/\//g, '-');
+    const isAll = drill?.axis === 'all';
 
     exportToExcel(
       detailRows.map((row) => ({
+        // 전체보기 파일은 칸이 섞여 있으므로 구분 열(CM·공장·카테고리·채널)을 맨 앞에 둔다.
+        // 아래 본문에 같은 키가 다시 나오지만 객체 키 순서는 처음 넣은 자리를 유지하므로 값만 덮인다.
+        ...(isAll ? { CM: row.cm, 공장: row.plant, 카테고리: row.category, 채널: row.channel } : {}),
         '자재코드': row.materialCode,
         '품명': row.productName,
         // 화면에는 없는 열이다. 카테고리·CM 판정의 근거라 파일에서는 첫 구분자로 둔다.
@@ -435,6 +483,9 @@ export default function WeeklyBoardPage() {
   const toggleDrill = (next: Drill) => {
     setDetailPage(0);
     setDetailQuery('');
+    // 「구분순」은 전체보기 전용이다. 전체보기로 들어가면 기본으로 켜고, 한 칸으로 좁히면 재고금액순으로 돌린다.
+    if (next.axis === 'all') setDetailSort('group');
+    else if (detailSort === 'group') setDetailSort('stockValue');
     setDrill((current) => (current && drillKey(current) === drillKey(next) ? null : next));
   };
 
@@ -1045,6 +1096,27 @@ export default function WeeklyBoardPage() {
           <section ref={detailSectionRef} className="scroll-mt-3 rounded-lg border border-neutral-200 bg-white">
             <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 px-3 py-2">
               <span className="text-[11px] font-bold text-neutral-500">상세 보기</span>
+              {/* 전체보기 — 칸을 고르지 않고 스코프 전체 SKU 를 한 목록으로 펼친다. 엑셀로 받으면 전 품목이 한 시트에 담긴다 */}
+              <button
+                onClick={() => toggleDrill(ALL_DRILL)}
+                title="모든 CM·카테고리의 SKU 를 한 목록으로 펼칩니다. 오른쪽 「엑셀」로 전 품목을 내려받을 수 있습니다."
+                className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-bold transition-colors ${
+                  drill?.axis === 'all'
+                    ? 'border-[#1565C0] bg-[#1565C0] text-white'
+                    : 'border-[#1565C0]/40 bg-[#E3F2FD] text-[#1565C0] hover:bg-[#BBDEFB]'
+                }`}
+              >
+                <Layers size={11} />
+                전체보기
+                <span
+                  className={`tabular-nums font-medium ${
+                    drill?.axis === 'all' ? 'text-white/70' : 'text-[#1565C0]/60'
+                  }`}
+                >
+                  {toEok(board.totals.stockValue).toFixed(1)}억
+                </span>
+              </button>
+              <span className="mx-0.5 h-4 w-px bg-neutral-200" />
               {segments.map((entry) => {
                 const isOpen = !!drill && drillKey(drill) === drillKey(entry.drill);
                 return (
@@ -1086,7 +1158,7 @@ export default function WeeklyBoardPage() {
             {!drill && (
               <p className="px-3 py-4 text-center text-[11px] text-neutral-400">
                 {axis === 'channel' ? '채널' : '카테고리'}를 누르거나 위 표의 행을 누르면 SKU 별
-                재고수량·금액·소비기한이 펼쳐집니다.
+                재고수량·금액·소비기한이 펼쳐집니다. 「전체보기」는 전 품목을 한 목록으로 펼칩니다.
               </p>
             )}
 
@@ -1102,7 +1174,7 @@ export default function WeeklyBoardPage() {
 
                   {/* 정렬 — 금액 기준과 소비기한 임박 기준을 나란히 둔다 */}
                   <div className="flex flex-wrap items-center gap-1">
-                    {DETAIL_SORTS.map((sort) => {
+                    {DETAIL_SORTS.filter((sort) => sort.key !== 'group' || drill.axis === 'all').map((sort) => {
                       // 잔여일 열이 없는 주차에서 「소비기한 임박」을 누르면 정렬이 무의미해진다. 아예 막는다.
                       const disabled =
                         (sort.key === 'remain' && !hasRemainDay) ||
@@ -1221,9 +1293,11 @@ export default function WeeklyBoardPage() {
                               >
                                 <span className="block truncate">{row.productName}</span>
                                 <span className="mt-0.5 block truncate text-[9px] font-normal text-neutral-400">
-                                  {axis === 'channel'
-                                    ? `${row.cm} · ${row.category}`
-                                    : `${row.channel}${row.lv2 ? ` · ${row.lv2}` : ''}`}
+                                  {drill.axis === 'all'
+                                    ? `${row.cm} · ${row.category} · ${row.channel}`
+                                    : axis === 'channel'
+                                      ? `${row.cm} · ${row.category}`
+                                      : `${row.channel}${row.lv2 ? ` · ${row.lv2}` : ''}`}
                                 </span>
                               </td>
                               <td className="border-l border-neutral-100 px-1.5 py-1.5 tabular-nums text-neutral-600">

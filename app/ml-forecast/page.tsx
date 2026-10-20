@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getMlComparison, testNeonConnection } from '@/actions/ml-forecast-actions';
 import CanvasCompareChart from '@/components/charts/canvas-compare-chart';
 import {
-  RefreshCw, Search, Filter, Database, XCircle,
+  RefreshCw, Search, Filter,
   Target, TrendingUp, TrendingDown, ChevronLeft, ChevronRight, AlertCircle,
   Info, Brain, CalendarDays, CalendarClock,
 } from 'lucide-react';
@@ -79,11 +79,9 @@ export default function MlForecastPage() {
   // 연결/스키마 상태
   const [conn, setConn] = useState<any>(null);
   const [checking, setChecking] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (term: string) => {
     setLoading(true);
-    setError(null);
     const res = await getMlComparison(term, startDate, endDate);
     if (res.success) {
       const data = (res.data || []) as Item[];
@@ -94,18 +92,17 @@ export default function MlForecastPage() {
     } else {
       setItems([]);
       setSelectedId(null);
-      setError(res.error || '데이터를 불러오지 못했습니다.');
+      console.error('ML 예측 비교 로드 실패:', res.error);
     }
     setLoading(false);
   }, [startDate, endDate]);
 
   const checkConnection = useCallback(async () => {
     setChecking(true);
-    setError(null);
     const res = await testNeonConnection();
     setConn(res);
     setChecking(false);
-    if (res.error) setError(res.error);
+    if (res.error) console.error('ML 예측 저장소 연결 실패:', res.error);
   }, []);
 
   useEffect(() => { checkConnection(); }, [checkConnection]);
@@ -174,7 +171,7 @@ export default function MlForecastPage() {
               disabled={checking}
               className="flex items-center gap-2 px-3 py-2 bg-white border border-neutral-300 text-neutral-700 rounded-lg text-sm font-bold hover:bg-neutral-50 transition-colors disabled:opacity-50"
             >
-              <Database size={14} /> {checking ? '확인 중...' : '연결 확인'}
+              <RefreshCw size={14} /> {checking ? '확인 중...' : '다시 시도'}
             </button>
           )}
           {!notReady && (
@@ -188,75 +185,18 @@ export default function MlForecastPage() {
         </div>
       </div>
 
-      {/* 연결 상태 배너 */}
-      {conn && !conn.connected && (
-        <div className={`mb-4 px-4 py-3 rounded-lg border text-sm flex items-start gap-2 ${conn.connected ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
-          <XCircle size={18} className="shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <span>{conn.error}</span>
-          </div>
-        </div>
-      )}
-
-      {/* 설정/스키마 안내 (연결 준비 안 됨) */}
+      {/* 예측 데이터 준비 전: 저장소 설정 안내는 사용자에게 보이지 않는다(원인은 콘솔에만 남김) */}
       {notReady ? (
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-3xl mx-auto bg-white border border-neutral-200 rounded-xl shadow-sm p-8 space-y-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                <Database size={20} className="text-blue-600" />
-              </div>
-              <div>
-                <h2 className="font-bold text-lg text-neutral-900">Neon DB 연동 설정</h2>
-                <p className="text-sm text-neutral-500">머신러닝 예측 결과가 저장된 Neon Postgres를 연결하세요.</p>
-              </div>
+        <div className="flex-1 flex items-center justify-center">
+          {checking || conn === null ? (
+            <div className="text-sm text-neutral-400">예측 데이터를 불러오는 중...</div>
+          ) : (
+            <div className="text-center space-y-2">
+              <AlertCircle size={28} className="mx-auto text-neutral-300" />
+              <div className="text-sm font-bold text-neutral-600">예측 데이터를 불러오지 못했습니다.</div>
+              <div className="text-xs text-neutral-400">잠시 후 우측 상단 「다시 시도」를 눌러 주세요.</div>
             </div>
-
-            <ol className="space-y-3 text-sm text-neutral-700">
-              <li className="flex gap-3">
-                <span className="shrink-0 w-6 h-6 rounded-full bg-neutral-900 text-white text-xs font-bold flex items-center justify-center">1</span>
-                <div>
-                  프로젝트 루트 <code className="font-mono bg-neutral-100 px-1.5 py-0.5 rounded">.env.local</code> 에 연결 문자열을 추가:
-                  <pre className="mt-2 bg-neutral-900 text-neutral-100 text-xs rounded-lg p-3 overflow-x-auto">NEON_DATABASE_URL=postgresql://USER:PASSWORD@ep-xxxx.region.aws.neon.tech/dbname?sslmode=require</pre>
-                </div>
-              </li>
-              <li className="flex gap-3">
-                <span className="shrink-0 w-6 h-6 rounded-full bg-neutral-900 text-white text-xs font-bold flex items-center justify-center">2</span>
-                <div>개발 서버를 재시작(<code className="font-mono bg-neutral-100 px-1.5 py-0.5 rounded">npm run dev</code>)한 뒤 우측 상단 <b>연결 &amp; 스키마 조회</b> 버튼 클릭. (Vercel 배포 시에는 환경변수 추가 후 재배포)</div>
-              </li>
-              <li className="flex gap-3">
-                <span className="shrink-0 w-6 h-6 rounded-full bg-neutral-900 text-white text-xs font-bold flex items-center justify-center">3</span>
-                <div>예측 테이블은 <b>MATNR(자재코드)</b>, <b>예측 월</b>, <b>예측 수량</b> 컬럼을 포함해야 자동 감지됩니다. (Prophet의 <code>ds</code>/<code>yhat</code> 형태도 인식)</div>
-              </li>
-            </ol>
-
-            {/* 연결됐지만 감지 실패 시: 테이블 목록 표시 */}
-            {conn?.connected && !conn?.mapping && conn?.tables?.length > 0 && (
-              <div className="pt-4 border-t border-neutral-200">
-                <h3 className="font-bold text-sm text-neutral-800 mb-2">발견된 테이블 ({conn.tables.length})</h3>
-                <div className="space-y-2 max-h-72 overflow-y-auto">
-                  {conn.tables.map((t: any) => (
-                    <div key={`${t.schema}.${t.name}`} className="border border-neutral-200 rounded-lg p-3">
-                      <div className="font-mono text-xs font-bold text-neutral-800">{t.schema}.{t.name}</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {t.columns.map((c: any) => (
-                          <span key={c.name} className="text-[10px] font-mono bg-neutral-100 text-neutral-600 px-1.5 py-0.5 rounded">
-                            {c.name}<span className="text-neutral-400">:{c.type}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-neutral-500 mt-3">
-                  자동 감지가 되지 않으면 <code className="font-mono bg-neutral-100 px-1 rounded">actions/ml-forecast-actions.ts</code> 상단의
-                  <code className="font-mono bg-neutral-100 px-1 rounded"> MANUAL_CONFIG</code> 에 테이블/컬럼명을 직접 지정하세요.
-                </p>
-              </div>
-            )}
-
-            {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">{error}</div>}
-          </div>
+          )}
         </div>
       ) : (
         // ─── 비교 화면 ──────────────────────────────────────────────────────

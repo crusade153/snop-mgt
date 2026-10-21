@@ -73,6 +73,63 @@ export function weeklyBucketKeyOf(remainRate: number): keyof WeeklyBuckets {
   return 'over85';
 }
 
+/**
+ * 「50% 미만 [내부소진]」 구간의 세부 분해 — 0~20% / 20~40% / 40~50%.
+ *
+ * ⚠️ **5구간(`WeeklyBuckets`)을 7구간으로 바꾸지 않고 `under50` 아래의 분해로 둔다.**
+ * 이 열들은 나중에 추가돼 그 전에 적재된 주차에는 값이 없다(재고는 소급 생성 불가).
+ * 구간 키 자체를 바꾸면 과거 주차의 「구간 합 = 재고금액」 불변식이 깨지므로,
+ * 부모 구간은 그대로 두고 쪼갤 수 없는 몫은 `unsplit` 으로 드러낸다.
+ * 불변식: `under20 + r20_40 + r40_50 + unsplit = under50` (원 단위).
+ */
+export interface WeeklyUnder50Split {
+  under20: number;
+  r20_40: number;
+  r40_50: number;
+  /** 세부 구간 열이 없던 주차의 50% 미만 금액(쪼갤 수 없음) */
+  unsplit: number;
+}
+
+export type WeeklyUnder50Key = 'under20' | 'r20_40' | 'r40_50';
+
+export const WEEKLY_UNDER50_KEYS: WeeklyUnder50Key[] = ['under20', 'r20_40', 'r40_50'];
+
+/**
+ * ⚠️ `0~20%` 에는 **기한이 이미 지난 배치(잔여율 0 이하)도 들어간다.** 따로 떼지 않는 이유는
+ * 둘 다 「정상 판매 불가 → 내부소진·폐기 판단」이라는 같은 조치 대상이기 때문이다. 화면 툴팁에 그대로 적는다.
+ */
+export const WEEKLY_UNDER50_LABELS: Record<WeeklyUnder50Key, string> = {
+  under20: '0~20%',
+  r20_40: '20~40%',
+  r40_50: '40~50%',
+};
+
+export const createUnder50Split = (): WeeklyUnder50Split => ({
+  under20: 0,
+  r20_40: 0,
+  r40_50: 0,
+  unsplit: 0,
+});
+
+/** 잔여율(50 미만) → 세부 구간 키. 50 이상은 호출하지 않는다 */
+export function weeklyUnder50KeyOf(remainRate: number): WeeklyUnder50Key {
+  if (remainRate < 20) return 'under20';
+  if (remainRate < 40) return 'r20_40';
+  return 'r40_50';
+}
+
+/** 쪼갤 수 없는 몫이 사실상 없으면(반올림 오차 이내) 세부 구간을 그대로 보여줄 수 있다 */
+export function isUnder50SplitComplete(split: WeeklyUnder50Split) {
+  return Math.abs(split.unsplit) < 1;
+}
+
+function addUnder50Split(target: WeeklyUnder50Split, source: WeeklyUnder50Split) {
+  target.under20 += source.under20;
+  target.r20_40 += source.r20_40;
+  target.r40_50 += source.r40_50;
+  target.unsplit += source.unsplit;
+}
+
 /** 적재 테이블 한 행 = 주차 × SKU × 창고그룹 */
 export interface WeeklySnapshotRow {
   week_end_date: string;
@@ -96,6 +153,16 @@ export interface WeeklySnapshotRow {
   bucket_qty_70_75?: number;
   bucket_qty_75_85?: number;
   bucket_qty_85_over?: number;
+  /**
+   * 50% 미만 세부 구간 금액·수량. **열 추가 전 주차는 null** 이다(0 이 아니다 — 0 과 「모름」을 섞지 않는다).
+   * 적재 시 `bucket_40_50 = bucket_under50 − 나머지 둘` 로 맞춰 세 값의 합이 부모와 원 단위까지 같다.
+   */
+  bucket_under20?: number | null;
+  bucket_20_40?: number | null;
+  bucket_40_50?: number | null;
+  bucket_qty_under20?: number | null;
+  bucket_qty_20_40?: number | null;
+  bucket_qty_40_50?: number | null;
   shipped_qty: number;
   shipped_value: number;
   /** 기존 당월 누적 출고 열. 2026-09 이후 화면 계산에는 쓰지 않는다 */
@@ -138,6 +205,8 @@ export interface WeeklyBoardMetrics {
   producedValue: number;
   stockValue: number;
   buckets: WeeklyBuckets;
+  /** `buckets.under50` 의 세부 분해(0~20 / 20~40 / 40~50%). 합 = under50 */
+  under50Split: WeeklyUnder50Split;
   /** 전월 출고금액 (재고와 같은 단가) */
   previousMonthShipmentValue: number;
   /** 전월 실제 납품매출액(NETWR). 「전월 매출 比 재고금액」의 분모 */
@@ -181,6 +250,36 @@ export interface WeeklyBucketMovement {
   currentTotal: number;
   deltaTotal: number;
   rateTotal: number;
+  /** 50% 미만 세부 구간. 전주·당주 중 한쪽이라도 쪼갤 수 없으면 증감은 의미가 없다(`splitComparable`) */
+  splitPrevious: WeeklyUnder50Split;
+  splitCurrent: WeeklyUnder50Split;
+  splitDelta: WeeklyUnder50Split;
+  /** 당주 세부 구간이 완전한지 */
+  splitAvailable: boolean;
+  /** 전주·당주 모두 세부 구간이 완전해 증감을 낼 수 있는지 */
+  splitComparable: boolean;
+}
+
+/** 50% 미만 세부 구간 한 칸의 금액·SKU 수. 화면 KPI 카드의 원천이다 */
+export interface WeeklyUnder50Summary {
+  key: WeeklyUnder50Key;
+  value: number;
+  itemCount: number;
+}
+
+/**
+ * 잔여율 20% 미만 재고가 큰 SKU — 「지금 처분 판단이 필요한 품목」.
+ * 같은 SKU 가 플랜트·물류에 나뉘어 있어도 한 줄로 접는다.
+ */
+export interface WeeklyCriticalItem {
+  materialCode: string;
+  productName: string;
+  /** 팀별 축이면 `CM · 카테고리`, 채널별 축이면 채널 */
+  group: string;
+  under20: number;
+  under50: number;
+  stockValue: number;
+  minRemainDay: number | null;
 }
 
 export function sumBuckets(buckets: WeeklyBuckets) {
@@ -191,6 +290,32 @@ function addBuckets(target: WeeklyBuckets, source: WeeklyBuckets) {
   WEEKLY_BUCKET_KEYS.forEach((key) => {
     target[key] += source[key] || 0;
   });
+}
+
+/**
+ * 행의 50% 미만 세부 구간. 열이 없던 주차(null)는 통째로 `unsplit` 으로 보낸다.
+ * 적재 때 40~50% 를 나머지로 맞춰 두므로 새 행의 `unsplit` 은 0 이다.
+ */
+function under50SplitOfRow(row: WeeklySnapshotRow): WeeklyUnder50Split {
+  const under50 = row.bucket_under50 || 0;
+  if (row.bucket_under20 === null || row.bucket_under20 === undefined) {
+    return { under20: 0, r20_40: 0, r40_50: 0, unsplit: under50 };
+  }
+  const under20 = Number(row.bucket_under20) || 0;
+  const r20_40 = Number(row.bucket_20_40) || 0;
+  const r40_50 = Number(row.bucket_40_50) || 0;
+  return { under20, r20_40, r40_50, unsplit: under50 - under20 - r20_40 - r40_50 };
+}
+
+function under50SplitQuantitiesOfRow(row: WeeklySnapshotRow): WeeklyUnder50Split {
+  const under50 = row.bucket_qty_under50 || 0;
+  if (row.bucket_qty_under20 === null || row.bucket_qty_under20 === undefined) {
+    return { under20: 0, r20_40: 0, r40_50: 0, unsplit: under50 };
+  }
+  const under20 = Number(row.bucket_qty_under20) || 0;
+  const r20_40 = Number(row.bucket_qty_20_40) || 0;
+  const r40_50 = Number(row.bucket_qty_40_50) || 0;
+  return { under20, r20_40, r40_50, unsplit: under50 - under20 - r20_40 - r40_50 };
 }
 
 function bucketsOfRow(row: WeeklySnapshotRow): WeeklyBuckets {
@@ -252,7 +377,16 @@ export interface WeeklyBoardResult {
   totals: WeeklyBoardTotals;
   movement: WeeklyBucketMovement;
   /** 카테고리별 구간 재고금액 — 차트는 이 값을 그대로 쓴다(별도 소스 없음) */
-  categoryBuckets: { category: WeeklyCategory; buckets: WeeklyBuckets; total: number }[];
+  categoryBuckets: {
+    category: WeeklyCategory;
+    buckets: WeeklyBuckets;
+    under50Split: WeeklyUnder50Split;
+    total: number;
+  }[];
+  /** 50% 미만 세부 구간별 금액·SKU 수 (합계행 기준) */
+  under50Summary: WeeklyUnder50Summary[];
+  /** 잔여율 20% 미만 재고가 큰 SKU 상위 목록. 세부 구간 열이 없는 주차는 빈 배열 */
+  criticalItems: WeeklyCriticalItem[];
   /** 카테고리 축에 못 담긴 DISPO 별 재고금액. 매핑 누락을 금액으로 드러낸다 */
   unmappedDispo: { dispo: string; value: number; itemCount: number }[];
   /**
@@ -277,6 +411,7 @@ const emptyMetrics = (): WeeklyBoardMetrics => ({
   producedValue: 0,
   stockValue: 0,
   buckets: createWeeklyBuckets(),
+  under50Split: createUnder50Split(),
   previousMonthShipmentValue: 0,
   previousMonthSales: 0,
   stockToPreviousMonthShipmentRatio: null,
@@ -299,6 +434,7 @@ function accumulateCurrent(target: WeeklyBoardMetrics, row: WeeklySnapshotRow) {
   target.previousMonthShipmentValue += row.shipped_previous_month_value || 0;
   target.previousMonthSales += row.sales_previous_month || 0;
   addBuckets(target.buckets, bucketsOfRow(row));
+  addUnder50Split(target.under50Split, under50SplitOfRow(row));
 }
 
 /** 누적이 끝난 값에 비율·대차를 채운다 */
@@ -335,7 +471,10 @@ function totalsOf(rows: WeeklyBoardMetrics[]): WeeklyBoardTotals {
     previousMonthShipmentValue: rows.reduce((sum, row) => sum + row.previousMonthShipmentValue, 0),
     previousMonthSales: rows.reduce((sum, row) => sum + row.previousMonthSales, 0),
   };
-  rows.forEach((row) => addBuckets(totals.buckets, row.buckets));
+  rows.forEach((row) => {
+    addBuckets(totals.buckets, row.buckets);
+    addUnder50Split(totals.under50Split, row.under50Split);
+  });
   return { ...finalizeMetrics(totals), rowCount: rows.length };
 }
 
@@ -347,7 +486,10 @@ function totalsOf(rows: WeeklyBoardMetrics[]): WeeklyBoardTotals {
  */
 function bucketMovementOf(
   previousBuckets: WeeklyBuckets,
-  currentBuckets: WeeklyBuckets
+  currentBuckets: WeeklyBuckets,
+  previousSplit: WeeklyUnder50Split,
+  currentSplit: WeeklyUnder50Split,
+  hasPrevious: boolean
 ): WeeklyBucketMovement {
   const delta = createWeeklyBuckets();
   const rate = createWeeklyBuckets();
@@ -368,7 +510,80 @@ function bucketMovementOf(
     currentTotal,
     deltaTotal: currentTotal - previousTotal,
     rateTotal: previousTotal > 0 ? (currentTotal - previousTotal) / previousTotal : 0,
+    splitPrevious: previousSplit,
+    splitCurrent: currentSplit,
+    splitDelta: {
+      under20: currentSplit.under20 - previousSplit.under20,
+      r20_40: currentSplit.r20_40 - previousSplit.r20_40,
+      r40_50: currentSplit.r40_50 - previousSplit.r40_50,
+      unsplit: currentSplit.unsplit - previousSplit.unsplit,
+    },
+    splitAvailable: isUnder50SplitComplete(currentSplit),
+    splitComparable:
+      hasPrevious && isUnder50SplitComplete(currentSplit) && isUnder50SplitComplete(previousSplit),
   };
+}
+
+/**
+ * 50% 미만 세부 구간별 금액과 SKU 수.
+ * SKU 수는 **그 구간에 재고가 조금이라도 있는 SKU** 다 — 한 SKU 가 배치별로 여러 구간에 걸칠 수 있어
+ * 세 칸의 SKU 수를 더하면 전체 SKU 수보다 클 수 있다(화면에 그렇게 적는다).
+ */
+function under50SummaryOf(rows: WeeklySnapshotRow[], split: WeeklyUnder50Split): WeeklyUnder50Summary[] {
+  const codes: Record<WeeklyUnder50Key, Set<string>> = {
+    under20: new Set(),
+    r20_40: new Set(),
+    r40_50: new Set(),
+  };
+  rows.forEach((row) => {
+    const rowSplit = under50SplitOfRow(row);
+    WEEKLY_UNDER50_KEYS.forEach((key) => {
+      if (Math.round(rowSplit[key]) > 0) codes[key].add(row.material_code);
+    });
+  });
+  return WEEKLY_UNDER50_KEYS.map((key) => ({
+    key,
+    value: split[key],
+    itemCount: codes[key].size,
+  }));
+}
+
+const CRITICAL_ITEM_LIMIT = 10;
+
+/** 잔여율 20% 미만 금액이 큰 SKU. 축마다 「어느 줄 소속인가」 표기만 다르다 */
+function criticalItemsOf(
+  rows: WeeklySnapshotRow[],
+  groupOf: (row: WeeklySnapshotRow) => string
+): WeeklyCriticalItem[] {
+  const byCode = new Map<string, WeeklyCriticalItem>();
+  rows.forEach((row) => {
+    const split = under50SplitOfRow(row);
+    let target = byCode.get(row.material_code);
+    if (!target) {
+      target = {
+        materialCode: row.material_code,
+        productName: row.product_name || row.material_code,
+        group: groupOf(row),
+        under20: 0,
+        under50: 0,
+        stockValue: 0,
+        minRemainDay: null,
+      };
+      byCode.set(row.material_code, target);
+    }
+    target.under20 += split.under20;
+    target.under50 += row.bucket_under50 || 0;
+    target.stockValue += row.stock_value || 0;
+    const day = row.min_remain_day;
+    if (day !== null && day !== undefined && Number.isFinite(Number(day))) {
+      target.minRemainDay =
+        target.minRemainDay === null ? Number(day) : Math.min(target.minRemainDay, Number(day));
+    }
+  });
+  return [...byCode.values()]
+    .filter((item) => Math.round(item.under20) > 0)
+    .sort((a, b) => b.under20 - a.under20)
+    .slice(0, CRITICAL_ITEM_LIMIT);
 }
 
 export function buildWeeklyBoard({
@@ -431,24 +646,51 @@ export function buildWeeklyBoard({
   const totals = totalsOf(rows);
 
   const previousBuckets = createWeeklyBuckets();
-  previous.filter(inScope).forEach((row) => addBuckets(previousBuckets, bucketsOfRow(row)));
+  const previousSplit = createUnder50Split();
+  previous.filter(inScope).forEach((row) => {
+    addBuckets(previousBuckets, bucketsOfRow(row));
+    addUnder50Split(previousSplit, under50SplitOfRow(row));
+  });
 
-  const categoryTotals = new Map<WeeklyCategory, WeeklyBuckets>();
+  const categoryTotals = new Map<WeeklyCategory, { buckets: WeeklyBuckets; split: WeeklyUnder50Split }>();
   rows.forEach((row) => {
-    const target = categoryTotals.get(row.category) || createWeeklyBuckets();
-    addBuckets(target, row.buckets);
+    const target = categoryTotals.get(row.category) || {
+      buckets: createWeeklyBuckets(),
+      split: createUnder50Split(),
+    };
+    addBuckets(target.buckets, row.buckets);
+    addUnder50Split(target.split, row.under50Split);
     categoryTotals.set(row.category, target);
   });
+
+  const currentInScope = current.filter(inScope);
 
   return {
     hasPrevious: previous.length > 0,
     rows,
     totals,
-    movement: bucketMovementOf(previousBuckets, totals.buckets),
+    movement: bucketMovementOf(
+      previousBuckets,
+      totals.buckets,
+      previousSplit,
+      totals.under50Split,
+      previous.length > 0
+    ),
     categoryBuckets: WEEKLY_CATEGORY_ORDER.map((category) => {
-      const buckets = categoryTotals.get(category) || createWeeklyBuckets();
-      return { category, buckets, total: sumBuckets(buckets) };
+      const entry = categoryTotals.get(category);
+      const buckets = entry?.buckets || createWeeklyBuckets();
+      return {
+        category,
+        buckets,
+        under50Split: entry?.split || createUnder50Split(),
+        total: sumBuckets(buckets),
+      };
     }).filter((entry) => entry.total > 0),
+    under50Summary: under50SummaryOf(currentInScope, totals.under50Split),
+    criticalItems: criticalItemsOf(currentInScope, (row) => {
+      const { category } = classifyRow(row);
+      return `${resolveCm(row.material_code, category, cmMapping)} · ${category}`;
+    }),
     unmappedDispo: [...unmapped.entries()]
       .map(([dispo, bucket]) => ({ dispo, value: bucket.value, itemCount: bucket.codes.size }))
       .sort((a, b) => b.value - a.value),
@@ -480,7 +722,14 @@ export interface WeeklyChannelBoardResult {
   totals: WeeklyBoardTotals;
   movement: WeeklyBucketMovement;
   /** 채널별 구간 재고금액 — 차트가 그대로 쓴다 */
-  channelBuckets: { channel: WeeklyChannel; buckets: WeeklyBuckets; total: number }[];
+  channelBuckets: {
+    channel: WeeklyChannel;
+    buckets: WeeklyBuckets;
+    under50Split: WeeklyUnder50Split;
+    total: number;
+  }[];
+  under50Summary: WeeklyUnder50Summary[];
+  criticalItems: WeeklyCriticalItem[];
   /**
    * 채널 매핑표에 없는 LV2 별 재고금액.
    *
@@ -560,24 +809,48 @@ export function buildWeeklyChannelBoard({
   const totals = totalsOf(rows);
 
   const previousBuckets = createWeeklyBuckets();
-  previous.filter(inScope).forEach((row) => addBuckets(previousBuckets, bucketsOfRow(row)));
+  const previousSplit = createUnder50Split();
+  previous.filter(inScope).forEach((row) => {
+    addBuckets(previousBuckets, bucketsOfRow(row));
+    addUnder50Split(previousSplit, under50SplitOfRow(row));
+  });
 
-  const channelTotals = new Map<WeeklyChannel, WeeklyBuckets>();
+  const channelTotals = new Map<WeeklyChannel, { buckets: WeeklyBuckets; split: WeeklyUnder50Split }>();
   rows.forEach((row) => {
-    const target = channelTotals.get(row.channel) || createWeeklyBuckets();
-    addBuckets(target, row.buckets);
+    const target = channelTotals.get(row.channel) || {
+      buckets: createWeeklyBuckets(),
+      split: createUnder50Split(),
+    };
+    addBuckets(target.buckets, row.buckets);
+    addUnder50Split(target.split, row.under50Split);
     channelTotals.set(row.channel, target);
   });
+
+  const currentInScope = current.filter(inScope);
 
   return {
     hasPrevious: previous.length > 0,
     rows,
     totals,
-    movement: bucketMovementOf(previousBuckets, totals.buckets),
+    movement: bucketMovementOf(
+      previousBuckets,
+      totals.buckets,
+      previousSplit,
+      totals.under50Split,
+      previous.length > 0
+    ),
     channelBuckets: WEEKLY_CHANNEL_ORDER.map((channel) => {
-      const buckets = channelTotals.get(channel) || createWeeklyBuckets();
-      return { channel, buckets, total: sumBuckets(buckets) };
+      const entry = channelTotals.get(channel);
+      const buckets = entry?.buckets || createWeeklyBuckets();
+      return {
+        channel,
+        buckets,
+        under50Split: entry?.split || createUnder50Split(),
+        total: sumBuckets(buckets),
+      };
     }).filter((entry) => entry.total > 0),
+    under50Summary: under50SummaryOf(currentInScope, totals.under50Split),
+    criticalItems: criticalItemsOf(currentInScope, (row) => channelOf(row)),
     unmappedLv2: [...unmapped.entries()]
       .map(([lv2, bucket]) => ({ lv2, value: bucket.value, itemCount: bucket.codes.size }))
       .sort((a, b) => b.value - a.value),
@@ -704,25 +977,45 @@ export function buildStockSummaryNote(result: WeeklyBoardResult) {
   return lines.join('\n');
 }
 
+/**
+ * 50% 미만 세부 구간 한 줄 — 세부 열이 없는 주차는 빈 문자열이다(문구를 지어내지 않는다).
+ * 증감은 전주도 쪼개져 있을 때만 붙인다.
+ */
+function under50SplitNoteLine(movement: WeeklyBucketMovement) {
+  if (!movement.splitAvailable) return '';
+  const parts = WEEKLY_UNDER50_KEYS.map((key) => {
+    const base = `${WEEKLY_UNDER50_LABELS[key]} ${formatNoteAmount(movement.splitCurrent[key])}`;
+    return movement.splitComparable
+      ? `${base}(${formatSignedNoteAmount(movement.splitDelta[key])})`
+      : base;
+  });
+  return ` - ${parts.join(', ')}`;
+}
+
 /** 원본 엑셀 N13 의 문구 템플릿 — 구간별 재고변동 블록 */
 export function buildBucketMovementNote(movement: WeeklyBucketMovement, hasPrevious = true) {
+  const splitLine = under50SplitNoteLine(movement);
+  /** 세부 줄은 「50% 미만」 줄 바로 아래에 붙인다 */
+  const withSplit = (lines: string[]) => (splitLine ? [lines[0], splitLine, ...lines.slice(1)] : lines);
+
   if (!hasPrevious) {
-    return WEEKLY_BUCKET_KEYS.slice(0, 3)
-      .map((key) => {
+    return withSplit(
+      WEEKLY_BUCKET_KEYS.slice(0, 3).map((key) => {
         const label = key === 'under50' ? '소비기한 50% 미만 재고' : `${WEEKLY_BUCKET_LABELS[key].split(' ')[0]} 구간 재고`;
         return `* ${label} ${formatNoteAmount(movement.current[key])}`;
       })
+    )
       .join('\n')
       .concat('\n\n* 전주 대비 증감은 다음 주차가 적재되면 표시됩니다');
   }
 
-  return WEEKLY_BUCKET_KEYS.slice(0, 3)
-    .map((key) => {
+  return withSplit(
+    WEEKLY_BUCKET_KEYS.slice(0, 3).map((key) => {
       const delta = movement.delta[key];
       const label = key === 'under50' ? '소비기한 50% 미만 재고' : `${WEEKLY_BUCKET_LABELS[key].split(' ')[0]} 구간 재고`;
       return `* ${label} ${formatNoteAmount(delta)} ${delta >= 0 ? '증가' : '감소'}`;
     })
-    .join('\n');
+  ).join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -757,6 +1050,11 @@ export interface WeeklyDetailRow {
   bucketQuantities: WeeklyBuckets;
   /** 이 SKU 의 구간수량 합이 재고수량과 맞는지 */
   hasBucketQuantities: boolean;
+  /** 50% 미만 세부 구간 금액·수량. 열이 없던 주차의 몫은 `unsplit` 에 남는다 */
+  under50Split: WeeklyUnder50Split;
+  under50SplitQuantities: WeeklyUnder50Split;
+  /** 이 SKU 의 50% 미만 금액이 세부 구간으로 완전히 쪼개졌는지 */
+  hasUnder50Split: boolean;
   /** 잔여율 75% 미만(50%미만 + 50~70% + 70~75%) 재고금액 = 소진 필요 */
   riskValue: number;
   riskRatio: number;
@@ -810,10 +1108,13 @@ export interface WeeklyDetailResult {
     previousStockValue: number;
     riskValue: number;
     buckets: WeeklyBuckets;
+    under50Split: WeeklyUnder50Split;
     shippedValue: number;
     producedValue: number;
     itemCount: number;
   };
+  /** 50% 미만 세부 구간이 완전히 채워진 주차인지. false 면 세부 열을 합쳐 「미분해」로 보인다 */
+  hasUnder50Split: boolean;
   /** 잔여일 열이 채워진 주차인지. false 면 「소비기한 임박」 정렬을 쓸 수 없다 */
   hasRemainDay: boolean;
   /** 구간별 수량 열이 정확히 채워진 주차인지. false 면 수량은 '-' 로 표시한다 */
@@ -887,6 +1188,9 @@ export function buildWeeklyDetail({
         buckets: createWeeklyBuckets(),
         bucketQuantities: createWeeklyBuckets(),
         hasBucketQuantities: false,
+        under50Split: createUnder50Split(),
+        under50SplitQuantities: createUnder50Split(),
+        hasUnder50Split: false,
         riskValue: 0,
         riskRatio: 0,
         shippedQty: 0,
@@ -934,6 +1238,8 @@ export function buildWeeklyDetail({
       addBuckets(target.buckets, bucketsOfRow(row));
       const bucketQuantities = bucketQuantitiesOfRow(row);
       addBuckets(target.bucketQuantities, bucketQuantities);
+      addUnder50Split(target.under50Split, under50SplitOfRow(row));
+      addUnder50Split(target.under50SplitQuantities, under50SplitQuantitiesOfRow(row));
       if ((row.stock_value || 0) > 0 && !target.scopes.includes(row.storage_scope)) {
         target.scopes.push(row.storage_scope);
       }
@@ -968,6 +1274,7 @@ export function buildWeeklyDetail({
         ...row,
         hasBucketQuantities:
           row.stockQty === 0 || Math.abs(row.stockQty - bucketQuantityTotal) <= quantityTolerance,
+        hasUnder50Split: isUnder50SplitComplete(row.under50Split),
         riskValue,
         riskRatio: row.stockValue > 0 ? riskValue / row.stockValue : 0,
         stockDelta: previous.length > 0 ? row.stockValue - row.previousStockValue : null,
@@ -989,10 +1296,16 @@ export function buildWeeklyDetail({
     )
     .sort((a, b) => b.stockValue - a.stockValue);
 
+  const totalSplit = rows.reduce((total, row) => {
+    addUnder50Split(total, row.under50Split);
+    return total;
+  }, createUnder50Split());
+
   return {
     rows,
     hasPrevious: previous.length > 0,
     hasRemainDay,
+    hasUnder50Split: isUnder50SplitComplete(totalSplit),
     // 과거 주차는 새 열의 기본값이 0 이다. SKU 별로 합계를 맞춰 일부 구형 행도 정확히 구분한다.
     hasBucketQuantities: rows.some((row) => row.stockQty > 0 && row.hasBucketQuantities),
     missingBucketQuantityCount: rows.filter(
@@ -1006,6 +1319,7 @@ export function buildWeeklyDetail({
         addBuckets(total, row.buckets);
         return total;
       }, createWeeklyBuckets()),
+      under50Split: totalSplit,
       shippedValue: rows.reduce((sum, row) => sum + row.shippedValue, 0),
       producedValue: rows.reduce((sum, row) => sum + row.producedValue, 0),
       itemCount: rows.length,

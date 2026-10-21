@@ -10,6 +10,7 @@
 
 import { createAdminSupabaseClient } from '@/lib/admin-auth';
 import { syncMaterialHierarchy } from '@/lib/material-hierarchy';
+import type { WeeklySnapshotRow } from '@/lib/weekly/board';
 import { buildWeeklySnapshotRows } from '@/lib/weekly/snapshot-builder';
 import {
   canReplaceMidWeekStock,
@@ -150,34 +151,56 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
     }
   } else {
     const chunkSize = 500;
-    // 소비기한 잔여 열은 나중에 추가됐다. supabase/weekly-summary-board.sql 의 5번 블록을
-    // 아직 안 돌린 환경에서도 적재가 죽지 않도록, 컬럼이 없으면 빼고 다시 넣는다.
-    let dropRemainColumns = false;
+    /**
+     * 나중에 추가된 열 묶음. supabase/weekly-summary-board.sql 의 해당 블록을 아직 안 돌린 환경에서도
+     * 적재가 죽지 않도록, 열이 없다는 오류가 나면 그 묶음만 빼고 다시 넣는다.
+     * ⚠️ 재고는 소급 생성이 불가능해 적재가 실패하면 그 주차를 영영 잃는다 — 부가 열 때문에 죽으면 안 된다.
+     */
+    const optionalColumnGroups: { name: string; columns: (keyof WeeklySnapshotRow)[] }[] = [
+      { name: '소비기한 잔여(5번 블록)', columns: ['min_remain_day', 'avg_remain_rate'] },
+      {
+        name: '50% 미만 세부 구간(9번 블록)',
+        columns: [
+          'bucket_under20',
+          'bucket_20_40',
+          'bucket_40_50',
+          'bucket_qty_under20',
+          'bucket_qty_20_40',
+          'bucket_qty_40_50',
+        ],
+      },
+    ];
+    const dropped = new Set<string>();
 
     for (let index = 0; index < rows.length; index += chunkSize) {
       const chunk = rows.slice(index, index + chunkSize);
-      const write = (withRemain: boolean) =>
-        supabase
-          .from('snop_weekly_inventory_snapshots')
-          .upsert(
-            withRemain
-              ? chunk
-              : chunk.map((row) => {
-                  const rest = { ...row };
-                  delete rest.min_remain_day;
-                  delete rest.avg_remain_rate;
-                  return rest;
-                }),
-            { onConflict: 'week_end_date,material_code,storage_scope' }
-          );
-
-      let { error } = await write(!dropRemainColumns);
-      if (error && !dropRemainColumns && /min_remain_day|avg_remain_rate/.test(error.message)) {
-        console.warn(
-          '⚠️ 소비기한 잔여 열이 없어 빼고 적재합니다. supabase/weekly-summary-board.sql 의 alter table 을 실행하세요.'
+      const write = () =>
+        supabase.from('snop_weekly_inventory_snapshots').upsert(
+          dropped.size === 0
+            ? chunk
+            : chunk.map((row) => {
+                const rest: Partial<WeeklySnapshotRow> = { ...row };
+                optionalColumnGroups
+                  .filter((group) => dropped.has(group.name))
+                  .forEach((group) => group.columns.forEach((column) => delete rest[column]));
+                return rest;
+              }),
+          { onConflict: 'week_end_date,material_code,storage_scope' }
         );
-        dropRemainColumns = true;
-        ({ error } = await write(false));
+
+      let { error } = await write();
+      // 열 묶음마다 한 번씩만 빼 본다. 같은 오류가 반복되면 다른 원인이므로 그대로 던진다.
+      while (error) {
+        const message = error.message;
+        const missing = optionalColumnGroups.find(
+          (group) => !dropped.has(group.name) && group.columns.some((column) => message.includes(column))
+        );
+        if (!missing) break;
+        console.warn(
+          `⚠️ ${missing.name} 열이 없어 빼고 적재합니다. supabase/weekly-summary-board.sql 의 alter table 을 실행하세요.`
+        );
+        dropped.add(missing.name);
+        ({ error } = await write());
       }
       if (error) throw new Error(`주간 스냅샷 저장 실패: ${error.message}`);
     }

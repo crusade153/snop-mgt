@@ -23,8 +23,10 @@ import {
   type WeeklyStorageScope,
 } from '@/lib/weekly/classification';
 import {
+  createUnder50Split,
   createWeeklyBuckets,
   weeklyBucketKeyOf,
+  weeklyUnder50KeyOf,
   type WeeklySnapshotRow,
 } from '@/lib/weekly/board';
 import {
@@ -87,6 +89,9 @@ interface Accumulator {
   buckets: ReturnType<typeof createWeeklyBuckets>;
   /** 잔여율 구간별 **수량** */
   bucketQuantities: ReturnType<typeof createWeeklyBuckets>;
+  /** 50% 미만 세부 구간(0~20 / 20~40 / 40~50%) 금액·수량. `unsplit` 은 여기서 쓰지 않는다 */
+  under50Split: ReturnType<typeof createUnder50Split>;
+  under50SplitQuantities: ReturnType<typeof createUnder50Split>;
   /**
    * 가장 임박한 배치의 잔여일. 기한없음 배치는 세지 않는다(없으면 null 로 남는다).
    * 상세표의 「소비기한 임박」 정렬 축이라 **수량이 아니라 최솟값**이어야 한다 —
@@ -153,6 +158,8 @@ function touch(
       value: 0,
       buckets: createWeeklyBuckets(),
       bucketQuantities: createWeeklyBuckets(),
+      under50Split: createUnder50Split(),
+      under50SplitQuantities: createUnder50Split(),
       minRemainDay: null,
       rateWeighted: 0,
       rateWeight: 0,
@@ -168,6 +175,21 @@ function touch(
  * ⚠️ **기한없음 배치는 호출부에서 걸러 들어오지 않는다.** 잔여일 0 으로 섞이면
  * 기한이 아예 없는 재고가 「오늘 폐기」로 보여 상세표 정렬이 통째로 뒤집힌다.
  */
+/**
+ * 배치 하나를 잔여율 구간에 싣는다. 50% 미만이면 세부 구간에도 같은 금액·수량을 싣는다.
+ * `rate === null`(기한없음)은 `over85` 로 보낸다 — remain_rate 0 으로 섞이면 전부 '~50%' 로 오분류된다.
+ */
+function addToBuckets(entry: Accumulator, rate: number | null, value: number, qty: number) {
+  const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
+  entry.buckets[bucketKey] += value;
+  entry.bucketQuantities[bucketKey] += qty;
+  if (bucketKey === 'under50' && rate !== null) {
+    const splitKey = weeklyUnder50KeyOf(rate);
+    entry.under50Split[splitKey] += value;
+    entry.under50SplitQuantities[splitKey] += qty;
+  }
+}
+
 function rememberRemain(entry: Accumulator, remainDay: number, rate: number, value: number) {
   if (Number.isFinite(remainDay)) {
     entry.minRemainDay = entry.minRemainDay === null ? remainDay : Math.min(entry.minRemainDay, remainDay);
@@ -290,9 +312,7 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     // 기한없음 재고를 잔여율 구간에 넣으면 remain_rate 0 때문에 전부 '~50%' 로 오분류된다.
     const hasExpiry = safeExtractDateStr(row.VFDAT).length === 8;
     const rate = hasExpiry ? normalizeRate(row.remain_rate) : null;
-    const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
-    entry.buckets[bucketKey] += value;
-    entry.bucketQuantities[bucketKey] += qty;
+    addToBuckets(entry, rate, value, qty);
     if (rate !== null) rememberRemain(entry, Number(row.remain_day), rate, value);
   });
 
@@ -318,9 +338,7 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     const rate = hasExpiry
       ? fbhRemainRate(row.PRDT_DATE_NEW, row.VALID_DATETIME_NEW, Number(row.REMAINING_DAY || 0))
       : null;
-    const bucketKey = rate === null ? 'over85' : weeklyBucketKeyOf(rate);
-    entry.buckets[bucketKey] += value;
-    entry.bucketQuantities[bucketKey] += qty;
+    addToBuckets(entry, rate, value, qty);
     if (rate !== null) rememberRemain(entry, Number(row.REMAINING_DAY), rate, value);
   });
 
@@ -378,8 +396,18 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
     }
   });
 
+  const roundQty = (value: number) => Math.round(value * 1000) / 1000;
+
   return [...accumulators.values()].map((entry) => {
     const code = entry.materialCode;
+    // 세부 구간 합이 부모(50% 미만)와 원 단위까지 같도록 40~50% 를 나머지로 맞춘다.
+    // 셋을 따로 반올림하면 1~2원씩 어긋나 「쪼갤 수 없는 몫」이 생긴 것처럼 보인다.
+    const under50Value = Math.round(entry.buckets.under50);
+    const under20Value = Math.round(entry.under50Split.under20);
+    const r20_40Value = Math.round(entry.under50Split.r20_40);
+    const under50Qty = roundQty(entry.bucketQuantities.under50);
+    const under20Qty = roundQty(entry.under50SplitQuantities.under20);
+    const r20_40Qty = roundQty(entry.under50SplitQuantities.r20_40);
     const dispo = dispoByCode.get(code) || null;
     // DISPO 가 없는 SKU 는 한시 매핑표로 받는다(`category-overrides`).
     // 조회 측은 어차피 `classifyRow` 로 다시 판정하지만, 저장 열도 같은 함수로 채워 둬야
@@ -409,16 +437,22 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       unit: entry.unit,
       stock_qty: Math.round(entry.qty * 1000) / 1000,
       stock_value: Math.round(entry.value),
-      bucket_under50: Math.round(entry.buckets.under50),
+      bucket_under50: under50Value,
       bucket_50_70: Math.round(entry.buckets.r50_70),
       bucket_70_75: Math.round(entry.buckets.r70_75),
       bucket_75_85: Math.round(entry.buckets.r75_85),
       bucket_85_over: Math.round(entry.buckets.over85),
-      bucket_qty_under50: Math.round(entry.bucketQuantities.under50 * 1000) / 1000,
+      bucket_qty_under50: under50Qty,
       bucket_qty_50_70: Math.round(entry.bucketQuantities.r50_70 * 1000) / 1000,
       bucket_qty_70_75: Math.round(entry.bucketQuantities.r70_75 * 1000) / 1000,
       bucket_qty_75_85: Math.round(entry.bucketQuantities.r75_85 * 1000) / 1000,
       bucket_qty_85_over: Math.round(entry.bucketQuantities.over85 * 1000) / 1000,
+      bucket_under20: under20Value,
+      bucket_20_40: r20_40Value,
+      bucket_40_50: under50Value - under20Value - r20_40Value,
+      bucket_qty_under20: under20Qty,
+      bucket_qty_20_40: r20_40Qty,
+      bucket_qty_40_50: roundQty(under50Qty - under20Qty - r20_40Qty),
       shipped_qty: Math.round(shippedQty * 1000) / 1000,
       shipped_value: Math.round(shippedQty * unitPrice),
       produced_qty: Math.round(producedQty * 1000) / 1000,

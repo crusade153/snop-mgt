@@ -13,6 +13,7 @@
  *   4. 출고·생산·매출이 SKU 당 한 창고그룹에만 실려 중복 합산되지 않는가
  *   5. 물류 재고와 이중계상되는 저장위치(3000)가 빠졌는가
  *   6. 카테고리 드릴다운 상세 합계가 메인 표의 그 줄과 같은가 (모수가 갈리면 안 된다)
+ *   8. 50% 미만 세부 구간(0~20 / 20~40 / 40~50%)의 합 = 50% 미만 (행·표·상세·두 축 전부 원 단위)
  */
 
 import { readFileSync } from 'node:fs';
@@ -78,8 +79,10 @@ const {
 const { MATERIAL_CATEGORY_OVERRIDES, isOverriddenMaterial } =
   await import('@/lib/weekly/category-overrides');
 const { buildDispoMasterQuery, buildMaterialHierarchyQuery } = await import('@/lib/weekly/queries');
-const { buildWeeklyBoard, buildWeeklyChannelBoard, buildWeeklyDetail, resolveCm, sumBuckets } =
-  await import('@/lib/weekly/board');
+const {
+  buildWeeklyBoard, buildWeeklyChannelBoard, buildWeeklyDetail, resolveCm, sumBuckets,
+  weeklyBucketKeyOf, weeklyUnder50KeyOf, buildBucketMovementNote,
+} = await import('@/lib/weekly/board');
 const { CHANNEL_BY_LV2, WEEKLY_CHANNEL_ORDER, channelOfLv2 } = await import('@/lib/weekly/channel');
 
 let failed = 0;
@@ -604,6 +607,102 @@ console.log('\n[7] 채널 축 (제품계층 LV2)');
       ` 생산 ${(row.producedValue / 1e8).toFixed(2).padStart(7)}억`,
     );
   });
+}
+
+console.log('\n[8] 50% 미만 세부 구간 (0~20 / 20~40 / 40~50%)');
+{
+  // 8-1. 경계값 손계산. 20·40 은 위 구간, 50 은 50% 미만에서 빠진다. 기한 경과(음수)는 0~20% 다.
+  const cases = [
+    [-15, 'under50', 'under20'],
+    [0, 'under50', 'under20'],
+    [19.9, 'under50', 'under20'],
+    [20, 'under50', 'r20_40'],
+    [39.9, 'under50', 'r20_40'],
+    [40, 'under50', 'r40_50'],
+    [49.9, 'under50', 'r40_50'],
+  ];
+  const wrong = cases.filter(
+    ([rate, parent, child]) => weeklyBucketKeyOf(rate) !== parent || weeklyUnder50KeyOf(rate) !== child,
+  );
+  check('경계값(20·40·50, 기한경과) 판정', wrong.length === 0 && weeklyBucketKeyOf(50) === 'r50_70',
+    wrong.length ? `틀림: ${wrong.map((c) => c[0]).join(', ')}` : `${cases.length}건 일치`);
+
+  // 8-2. 적재 행 — 세 칸의 합이 부모와 원 단위까지 같아야 한다(40~50% 를 나머지로 맞춘다).
+  const nullRows = rows.filter((row) => row.bucket_under20 === null || row.bucket_under20 === undefined);
+  check('새 적재 행은 세부 구간이 null 이 아니다', nullRows.length === 0,
+    nullRows.length ? `${nullRows.length}행 null` : `${rows.length.toLocaleString('ko-KR')}행 전부 채움`);
+  const valueGap = rows.filter(
+    (row) => row.bucket_under20 + row.bucket_20_40 + row.bucket_40_50 !== row.bucket_under50,
+  );
+  check('세부 금액 합 = 50% 미만 (원 단위 정확히)', valueGap.length === 0,
+    valueGap.length ? `${valueGap.length}행 (예: ${valueGap[0].material_code})` : '전 행 일치');
+  const qtyGap = rows.filter(
+    (row) =>
+      Math.abs(row.bucket_qty_under20 + row.bucket_qty_20_40 + row.bucket_qty_40_50 - row.bucket_qty_under50) > 0.002,
+  );
+  check('세부 수량 합 = 50% 미만 수량', qtyGap.length === 0,
+    qtyGap.length ? `${qtyGap.length}행 (예: ${qtyGap[0].material_code})` : '전 행 일치');
+  // 나머지로 맞춘 40~50% 가 음수면 위 두 칸을 반올림하다 넘친 것이다(나머지 보정이 잘못된 신호).
+  const negative = rows.filter(
+    (row) => row.bucket_under20 < 0 || row.bucket_20_40 < 0 || row.bucket_40_50 < -2,
+  );
+  check('세부 구간에 음수가 없다', negative.length === 0,
+    negative.length ? `${negative.length}행 (예: ${negative[0].material_code})` : '');
+
+  // 8-3. 화면 집계 — 합계행·카테고리 막대·상세·채널 축이 같은 값을 보는가.
+  const scopes = ['PLANT', 'LOGISTICS'];
+  const board = buildWeeklyBoard({ current: rows, previous: [], cmMapping: new Map(), scopes });
+  const split = board.totals.under50Split;
+  const splitSum = split.under20 + split.r20_40 + split.r40_50;
+  check('표 합계: 세부 3칸 합 = 50% 미만, 미분해 0',
+    Math.abs(splitSum - board.totals.buckets.under50) < 1 && Math.abs(split.unsplit) < 1 &&
+      board.movement.splitAvailable,
+    `0~20 ${(split.under20 / 1e8).toFixed(2)}억 · 20~40 ${(split.r20_40 / 1e8).toFixed(2)}억 · ` +
+      `40~50 ${(split.r40_50 / 1e8).toFixed(2)}억 = ${(board.totals.buckets.under50 / 1e8).toFixed(2)}억`);
+  const segmentGap = board.categoryBuckets.filter((entry) => {
+    const sum = entry.under50Split.under20 + entry.under50Split.r20_40 + entry.under50Split.r40_50;
+    return Math.abs(sum - entry.buckets.under50) > 1;
+  });
+  check('카테고리 막대: 세부 합 = 50% 미만', segmentGap.length === 0,
+    segmentGap.length ? segmentGap.map((entry) => entry.category).join(', ') : '');
+  const summaryTotal = board.under50Summary.reduce((sum, item) => sum + item.value, 0);
+  check('카드(under50Summary) 합 = 50% 미만', Math.abs(summaryTotal - board.totals.buckets.under50) < 1);
+  check('20% 미만 상위 품목이 금액 내림차순',
+    board.criticalItems.every((item, index, list) => index === 0 || list[index - 1].under20 >= item.under20),
+    `${board.criticalItems.length}품목` +
+      (board.criticalItems[0] ? ` (1위 ${board.criticalItems[0].productName} ${(board.criticalItems[0].under20 / 1e6).toFixed(0)}백만)` : ''));
+
+  const detail = buildWeeklyDetail({ current: rows, previous: [], cmMapping: new Map(), scopes });
+  check('상세 전체 = 표 합계 (세부 3칸 각각)',
+    detail.hasUnder50Split &&
+      ['under20', 'r20_40', 'r40_50'].every(
+        (key) => Math.abs(detail.totals.under50Split[key] - split[key]) < 1,
+      ));
+
+  // 두 탭 합계 일치 원칙은 세부 구간에도 그대로 적용된다(verify [7] 과 같은 이유).
+  const lv2Map = new Map();
+  const channelBoard = buildWeeklyChannelBoard({ current: rows, previous: [], lv2Map, scopes });
+  check('두 축의 세부 구간 합계 일치',
+    ['under20', 'r20_40', 'r40_50'].every(
+      (key) => Math.abs(channelBoard.totals.under50Split[key] - split[key]) < 1,
+    ));
+
+  // 8-4. 열 추가 이전 주차(null) — 0 으로 읽히면 안 되고 통째로 「미분해」여야 한다.
+  const legacyRows = rows.map((row) => ({
+    ...row,
+    bucket_under20: null, bucket_20_40: null, bucket_40_50: null,
+    bucket_qty_under20: null, bucket_qty_20_40: null, bucket_qty_40_50: null,
+  }));
+  const legacy = buildWeeklyBoard({ current: legacyRows, previous: rows, cmMapping: new Map(), scopes });
+  check('구 주차는 미분해로 남고 0~20% 를 0 으로 만들지 않는다',
+    !legacy.movement.splitAvailable && legacy.totals.under50Split.under20 === 0 &&
+      Math.abs(legacy.totals.under50Split.unsplit - legacy.totals.buckets.under50) < 1 &&
+      legacy.criticalItems.length === 0);
+  const mixed = buildWeeklyBoard({ current: rows, previous: legacyRows, cmMapping: new Map(), scopes });
+  check('전주만 구 주차면 세부 증감은 비교 불가', mixed.movement.splitAvailable && !mixed.movement.splitComparable);
+  const note = buildBucketMovementNote(mixed.movement, true);
+  check('비고 문구에 세부 구간 줄이 붙고, 비교 불가면 증감을 지어내지 않는다',
+    note.includes('0~20%') && !/0~20% [^,]*\(/.test(note), note.split('\n')[1]);
 }
 
 console.log(failed === 0 ? '\n✅ 전부 통과\n' : `\n❌ ${failed}건 실패\n`);

@@ -190,3 +190,24 @@ alter table public.snop_weekly_inventory_snapshots
   add column if not exists shipped_previous_month_qty numeric not null default 0,
   add column if not exists shipped_previous_month_value numeric not null default 0,
   add column if not exists sales_previous_month numeric not null default 0;
+
+-- ---------------------------------------------------------------------------
+-- 9. 소비기한 50% 미만 세부 구간 (2026-10, 0~20% / 20~40% / 40~50%)
+--
+-- 「50% 미만 [내부소진]」 한 덩어리로는 "곧 처분해야 할 재고"와 "아직 내부소진 여유가 있는 재고"를
+-- 구분할 수 없어 세 칸으로 쪼갠다. 부모 열 bucket_under50 은 그대로 두고 그 아래 분해로만 둔다 —
+-- 5구간 합 = 재고금액 불변식이 과거 주차에서도 유지돼야 하기 때문이다.
+--   bucket_under20 + bucket_20_40 + bucket_40_50 = bucket_under50 (원 단위. 적재 때 40~50% 를 나머지로 맞춘다)
+--   0~20% 에는 기한이 이미 지난 배치(잔여율 0 이하)도 들어간다.
+--
+-- ⚠️ 일부러 **default 없는 nullable** 이다. 재고는 소급 생성이 불가능해 이 열을 추가하기 전에
+--    적재된 주차는 쪼갤 수 없는데, 0 으로 채우면 「0~20% 재고 0원」으로 읽힌다. null = 「미분해」.
+--    화면은 null 인 주차에서 세 칸을 합쳐 50% 미만 하나로 보여준다.
+-- ---------------------------------------------------------------------------
+alter table public.snop_weekly_inventory_snapshots
+  add column if not exists bucket_under20 numeric,
+  add column if not exists bucket_20_40 numeric,
+  add column if not exists bucket_40_50 numeric,
+  add column if not exists bucket_qty_under20 numeric,
+  add column if not exists bucket_qty_20_40 numeric,
+  add column if not exists bucket_qty_40_50 numeric;

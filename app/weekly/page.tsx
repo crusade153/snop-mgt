@@ -35,10 +35,16 @@ import {
   WEEKLY_BUCKET_KEYS,
   WEEKLY_BUCKET_LABELS,
   WEEKLY_RISK_BUCKET_KEYS,
+  WEEKLY_UNDER50_KEYS,
+  WEEKLY_UNDER50_LABELS,
   formatNoteAmount,
+  formatSignedNoteAmount,
+  isUnder50SplitComplete,
   toEok,
   type WeeklyBoardMetrics,
   type WeeklyBuckets,
+  type WeeklyUnder50Key,
+  type WeeklyUnder50Split,
 } from '@/lib/weekly/board';
 import type { WeeklyDetailRow } from '@/lib/weekly/board';
 import type { WeeklyChannel } from '@/lib/weekly/channel';
@@ -77,6 +83,30 @@ const BUCKET_CELL_TONE: Record<keyof WeeklyBuckets, string> = {
   r75_85: 'text-neutral-400',
   over85: 'text-neutral-400',
 };
+
+/**
+ * 50% 미만 세부 구간 색 — 같은 빨강 계열에서 **임박할수록 진하게** 둔다.
+ * 부모(50% 미만)와 같은 계열이라 「세 칸을 합치면 50% 미만」이 색으로 먼저 읽힌다.
+ */
+const UNDER50_COLORS: Record<WeeklyUnder50Key, string> = {
+  under20: '#7F0000',
+  r20_40: '#C62828',
+  r40_50: '#EF5350',
+};
+
+const UNDER50_CELL_TONE: Record<WeeklyUnder50Key, string> = {
+  under20: 'bg-[#FDECEA] text-[#7F0000] font-bold',
+  r20_40: 'bg-[#FFF5F5] text-[#C62828] font-semibold',
+  r40_50: 'bg-[#FFF5F5] text-[#E53935]',
+};
+
+/** 50% 미만을 뺀 나머지 4구간. 50% 미만 자리는 세부 3칸(또는 미분해 1칸)이 대신 그린다 */
+const OTHER_BUCKET_KEYS = WEEKLY_BUCKET_KEYS.filter((key) => key !== 'under50');
+
+const UNDER50_HINT =
+  '소비기한 잔여율 50% 미만 [내부소진] 재고를 0~20% · 20~40% · 40~50% 로 나눈 재고금액입니다. ' +
+  '세 칸의 합은 50% 미만과 원 단위까지 같습니다. 0~20% 에는 기한이 이미 지난 배치(잔여율 0 이하)도 들어갑니다. ' +
+  '세부 구간은 2026-10 이후 적재분부터 있습니다 — 재고는 소급 계산이 불가능해 그 전 주차는 세 칸을 합쳐 50% 미만 하나로 보여줍니다.';
 
 type MoneyUnit = 'million' | 'won';
 
@@ -160,6 +190,7 @@ type DisplayRow = WeeklyBoardMetrics & {
 type DetailSortKey =
   | 'group'
   | 'stockValue'
+  | 'critical'
   | 'riskValue'
   | 'riskRatio'
   | 'remain'
@@ -174,6 +205,7 @@ type DetailSortKey =
 const DETAIL_SORTS: { key: DetailSortKey; label: string; hint: string }[] = [
   { key: 'group', label: '구분순', hint: '위 표의 행 순서대로 묶고, 그 안에서 재고금액이 큰 순' },
   { key: 'stockValue', label: '재고금액', hint: '재고금액이 큰 순' },
+  { key: 'critical', label: '20% 미만 금액', hint: '잔여율 0~20% 재고금액이 큰 순' },
   { key: 'riskValue', label: '소진필요 금액', hint: '잔여율 75% 미만 재고금액이 큰 순' },
   { key: 'riskRatio', label: '소진필요 비중', hint: '재고 대비 잔여율 75% 미만 비중이 높은 순' },
   { key: 'remain', label: '소비기한 임박', hint: '가장 임박한 배치의 잔여일이 짧은 순' },
@@ -311,6 +343,11 @@ export default function WeeklyBoardPage() {
   const boardRefetching = axis === 'channel' ? channelRefetching : isRefetching;
   /** 「구분」 열 개수. 헤더 colSpan 과 합계행이 이 값을 따른다 */
   const groupColCount = axis === 'channel' ? 1 : 3;
+  /**
+   * 이 주차의 50% 미만이 세부 구간으로 완전히 쪼개졌는지.
+   * false 면(세부 열 추가 이전 주차) 세 칸을 합쳐 50% 미만 한 칸으로 그린다 — 0 으로 채우지 않는다.
+   */
+  const splitAvailable = board?.movement.splitAvailable ?? false;
 
   // 주차를 바꾸거나 축을 바꾸면 펼쳐 둔 상세는 좌표가 다른 것이라 닫는다.
   // 「전체보기」만은 좌표가 없어 어느 주차·축에서도 같은 모수라 열어 둔다.
@@ -374,6 +411,8 @@ export default function WeeklyBoardPage() {
       switch (detailSort) {
         case 'group':
           return rankOf(a) - rankOf(b) || b.stockValue - a.stockValue;
+        case 'critical':
+          return b.under50Split.under20 - a.under50Split.under20 || b.riskValue - a.riskValue;
         case 'riskValue':
           return b.riskValue - a.riskValue;
         case 'riskRatio':
@@ -461,6 +500,19 @@ export default function WeeklyBoardPage() {
           // 구간 수량은 열이 없던 주차에서 0 으로 채워져 있다. 0 과 「모름」을 섞지 않는다.
           acc[`${name} 수량`] = row.hasBucketQuantities ? Math.round(row.bucketQuantities[key]) : null;
           acc[`${name} 금액`] = Math.round(row.buckets[key]);
+          // 50% 미만 바로 뒤에 세부 구간을 붙인다. 세부 열이 없던 주차는 0 이 아니라 빈칸이다.
+          if (key === 'under50') {
+            WEEKLY_UNDER50_KEYS.forEach((splitKey) => {
+              const splitName = `50%미만 ${WEEKLY_UNDER50_LABELS[splitKey]}`;
+              acc[`${splitName} 수량`] =
+                row.hasUnder50Split && row.hasBucketQuantities
+                  ? Math.round(row.under50SplitQuantities[splitKey])
+                  : null;
+              acc[`${splitName} 금액`] = row.hasUnder50Split
+                ? Math.round(row.under50Split[splitKey])
+                : null;
+            });
+          }
           return acc;
         }, {}),
         '주간 출고금액': Math.round(row.shippedValue),
@@ -533,6 +585,44 @@ export default function WeeklyBoardPage() {
     );
   };
 
+  /**
+   * 메인 표의 50% 미만 자리. 세부 구간이 있으면 3칸, 없으면 3칸을 합친 1칸(미분해)으로 그린다.
+   * 미분해 주차를 0 세 칸으로 채우지 않는 이유 — 「0~20% 재고 없음」으로 읽히기 때문이다.
+   */
+  const renderUnder50Cells = (
+    under50: number,
+    split: WeeklyUnder50Split,
+    padding: string,
+    isTotal: boolean
+  ) => {
+    const border = isTotal ? 'border-l border-neutral-200' : 'border-l border-neutral-100';
+    if (!splitAvailable || !isUnder50SplitComplete(split)) {
+      return (
+        <td
+          colSpan={3}
+          title="세부 구간 적재 이전 주차라 50% 미만 합계만 있습니다"
+          className={`${border} px-1.5 ${padding} text-center tabular-nums ${
+            isTotal ? 'text-[#C62828]' : BUCKET_CELL_TONE.under50
+          }`}
+        >
+          {isTotal ? money(under50) : moneyCell(under50)}
+          <span className="ml-1 text-[9px] font-normal text-neutral-400">미분해</span>
+        </td>
+      );
+    }
+    return WEEKLY_UNDER50_KEYS.map((key, index) => (
+      <td
+        key={key}
+        className={`px-1.5 ${padding} tabular-nums ${
+          isTotal ? 'font-bold' : UNDER50_CELL_TONE[key]
+        } ${index === 0 ? border : ''}`}
+        style={isTotal ? { color: UNDER50_COLORS[key] } : undefined}
+      >
+        {isTotal ? money(split[key]) : moneyCell(split[key])}
+      </td>
+    ));
+  };
+
   /** 소진이 필요한 구간(잔여율 75% 미만)의 금액과 비중 */
   const riskOf = (buckets: WeeklyBuckets, stockValue: number) => {
     const value = RISK_BUCKET_KEYS.reduce((sum, key) => sum + (buckets[key] || 0), 0);
@@ -549,6 +639,7 @@ export default function WeeklyBoardPage() {
         key: entry.channel as string,
         label: entry.channel as string,
         buckets: entry.buckets,
+        under50Split: entry.under50Split,
         total: entry.total,
         drill: { axis: 'channel', channel: entry.channel } as Drill,
       }));
@@ -557,6 +648,7 @@ export default function WeeklyBoardPage() {
       key: entry.category as string,
       label: entry.category as string,
       buckets: entry.buckets,
+      under50Split: entry.under50Split,
       total: entry.total,
       drill: { axis: 'team', cm: null, category: entry.category } as Drill,
     }));
@@ -609,14 +701,36 @@ export default function WeeklyBoardPage() {
     });
   }, [axis, channelBoard, teamBoard, drill]);
 
+  /**
+   * 누적막대 계열. 세부 구간이 있는 주차는 50% 미만 조각을 세 조각(진한 빨강 → 옅은 빨강)으로 쪼갠다.
+   * 쪼갠 조각의 합이 50% 미만과 같으므로 막대 높이·「위험」 문구는 쪼개기 전과 똑같다.
+   */
   const chartSeries = useMemo(
     () =>
-      WEEKLY_BUCKET_KEYS.map((key) => ({
-        label: WEEKLY_BUCKET_LABELS[key],
-        color: BUCKET_COLORS[key],
-        emphasis: RISK_BUCKET_KEYS.includes(key),
-        values: segments.map((entry) => toEok(entry.buckets[key])),
-      })),
+      WEEKLY_BUCKET_KEYS.flatMap((key) => {
+        if (key === 'under50' && splitAvailable) {
+          return WEEKLY_UNDER50_KEYS.map((splitKey) => ({
+            label: `${WEEKLY_UNDER50_LABELS[splitKey]} [내부소진]`,
+            color: UNDER50_COLORS[splitKey],
+            emphasis: true,
+            values: segments.map((entry) => toEok(entry.under50Split[splitKey])),
+          }));
+        }
+        return [
+          {
+            label: WEEKLY_BUCKET_LABELS[key],
+            color: BUCKET_COLORS[key],
+            emphasis: RISK_BUCKET_KEYS.includes(key),
+            values: segments.map((entry) => toEok(entry.buckets[key])),
+          },
+        ];
+      }),
+    [segments, splitAvailable]
+  );
+
+  /** 세부 구간 막대의 공통 축 — 줄끼리 길이를 비교할 수 있게 50% 미만이 가장 큰 줄을 100% 로 둔다 */
+  const under50AxisMax = useMemo(
+    () => Math.max(1, ...segments.map((entry) => entry.buckets.under50)),
     [segments]
   );
 
@@ -658,6 +772,82 @@ export default function WeeklyBoardPage() {
 
   /** 진행 중인 주차(주말이 아직 안 지남)면 흐름 열이 주중 누계라 잠정치다 */
   const isProvisionalWeek = !!activeWeek && activeWeek >= seoulToday();
+
+  /**
+   * 상세표의 구간 열. 메인 표와 같은 규칙으로 50% 미만 자리를 세부 3칸(또는 1칸)으로 펼친다.
+   * 열 정의를 한 곳에 두어 머리·본문·합계행이 같은 순서로 그려지게 한다.
+   */
+  const detailSplitOn = detail?.hasUnder50Split ?? false;
+  const detailBucketColumns = WEEKLY_BUCKET_KEYS.flatMap((key) => {
+    if (key === 'under50' && detailSplitOn) {
+      return WEEKLY_UNDER50_KEYS.map((splitKey) => ({
+        key: `under50-${splitKey}`,
+        label: WEEKLY_UNDER50_LABELS[splitKey],
+        tone: UNDER50_CELL_TONE[splitKey],
+        headColor: UNDER50_COLORS[splitKey] as string | undefined,
+        quantityOf: (row: WeeklyDetailRow) => row.under50SplitQuantities[splitKey],
+        valueOf: (row: WeeklyDetailRow) => row.under50Split[splitKey],
+        availableOf: (row: WeeklyDetailRow) => row.hasBucketQuantities && row.hasUnder50Split,
+        total: detail?.totals.under50Split[splitKey] ?? 0,
+      }));
+    }
+    return [
+      {
+        key,
+        label: WEEKLY_BUCKET_LABELS[key].split(' [')[0],
+        tone: BUCKET_CELL_TONE[key],
+        headColor: RISK_BUCKET_KEYS.includes(key) ? '#C62828' : undefined,
+        quantityOf: (row: WeeklyDetailRow) => row.bucketQuantities[key],
+        valueOf: (row: WeeklyDetailRow) => row.buckets[key],
+        availableOf: (row: WeeklyDetailRow) => row.hasBucketQuantities,
+        total: detail?.totals.buckets[key] ?? 0,
+      },
+    ];
+  });
+  /** 상세표 전체 열 수 — 앞 9칸 + 구간 열 + 뒤 3칸. 빈 행의 colSpan 이 이 값을 따른다 */
+  const detailColumnCount = 9 + detailBucketColumns.length + 3;
+
+  /**
+   * 「잔여율 20% 미만」 목록에서 상세로 넘어간다. 전체보기 + 20% 미만 금액순으로 열고,
+   * SKU 를 눌렀으면 그 코드로 검색까지 걸어 바로 그 줄이 보이게 한다.
+   */
+  const openCriticalDetail = (materialCode?: string) => {
+    setDetailPage(0);
+    setDetailQuery(materialCode ?? '');
+    setDetailSort('critical');
+    setDrill(ALL_DRILL);
+    detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  /** 소비기한 구간별 주간 재고변동 표의 열 — 세부 구간이 있으면 3칸 + 50% 미만 계 */
+  const movementColumns: {
+    key: string;
+    label: string;
+    color?: string;
+    split?: WeeklyUnder50Key;
+    bucket?: keyof WeeklyBuckets;
+    subtotal?: boolean;
+  }[] = [
+    ...(splitAvailable
+      ? WEEKLY_UNDER50_KEYS.map((splitKey) => ({
+          key: `split-${splitKey}`,
+          label: WEEKLY_UNDER50_LABELS[splitKey],
+          color: UNDER50_COLORS[splitKey],
+          split: splitKey,
+        }))
+      : []),
+    {
+      key: 'under50',
+      label: splitAvailable ? '50% 미만 계' : '50% 미만',
+      bucket: 'under50' as const,
+      subtotal: splitAvailable,
+    },
+    ...OTHER_BUCKET_KEYS.map((key) => ({
+      key,
+      label: WEEKLY_BUCKET_LABELS[key].split(' [')[0],
+      bucket: key,
+    })),
+  ];
 
   return (
     <div className="p-3 lg:p-5 space-y-3">
@@ -827,7 +1017,7 @@ export default function WeeklyBoardPage() {
               <div className="overflow-x-auto">
                 <table
                   className={`w-full text-right text-xs ${
-                    axis === 'channel' ? 'min-w-[1000px]' : 'min-w-[1120px]'
+                    axis === 'channel' ? 'min-w-[1120px]' : 'min-w-[1240px]'
                   }`}
                 >
                   <thead>
@@ -836,7 +1026,7 @@ export default function WeeklyBoardPage() {
                       <th
                         className="px-1.5 pt-1.5 text-center font-bold"
                         colSpan={groupColCount}
-                        rowSpan={2}
+                        rowSpan={3}
                       >
                         <span className="text-[11px] text-neutral-700">
                           {axis === 'channel' ? '채널' : '구분'}
@@ -850,7 +1040,7 @@ export default function WeeklyBoardPage() {
                       </th>
                       <th
                         className="border-l border-neutral-200 px-1.5 pb-0.5 pt-1.5 text-center font-medium"
-                        colSpan={5}
+                        colSpan={7}
                       >
                         소비기한 잔여율 구간별 재고금액
                       </th>
@@ -862,15 +1052,27 @@ export default function WeeklyBoardPage() {
                       </th>
                     </tr>
                     <tr className="bg-neutral-100 text-[11px] text-neutral-700">
-                      <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold">
+                      <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold" rowSpan={2}>
                         {meta?.labels.previousStock}
                       </th>
-                      <th className="px-1.5 pb-1.5 font-bold">출고</th>
-                      <th className="px-1.5 pb-1.5 font-bold">생산</th>
-                      {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                      <th className="px-1.5 pb-1.5 font-bold" rowSpan={2}>출고</th>
+                      <th className="px-1.5 pb-1.5 font-bold" rowSpan={2}>생산</th>
+                      {/* 50% 미만은 세부 3칸 위에 묶음 머리를 얹는다. 세 칸의 합이 이 구간이다 */}
+                      <th
+                        className="border-l border-neutral-200 px-1.5 pb-0.5 text-center font-bold text-[#C62828]"
+                        colSpan={3}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          50% 미만
+                          <span className="font-normal text-neutral-400">[내부소진]</span>
+                          <InfoTooltip text={UNDER50_HINT} />
+                        </span>
+                      </th>
+                      {OTHER_BUCKET_KEYS.map((key) => (
                         <th
                           key={key}
-                          className={`px-1.5 pb-1.5 font-bold ${index === 0 ? 'border-l border-neutral-200' : ''} ${
+                          rowSpan={2}
+                          className={`px-1.5 pb-1.5 font-bold ${
                             RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : 'text-neutral-500'
                           }`}
                         >
@@ -881,29 +1083,40 @@ export default function WeeklyBoardPage() {
                           </span>
                         </th>
                       ))}
-                      <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold">
+                      <th className="border-l border-neutral-200 px-1.5 pb-1.5 font-bold" rowSpan={2}>
                         {meta?.labels.currentStock}
                       </th>
-                      <th className="px-1.5 pb-1.5 font-bold">
+                      <th className="px-1.5 pb-1.5 font-bold" rowSpan={2}>
                         <span className="flex items-center justify-end gap-1">
                           소진 필요
-                          <InfoTooltip text="소비기한 잔여율 75% 미만(50% 미만 + 50~70% + 70~75%) 재고금액과 그 비중입니다. 이 비중이 높은 행부터 소진 계획이 필요합니다." />
+                          <InfoTooltip text="소비기한 잔여율 75% 미만(50% 미만[0~20·20~40·40~50%] + 50~70% + 70~75%) 재고금액과 그 비중입니다. 이 비중이 높은 행부터 소진 계획이 필요합니다." />
                         </span>
                       </th>
-                      <th className="px-1.5 pb-1.5 font-bold">
+                      <th className="px-1.5 pb-1.5 font-bold" rowSpan={2}>
                         <span className="flex items-center justify-end gap-1">
                           전월 출고 比
                           <InfoTooltip text="현재 재고금액 ÷ 직전 달 1일~말일 출고금액입니다. 출고금액도 재고와 똑같이 완제품 재고단가로 환산하므로, 200%는 '전월 한 달 출고량의 2배를 쌓아두고 있다'로 읽습니다. 완료된 한 달을 분모로 써 월초에도 비율이 흔들리지 않습니다." />
                         </span>
                         재고금액
                       </th>
-                      <th className="px-1.5 pb-1.5 font-bold">
+                      <th className="px-1.5 pb-1.5 font-bold" rowSpan={2}>
                         <span className="flex items-center justify-end gap-1">
                           전월 매출 比
                           <InfoTooltip text="현재 재고금액 ÷ 직전 달 1일~말일 실제 납품매출액(NETWR)입니다. 완료된 전월 매출과 현재 재고자산을 비교해 현금 흐름 부담을 판단합니다." />
                         </span>
                         재고금액
                       </th>
+                    </tr>
+                    <tr className="bg-neutral-100 text-[11px]">
+                      {WEEKLY_UNDER50_KEYS.map((key, index) => (
+                        <th
+                          key={key}
+                          className={`px-1.5 pb-1.5 font-bold ${index === 0 ? 'border-l border-neutral-200' : ''}`}
+                          style={{ color: UNDER50_COLORS[key] }}
+                        >
+                          {WEEKLY_UNDER50_LABELS[key]}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -953,12 +1166,11 @@ export default function WeeklyBoardPage() {
                           <td className="px-1.5 py-1.5 tabular-nums text-neutral-500">
                             {moneyCell(row.producedValue)}
                           </td>
-                          {WEEKLY_BUCKET_KEYS.map((key, bucketIndex) => (
+                          {renderUnder50Cells(row.buckets.under50, row.under50Split, 'py-1.5', false)}
+                          {OTHER_BUCKET_KEYS.map((key) => (
                             <td
                               key={key}
-                              className={`px-1.5 py-1.5 tabular-nums ${BUCKET_CELL_TONE[key]} ${
-                                bucketIndex === 0 ? 'border-l border-neutral-100' : ''
-                              }`}
+                              className={`px-1.5 py-1.5 tabular-nums ${BUCKET_CELL_TONE[key]}`}
                             >
                               {moneyCell(row.buckets[key])}
                             </td>
@@ -1000,12 +1212,18 @@ export default function WeeklyBoardPage() {
                       </td>
                       <td className="px-1.5 py-2 tabular-nums">{money(board.totals.shippedValue)}</td>
                       <td className="px-1.5 py-2 tabular-nums">{money(board.totals.producedValue)}</td>
-                      {WEEKLY_BUCKET_KEYS.map((key, bucketIndex) => (
+                      {renderUnder50Cells(
+                        board.totals.buckets.under50,
+                        board.totals.under50Split,
+                        'py-2',
+                        true
+                      )}
+                      {OTHER_BUCKET_KEYS.map((key) => (
                         <td
                           key={key}
                           className={`px-1.5 py-2 tabular-nums ${
                             RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : 'text-neutral-600'
-                          } ${bucketIndex === 0 ? 'border-l border-neutral-200' : ''}`}
+                          }`}
                         >
                           {money(board.totals.buckets[key])}
                         </td>
@@ -1067,6 +1285,12 @@ export default function WeeklyBoardPage() {
                   )}
                   {data && data.unpricedItemCount > 0 && (
                     <span className="text-amber-700">단가 미확보 {data.unpricedItemCount}건</span>
+                  )}
+                  {!splitAvailable && board.totals.buckets.under50 > 0 && (
+                    <span className="flex items-center gap-1 text-amber-700">
+                      50% 미만 세부 구간 미분해
+                      <InfoTooltip text="이 주차는 0~20% · 20~40% · 40~50% 세부 구간을 적재하기 전에 찍혀 50% 미만 한 칸으로 보입니다. 재고는 소급 계산이 불가능해 다시 채울 수 없고, 다음 적재부터 세 칸으로 나뉩니다." />
+                    </span>
                   )}
                   {/*
                     출고는 있는데 생산이 0 이면 대차가 성립하지 않는다. 대부분 「주 초에 적재해서
@@ -1178,6 +1402,7 @@ export default function WeeklyBoardPage() {
                       // 잔여일 열이 없는 주차에서 「소비기한 임박」을 누르면 정렬이 무의미해진다. 아예 막는다.
                       const disabled =
                         (sort.key === 'remain' && !hasRemainDay) ||
+                        (sort.key === 'critical' && !detailSplitOn) ||
                         (sort.key === 'delta' && !(detail?.hasPrevious ?? false));
                       return (
                         <button
@@ -1191,7 +1416,9 @@ export default function WeeklyBoardPage() {
                             disabled
                               ? sort.key === 'remain'
                                 ? '이 주차는 소비기한 잔여일이 적재되지 않았습니다(열 추가 이전 주차).'
-                                : '전주 스냅샷이 없어 증감을 정렬할 수 없습니다.'
+                                : sort.key === 'critical'
+                                  ? '이 주차는 50% 미만 세부 구간이 적재되지 않았습니다(열 추가 이전 주차).'
+                                  : '전주 스냅샷이 없어 증감을 정렬할 수 없습니다.'
                               : sort.hint
                           }
                           className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
@@ -1235,7 +1462,11 @@ export default function WeeklyBoardPage() {
                 {detail && (
                   <>
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[1480px] text-right text-xs">
+                      <table
+                        className={`w-full text-right text-xs ${
+                          detailSplitOn ? 'min-w-[1640px]' : 'min-w-[1480px]'
+                        }`}
+                      >
                         <thead>
                           <tr className="bg-neutral-100 text-[10px] text-neutral-600">
                             <th className="px-1.5 py-1.5 text-left font-bold">자재코드</th>
@@ -1254,14 +1485,20 @@ export default function WeeklyBoardPage() {
                             <th className="px-1.5 py-1.5 font-bold">잔여율</th>
                             <th className="px-1.5 py-1.5 font-bold text-[#C62828]">소진필요</th>
                             <th className="px-1.5 py-1.5 font-bold">비중</th>
-                            {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                            {detailBucketColumns.map((column, index) => (
                               <th
-                                key={key}
+                                key={column.key}
                                 className={`px-1.5 py-1.5 font-bold ${
                                   index === 0 ? 'border-l border-neutral-200' : ''
-                                } ${RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : ''}`}
+                                }`}
+                                style={column.headColor ? { color: column.headColor } : undefined}
                               >
-                                {WEEKLY_BUCKET_LABELS[key].split(' [')[0]}
+                                {column.key.startsWith('under50-') && (
+                                  <span className="block text-[9px] font-normal text-neutral-400">
+                                    50% 미만
+                                  </span>
+                                )}
+                                {column.label}
                                 <br />
                                 <span className="font-normal text-neutral-400">수량 / 금액</span>
                               </th>
@@ -1352,18 +1589,18 @@ export default function WeeklyBoardPage() {
                                   </span>
                                 </div>
                               </td>
-                              {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                              {detailBucketColumns.map((column, index) => (
                                 <td
-                                  key={key}
-                                  className={`px-1.5 py-1.5 tabular-nums ${BUCKET_CELL_TONE[key]} ${
+                                  key={column.key}
+                                  className={`px-1.5 py-1.5 tabular-nums ${column.tone} ${
                                     index === 0 ? 'border-l border-neutral-100' : ''
                                   }`}
                                 >
                                   {bucketQuantityCell(
-                                    row.bucketQuantities[key],
-                                    row.buckets[key],
+                                    column.quantityOf(row),
+                                    column.valueOf(row),
                                     row.unit,
-                                    row.hasBucketQuantities
+                                    column.availableOf(row)
                                   )}
                                 </td>
                               ))}
@@ -1380,7 +1617,10 @@ export default function WeeklyBoardPage() {
                           ))}
                           {detailPageRows.length === 0 && (
                             <tr>
-                              <td colSpan={17} className="py-6 text-center text-[11px] text-neutral-400">
+                              <td
+                                colSpan={detailColumnCount}
+                                className="py-6 text-center text-[11px] text-neutral-400"
+                              >
                                 조건에 맞는 품목이 없습니다.
                               </td>
                             </tr>
@@ -1405,14 +1645,15 @@ export default function WeeklyBoardPage() {
                               {money(detail.totals.riskValue)}
                             </td>
                             <td className="px-1.5 py-1.5" />
-                            {WEEKLY_BUCKET_KEYS.map((key, index) => (
+                            {detailBucketColumns.map((column, index) => (
                               <td
-                                key={key}
+                                key={column.key}
                                 className={`px-1.5 py-1.5 tabular-nums ${
-                                  RISK_BUCKET_KEYS.includes(key) ? 'text-[#C62828]' : 'text-neutral-600'
+                                  column.headColor ? '' : 'text-neutral-600'
                                 } ${index === 0 ? 'border-l border-neutral-200' : ''}`}
+                                style={column.headColor ? { color: column.headColor } : undefined}
                               >
-                                {money(detail.totals.buckets[key])}
+                                {money(column.total)}
                               </td>
                             ))}
                             <td className="border-l border-neutral-200 px-1.5 py-1.5 tabular-nums">
@@ -1503,13 +1744,23 @@ export default function WeeklyBoardPage() {
                 소비기한 구간별 주간 재고변동
               </h2>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[560px] text-right text-xs">
+                <table
+                  className={`w-full text-right text-xs ${
+                    splitAvailable ? 'min-w-[720px]' : 'min-w-[560px]'
+                  }`}
+                >
                   <thead>
                     <tr className="bg-neutral-100 text-[11px] text-neutral-700">
                       <th className="px-1.5 py-1.5 text-center font-bold">구분</th>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <th key={key} className="px-1.5 py-1.5 font-bold">
-                          {WEEKLY_BUCKET_LABELS[key].split(' [')[0]}
+                      {movementColumns.map((column) => (
+                        <th
+                          key={column.key}
+                          className={`px-1.5 py-1.5 font-bold ${
+                            column.subtotal ? 'border-r border-neutral-200 text-[#C62828]' : ''
+                          }`}
+                          style={column.color ? { color: column.color } : undefined}
+                        >
+                          {column.label}
                         </th>
                       ))}
                       <th className="px-1.5 py-1.5 font-bold">합계</th>
@@ -1520,9 +1771,18 @@ export default function WeeklyBoardPage() {
                       <td className="px-1.5 py-1.5 text-center font-medium">
                         {meta?.labels.previousStock}
                       </td>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <td key={key} className="px-1.5 py-1.5 tabular-nums text-neutral-500">
-                          {moneyOrDash(board.movement.previous[key], hasPrevious)}
+                      {movementColumns.map((column) => (
+                        <td
+                          key={column.key}
+                          className={`px-1.5 py-1.5 tabular-nums text-neutral-500 ${
+                            column.subtotal ? 'border-r border-neutral-200 font-semibold' : ''
+                          }`}
+                        >
+                          {column.split
+                            ? board.movement.splitComparable
+                              ? money(board.movement.splitPrevious[column.split])
+                              : '-'
+                            : moneyOrDash(board.movement.previous[column.bucket!], hasPrevious)}
                         </td>
                       ))}
                       <td className="px-1.5 py-1.5 font-bold tabular-nums text-neutral-500">
@@ -1533,9 +1793,16 @@ export default function WeeklyBoardPage() {
                       <td className="px-1.5 py-1.5 text-center font-medium">
                         {meta?.labels.currentStock}
                       </td>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <td key={key} className="px-1.5 py-1.5 tabular-nums">
-                          {money(board.movement.current[key])}
+                      {movementColumns.map((column) => (
+                        <td
+                          key={column.key}
+                          className={`px-1.5 py-1.5 tabular-nums ${
+                            column.subtotal ? 'border-r border-neutral-200 font-semibold' : ''
+                          }`}
+                        >
+                          {column.split
+                            ? money(board.movement.splitCurrent[column.split])
+                            : money(board.movement.current[column.bucket!])}
                         </td>
                       ))}
                       <td className="px-1.5 py-1.5 font-bold tabular-nums">
@@ -1544,31 +1811,53 @@ export default function WeeklyBoardPage() {
                     </tr>
                     <tr className="border-b border-neutral-100 bg-[#FFF8E1]">
                       <td className="px-1.5 py-1.5 text-center font-medium">전주 比 증감액</td>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <td
-                          key={key}
-                          className={`px-1.5 py-1.5 tabular-nums ${
-                            !hasPrevious
-                              ? 'text-neutral-400'
-                              : board.movement.delta[key] < 0
-                                ? 'text-[#C62828]'
-                                : 'text-[#1565C0]'
-                          }`}
-                        >
-                          {moneyOrDash(board.movement.delta[key], hasPrevious)}
-                        </td>
-                      ))}
+                      {movementColumns.map((column) => {
+                        const available = column.split ? board.movement.splitComparable : hasPrevious;
+                        const delta = column.split
+                          ? board.movement.splitDelta[column.split]
+                          : board.movement.delta[column.bucket!];
+                        return (
+                          <td
+                            key={column.key}
+                            className={`px-1.5 py-1.5 tabular-nums ${
+                              !available
+                                ? 'text-neutral-400'
+                                : delta < 0
+                                  ? 'text-[#C62828]'
+                                  : 'text-[#1565C0]'
+                            } ${column.subtotal ? 'border-r border-neutral-200 font-semibold' : ''}`}
+                          >
+                            {moneyOrDash(delta, available)}
+                          </td>
+                        );
+                      })}
                       <td className="px-1.5 py-1.5 font-bold tabular-nums">
                         {moneyOrDash(board.movement.deltaTotal, hasPrevious)}
                       </td>
                     </tr>
                     <tr>
                       <td className="px-1.5 py-1.5 text-center font-medium">전주 比 증감률</td>
-                      {WEEKLY_BUCKET_KEYS.map((key) => (
-                        <td key={key} className="px-1.5 py-1.5 tabular-nums">
-                          {hasPrevious ? `${(board.movement.rate[key] * 100).toFixed(1)}%` : '-'}
-                        </td>
-                      ))}
+                      {movementColumns.map((column) => {
+                        let text = '-';
+                        if (column.split) {
+                          const previousValue = board.movement.splitPrevious[column.split];
+                          if (board.movement.splitComparable && previousValue > 0) {
+                            text = `${((board.movement.splitDelta[column.split] / previousValue) * 100).toFixed(1)}%`;
+                          }
+                        } else if (hasPrevious) {
+                          text = `${(board.movement.rate[column.bucket!] * 100).toFixed(1)}%`;
+                        }
+                        return (
+                          <td
+                            key={column.key}
+                            className={`px-1.5 py-1.5 tabular-nums ${
+                              column.subtotal ? 'border-r border-neutral-200 font-semibold' : ''
+                            }`}
+                          >
+                            {text}
+                          </td>
+                        );
+                      })}
                       <td className="px-1.5 py-1.5 font-bold tabular-nums">
                         {hasPrevious ? `${(board.movement.rateTotal * 100).toFixed(1)}%` : '-'}
                       </td>
@@ -1576,10 +1865,225 @@ export default function WeeklyBoardPage() {
                   </tbody>
                 </table>
               </div>
+              {splitAvailable && !board.movement.splitComparable && hasPrevious && (
+                <p className="mt-1 text-[10px] text-neutral-400">
+                  전주는 세부 구간 적재 이전이라 0~20 · 20~40 · 40~50% 증감은 비워 둡니다. 50% 미만 계는 비교할 수 있습니다.
+                </p>
+              )}
 
               <pre className="mt-2 whitespace-pre-wrap break-words rounded-md border border-neutral-200 bg-neutral-50 p-2.5 font-sans text-[11px] leading-relaxed text-neutral-700">
                 {meta?.notes.bucket}
               </pre>
+            </section>
+          </div>
+
+          {/*
+            2-1. 50% 미만 세부 구간 — 「내부소진」 한 덩어리를 임박도로 쪼개 무엇부터 처분할지 보여준다.
+            새 조회 없이 메인 표와 같은 board 값만 쓴다(카드 합 = 메인 표 50% 미만 합계).
+          */}
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            <section className="rounded-lg border border-neutral-200 bg-white p-3">
+              <h2 className="mb-2 flex items-center gap-1 text-xs font-bold text-neutral-800">
+                50% 미만 세부 구간
+                <span className="font-normal text-neutral-400">
+                  {axis === 'channel' ? '채널별' : '카테고리별'} · 0~20 / 20~40 / 40~50%
+                </span>
+                <InfoTooltip text={UNDER50_HINT} />
+              </h2>
+              {splitAvailable ? (
+                <>
+                  <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {board.under50Summary.map((item) => {
+                      const color = UNDER50_COLORS[item.key];
+                      const share =
+                        board.totals.stockValue > 0 ? (item.value / board.totals.stockValue) * 100 : 0;
+                      const delta = board.movement.splitDelta[item.key];
+                      return (
+                        <div
+                          key={item.key}
+                          className="rounded-md border border-neutral-200 p-2"
+                          style={{ borderLeft: `3px solid ${color}` }}
+                        >
+                          <div className="text-[11px] font-bold" style={{ color }}>
+                            잔여율 {WEEKLY_UNDER50_LABELS[item.key]}
+                          </div>
+                          <div className="mt-0.5 text-lg font-bold tabular-nums text-neutral-900">
+                            {toEok(item.value).toFixed(1)}
+                            <span className="ml-0.5 text-[11px] font-medium text-neutral-500">억</span>
+                          </div>
+                          <div className="text-[10px] tabular-nums text-neutral-500">
+                            재고의 {share.toFixed(1)}% · {item.itemCount.toLocaleString('ko-KR')}품목
+                          </div>
+                          <div
+                            className={`text-[10px] tabular-nums ${
+                              !board.movement.splitComparable
+                                ? 'text-neutral-300'
+                                : delta > 0
+                                  ? 'text-[#C62828]'
+                                  : 'text-[#1565C0]'
+                            }`}
+                          >
+                            전주 比{' '}
+                            {board.movement.splitComparable ? formatSignedNoteAmount(delta) : '-'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 줄별 세부 구간 막대 — 길이는 50% 미만 금액, 색은 그 안의 임박도. 누르면 위 상세가 그 줄로 열린다 */}
+                  <div className="space-y-1">
+                    {segments
+                      .filter((entry) => Math.round(entry.buckets.under50) > 0)
+                      .map((entry) => {
+                        const under20Share =
+                          entry.buckets.under50 > 0
+                            ? (entry.under50Split.under20 / entry.buckets.under50) * 100
+                            : 0;
+                        return (
+                          <button
+                            key={entry.key}
+                            onClick={() => handleRiskSelect(entry.key)}
+                            title={WEEKLY_UNDER50_KEYS.map(
+                              (key) =>
+                                `${WEEKLY_UNDER50_LABELS[key]} ${formatNoteAmount(entry.under50Split[key])}`
+                            ).join(' · ')}
+                            className={`flex w-full items-center gap-2 rounded px-1 py-1 text-left transition-colors hover:bg-neutral-50 ${
+                              selectedRiskKey === entry.key ? 'bg-[#E3F2FD]/60' : ''
+                            }`}
+                          >
+                            <span className="w-16 shrink-0 truncate text-[11px] font-medium text-neutral-700">
+                              {entry.label}
+                            </span>
+                            <span className="flex h-3.5 flex-1 overflow-hidden rounded-sm bg-neutral-100">
+                              {WEEKLY_UNDER50_KEYS.map((key) => (
+                                <span
+                                  key={key}
+                                  className="block h-full"
+                                  style={{
+                                    width: `${(entry.under50Split[key] / under50AxisMax) * 100}%`,
+                                    backgroundColor: UNDER50_COLORS[key],
+                                  }}
+                                />
+                              ))}
+                            </span>
+                            <span className="w-28 shrink-0 text-right text-[10px] tabular-nums text-neutral-500">
+                              <b className="text-neutral-800">{formatNoteAmount(entry.buckets.under50)}</b>
+                              {' · '}
+                              <span className="text-[#7F0000]">20%↓ {Math.round(under20Share)}%</span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+                    {WEEKLY_UNDER50_KEYS.map((key) => (
+                      <span key={key} className="flex items-center gap-1 text-[11px] text-neutral-600">
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-sm"
+                          style={{ backgroundColor: UNDER50_COLORS[key] }}
+                        />
+                        {WEEKLY_UNDER50_LABELS[key]}
+                      </span>
+                    ))}
+                    <span className="text-[10px] text-neutral-400">
+                      한 품목이 여러 구간에 걸칠 수 있어 품목 수의 합은 전체 품목 수보다 클 수 있습니다
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="rounded-md border border-dashed border-amber-200 bg-amber-50/50 px-3 py-6 text-center text-[11px] leading-relaxed text-amber-800">
+                  이 주차는 50% 미만 세부 구간(0~20 · 20~40 · 40~50%)을 적재하기 전에 찍혀 나눌 수 없습니다.
+                  <br />
+                  재고는 소급 계산이 불가능해 지난 주차는 다시 채울 수 없고, 다음 적재부터 나뉩니다.
+                  {isAdmin && ' 진행 중인 주차를 고르고 「적재」를 누르면 지금 재고로 바로 확인할 수 있습니다.'}
+                </p>
+              )}
+            </section>
+
+            <section className="rounded-lg border border-neutral-200 bg-white p-3">
+              <h2 className="mb-2 flex items-center gap-1 text-xs font-bold text-neutral-800">
+                잔여율 20% 미만 재고 상위 품목
+                <span className="font-normal text-neutral-400">
+                  처분 판단 우선순위 · 상위 {board.criticalItems.length}
+                </span>
+                <InfoTooltip text="소비기한 잔여율 0~20% 재고금액이 큰 SKU 입니다(기한이 이미 지난 배치 포함). 잔여일은 그 SKU 에서 가장 임박한 배치 기준입니다. 품목을 누르면 위 상세 보기가 전체 목록 · 20% 미만 금액순으로 열리고 그 품목이 검색됩니다." />
+                {splitAvailable && board.criticalItems.length > 0 && (
+                  <button
+                    onClick={() => openCriticalDetail()}
+                    className="ml-auto rounded-md border border-neutral-200 px-2 py-0.5 text-[10px] font-medium text-neutral-600 hover:bg-neutral-50"
+                  >
+                    전체 품목에서 보기
+                  </button>
+                )}
+              </h2>
+              {!splitAvailable ? (
+                <p className="py-8 text-center text-[11px] text-neutral-400">
+                  세부 구간이 적재된 주차부터 표시됩니다.
+                </p>
+              ) : board.criticalItems.length === 0 ? (
+                <p className="py-8 text-center text-[11px] text-neutral-400">
+                  잔여율 20% 미만 재고가 없습니다.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-right text-xs">
+                    <thead>
+                      <tr className="bg-neutral-100 text-[10px] text-neutral-600">
+                        <th className="px-1.5 py-1.5 text-left font-bold">품목</th>
+                        <th className="px-1.5 py-1.5 text-left font-bold">
+                          {axis === 'channel' ? '채널' : '구분'}
+                        </th>
+                        <th className="px-1.5 py-1.5 font-bold" style={{ color: UNDER50_COLORS.under20 }}>
+                          0~20%
+                        </th>
+                        <th className="px-1.5 py-1.5 font-bold text-[#C62828]">50% 미만</th>
+                        <th className="px-1.5 py-1.5 font-bold">재고금액</th>
+                        <th className="px-1.5 py-1.5 font-bold">잔여일</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {board.criticalItems.map((item) => (
+                        <tr
+                          key={item.materialCode}
+                          onClick={() => openCriticalDetail(item.materialCode)}
+                          title={`${item.productName} 상세 보기`}
+                          className="cursor-pointer border-b border-neutral-100 hover:bg-[#E3F2FD]/40"
+                        >
+                          <td className="max-w-[200px] px-1.5 py-1.5 text-left">
+                            <span className="block truncate font-medium text-neutral-800">
+                              {item.productName}
+                            </span>
+                            <span className="block font-mono text-[9px] text-neutral-400">
+                              {item.materialCode}
+                            </span>
+                          </td>
+                          <td className="px-1.5 py-1.5 text-left text-[11px] text-neutral-500">
+                            {item.group}
+                          </td>
+                          <td
+                            className="px-1.5 py-1.5 font-bold tabular-nums"
+                            style={{ color: UNDER50_COLORS.under20 }}
+                          >
+                            {money(item.under20)}
+                          </td>
+                          <td className="px-1.5 py-1.5 tabular-nums text-[#C62828]">
+                            {money(item.under50)}
+                          </td>
+                          <td className="px-1.5 py-1.5 tabular-nums text-neutral-600">
+                            {money(item.stockValue)}
+                          </td>
+                          <td className={`px-1.5 py-1.5 tabular-nums ${remainDayTone(item.minRemainDay)}`}>
+                            {item.minRemainDay === null
+                              ? '-'
+                              : `${Math.round(item.minRemainDay).toLocaleString('ko-KR')}일`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
           </div>
 

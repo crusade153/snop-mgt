@@ -167,6 +167,7 @@ export async function captureWeeklySnapshot(weekEndDate?: string): Promise<Captu
           'bucket_qty_under20',
           'bucket_qty_20_40',
           'bucket_qty_40_50',
+          'under50_split_basis',
         ],
       },
     ];

@@ -453,6 +453,8 @@ export async function buildWeeklySnapshotRows(week: WeekRange): Promise<WeeklySn
       bucket_qty_under20: under20Qty,
       bucket_qty_20_40: r20_40Qty,
       bucket_qty_40_50: roundQty(under50Qty - under20Qty - r20_40Qty),
+      // 배치 재고로 직접 잰 값이다. 추정치(MB51_ESTIMATE) 표시가 남아 있으면 다시 적재할 때 지운다.
+      under50_split_basis: null,
       shipped_qty: Math.round(shippedQty * 1000) / 1000,
       shipped_value: Math.round(shippedQty * unitPrice),
       produced_qty: Math.round(producedQty * 1000) / 1000,

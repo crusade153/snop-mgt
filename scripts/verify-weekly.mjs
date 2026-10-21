@@ -703,6 +703,19 @@ console.log('\n[8] 50% 미만 세부 구간 (0~20 / 20~40 / 40~50%)');
   const note = buildBucketMovementNote(mixed.movement, true);
   check('비고 문구에 세부 구간 줄이 붙고, 비교 불가면 증감을 지어내지 않는다',
     note.includes('0~20%') && !/0~20% [^,]*\(/.test(note), note.split('\n')[1]);
+
+  // 8-5. 역산 추정치(2026-10-18 주차) — 실측과 구분돼 화면·문구에 「역산 추정」이 붙어야 한다.
+  check('새 적재 행은 실측(under50_split_basis = null)', rows.every((row) => row.under50_split_basis === null));
+  const estimatedRows = rows.map((row) => ({ ...row, under50_split_basis: 'MB51_ESTIMATE' }));
+  const estimatedBoard = buildWeeklyBoard({ current: estimatedRows, previous: rows, cmMapping: new Map(), scopes });
+  const estimatedDetail = buildWeeklyDetail({ current: estimatedRows, previous: [], cmMapping: new Map(), scopes });
+  check('추정 주차는 표·상세·문구에 추정 표시가 붙는다',
+    estimatedBoard.movement.splitEstimated && !estimatedBoard.movement.splitPreviousEstimated &&
+      estimatedDetail.under50SplitEstimated &&
+      buildBucketMovementNote(estimatedBoard.movement, true).includes('(역산 추정)'));
+  check('실측 주차에는 추정 표시가 없다',
+    !board.movement.splitEstimated && !detail.under50SplitEstimated &&
+      !buildBucketMovementNote(board.movement, true).includes('역산 추정'));
 }
 
 console.log(failed === 0 ? '\n✅ 전부 통과\n' : `\n❌ ${failed}건 실패\n`);

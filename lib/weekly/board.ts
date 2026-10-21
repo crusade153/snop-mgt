@@ -118,6 +118,14 @@ export function weeklyUnder50KeyOf(remainRate: number): WeeklyUnder50Key {
   return 'r40_50';
 }
 
+/** 역산 추정으로 채운 세부 구간의 출처 표기. `scripts/backfill-under50-estimate.mjs` 가 쓴다 */
+export const UNDER50_SPLIT_ESTIMATE_BASIS = 'MB51_ESTIMATE';
+
+/** 이 행의 세부 구간이 추정치인지. 50% 미만 재고가 없는 행은 추정할 것이 없으므로 세지 않는다 */
+function isEstimatedSplitRow(row: WeeklySnapshotRow) {
+  return row.under50_split_basis === UNDER50_SPLIT_ESTIMATE_BASIS && (row.bucket_under50 || 0) > 0;
+}
+
 /** 쪼갤 수 없는 몫이 사실상 없으면(반올림 오차 이내) 세부 구간을 그대로 보여줄 수 있다 */
 export function isUnder50SplitComplete(split: WeeklyUnder50Split) {
   return Math.abs(split.unsplit) < 1;
@@ -163,6 +171,12 @@ export interface WeeklySnapshotRow {
   bucket_qty_under20?: number | null;
   bucket_qty_20_40?: number | null;
   bucket_qty_40_50?: number | null;
+  /**
+   * 세부 구간 값의 출처. null = 적재 시점 배치 재고로 직접 잰 값.
+   * `MB51_ESTIMATE` = 열 추가 전 주차를 배치 이동 이력으로 역산한 추정치(2026-10-18 주차 한 번).
+   * 화면은 추정치에 「역산 추정」 표시를 붙여 실측과 구분한다.
+   */
+  under50_split_basis?: string | null;
   shipped_qty: number;
   shipped_value: number;
   /** 기존 당월 누적 출고 열. 2026-09 이후 화면 계산에는 쓰지 않는다 */
@@ -258,6 +272,10 @@ export interface WeeklyBucketMovement {
   splitAvailable: boolean;
   /** 전주·당주 모두 세부 구간이 완전해 증감을 낼 수 있는지 */
   splitComparable: boolean;
+  /** 당주 세부 구간에 역산 추정치가 섞여 있는지. 화면에 「역산 추정」을 붙인다 */
+  splitEstimated: boolean;
+  /** 전주 세부 구간에 역산 추정치가 섞여 있는지. 증감이 「실측 − 추정」이 되므로 함께 표시한다 */
+  splitPreviousEstimated: boolean;
 }
 
 /** 50% 미만 세부 구간 한 칸의 금액·SKU 수. 화면 KPI 카드의 원천이다 */
@@ -489,7 +507,9 @@ function bucketMovementOf(
   currentBuckets: WeeklyBuckets,
   previousSplit: WeeklyUnder50Split,
   currentSplit: WeeklyUnder50Split,
-  hasPrevious: boolean
+  hasPrevious: boolean,
+  currentRows: WeeklySnapshotRow[],
+  previousRows: WeeklySnapshotRow[]
 ): WeeklyBucketMovement {
   const delta = createWeeklyBuckets();
   const rate = createWeeklyBuckets();
@@ -521,6 +541,8 @@ function bucketMovementOf(
     splitAvailable: isUnder50SplitComplete(currentSplit),
     splitComparable:
       hasPrevious && isUnder50SplitComplete(currentSplit) && isUnder50SplitComplete(previousSplit),
+    splitEstimated: currentRows.some(isEstimatedSplitRow),
+    splitPreviousEstimated: previousRows.some(isEstimatedSplitRow),
   };
 }
 
@@ -674,7 +696,9 @@ export function buildWeeklyBoard({
       totals.buckets,
       previousSplit,
       totals.under50Split,
-      previous.length > 0
+      previous.length > 0,
+      currentInScope,
+      previous.filter(inScope)
     ),
     categoryBuckets: WEEKLY_CATEGORY_ORDER.map((category) => {
       const entry = categoryTotals.get(category);
@@ -837,7 +861,9 @@ export function buildWeeklyChannelBoard({
       totals.buckets,
       previousSplit,
       totals.under50Split,
-      previous.length > 0
+      previous.length > 0,
+      currentInScope,
+      previous.filter(inScope)
     ),
     channelBuckets: WEEKLY_CHANNEL_ORDER.map((channel) => {
       const entry = channelTotals.get(channel);
@@ -989,7 +1015,9 @@ function under50SplitNoteLine(movement: WeeklyBucketMovement) {
       ? `${base}(${formatSignedNoteAmount(movement.splitDelta[key])})`
       : base;
   });
-  return ` - ${parts.join(', ')}`;
+  // 추정치를 실측처럼 적지 않는다 — 비고 문구는 보고서에 그대로 옮겨 붙여지기 때문이다.
+  const estimated = movement.splitEstimated || (movement.splitComparable && movement.splitPreviousEstimated);
+  return ` - ${parts.join(', ')}${estimated ? ' (역산 추정)' : ''}`;
 }
 
 /** 원본 엑셀 N13 의 문구 템플릿 — 구간별 재고변동 블록 */
@@ -1055,6 +1083,8 @@ export interface WeeklyDetailRow {
   under50SplitQuantities: WeeklyUnder50Split;
   /** 이 SKU 의 50% 미만 금액이 세부 구간으로 완전히 쪼개졌는지 */
   hasUnder50Split: boolean;
+  /** 세부 구간이 역산 추정치인지(SKU 단위 추정이라 품목 하나하나는 오차가 클 수 있다) */
+  under50SplitEstimated: boolean;
   /** 잔여율 75% 미만(50%미만 + 50~70% + 70~75%) 재고금액 = 소진 필요 */
   riskValue: number;
   riskRatio: number;
@@ -1115,6 +1145,8 @@ export interface WeeklyDetailResult {
   };
   /** 50% 미만 세부 구간이 완전히 채워진 주차인지. false 면 세부 열을 합쳐 「미분해」로 보인다 */
   hasUnder50Split: boolean;
+  /** 세부 구간에 역산 추정치가 섞여 있는지 */
+  under50SplitEstimated: boolean;
   /** 잔여일 열이 채워진 주차인지. false 면 「소비기한 임박」 정렬을 쓸 수 없다 */
   hasRemainDay: boolean;
   /** 구간별 수량 열이 정확히 채워진 주차인지. false 면 수량은 '-' 로 표시한다 */
@@ -1191,6 +1223,7 @@ export function buildWeeklyDetail({
         under50Split: createUnder50Split(),
         under50SplitQuantities: createUnder50Split(),
         hasUnder50Split: false,
+        under50SplitEstimated: false,
         riskValue: 0,
         riskRatio: 0,
         shippedQty: 0,
@@ -1240,6 +1273,7 @@ export function buildWeeklyDetail({
       addBuckets(target.bucketQuantities, bucketQuantities);
       addUnder50Split(target.under50Split, under50SplitOfRow(row));
       addUnder50Split(target.under50SplitQuantities, under50SplitQuantitiesOfRow(row));
+      if (isEstimatedSplitRow(row)) target.under50SplitEstimated = true;
       if ((row.stock_value || 0) > 0 && !target.scopes.includes(row.storage_scope)) {
         target.scopes.push(row.storage_scope);
       }
@@ -1306,6 +1340,7 @@ export function buildWeeklyDetail({
     hasPrevious: previous.length > 0,
     hasRemainDay,
     hasUnder50Split: isUnder50SplitComplete(totalSplit),
+    under50SplitEstimated: rows.some((row) => row.under50SplitEstimated),
     // 과거 주차는 새 열의 기본값이 0 이다. SKU 별로 합계를 맞춰 일부 구형 행도 정확히 구분한다.
     hasBucketQuantities: rows.some((row) => row.stockQty > 0 && row.hasBucketQuantities),
     missingBucketQuantityCount: rows.filter(

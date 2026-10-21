@@ -282,10 +282,10 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
-      // v14: 50% 미만 세부 구간(0~20 / 20~40 / 40~50%) 추가.
+      // v15: 세부 구간 역산 추정 표시. v14: 50% 미만 세부 구간(0~20 / 20~40 / 40~50%) 추가.
       // v13: 재고 비율의 분모를 당월 누적에서 완료된 전월 전체 출고·매출로 변경.
       //      (v12 = 상품 6 대역·DISPO 없는 SKU 매핑, v9 = 75% 미만 소진 기준·월 매출 比)
-      [`weekly-board-v14-under50-split-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      [`weekly-board-v15-under50-estimate-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -407,7 +407,7 @@ export async function getWeeklyChannelBoard(
     return await unstable_cache(
       () => buildChannelPayload(weekEnd || null, scopes),
       // v3: 50% 미만 세부 구간 추가. v2: 재고 비율의 분모를 완료된 전월 전체 출고·매출로 변경.
-      [`weekly-channel-board-v3-under50-split-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      [`weekly-channel-board-v4-under50-estimate-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -537,7 +537,7 @@ export async function getWeeklyCategoryDetail(
       },
       [
         // v8: 50% 미만 세부 구간 추가. v7: 상세의 출고 비율을 완료된 전월 전체 출고 기준으로 변경.
-        `weekly-detail-v8-under50-split-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
+        `weekly-detail-v9-under50-estimate-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
           ...scopes,
         ]
           .sort()

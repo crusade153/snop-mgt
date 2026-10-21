@@ -108,6 +108,24 @@ const UNDER50_HINT =
   '세 칸의 합은 50% 미만과 원 단위까지 같습니다. 0~20% 에는 기한이 이미 지난 배치(잔여율 0 이하)도 들어갑니다. ' +
   '세부 구간은 2026-10 이후 적재분부터 있습니다 — 재고는 소급 계산이 불가능해 그 전 주차는 세 칸을 합쳐 50% 미만 하나로 보여줍니다.';
 
+const UNDER50_ESTIMATE_HINT =
+  '이 주차의 0~20 · 20~40 · 40~50% 는 세부 구간을 적재하기 전에 찍힌 값이라, 배치 이동 이력(MB51)으로 ' +
+  '그 주 배치재고를 거꾸로 계산해 나눈 추정치입니다. 50% 미만 합계(저장값)는 그대로이고 그 안의 비율만 추정했습니다. ' +
+  '역산 수량이 저장값과 5% 이내로 맞는 품목이 50% 미만 금액의 약 70% 이고, 물류센터 재고는 이동 이력이 없어 ' +
+  '같은 품목·카테고리 비율을 빌려 썼습니다. 합계 수준에서 참고하고 품목 하나하나의 값은 오차가 클 수 있습니다.';
+
+/** 「역산 추정」 표시. 실측과 추정을 사용자가 한눈에 구분하게 한다 */
+function EstimateBadge({ label = '역산 추정' }: { label?: string }) {
+  return (
+    <span
+      title={UNDER50_ESTIMATE_HINT}
+      className="inline-flex items-center rounded border border-amber-300 bg-amber-50 px-1 py-px text-[9px] font-bold text-amber-800"
+    >
+      {label}
+    </span>
+  );
+}
+
 type MoneyUnit = 'million' | 'won';
 
 /**
@@ -348,6 +366,8 @@ export default function WeeklyBoardPage() {
    * false 면(세부 열 추가 이전 주차) 세 칸을 합쳐 50% 미만 한 칸으로 그린다 — 0 으로 채우지 않는다.
    */
   const splitAvailable = board?.movement.splitAvailable ?? false;
+  /** 세부 구간이 역산 추정치인 주차(2026-10-18). 실측과 섞이지 않게 화면 곳곳에 표시를 붙인다 */
+  const splitEstimated = splitAvailable && (board?.movement.splitEstimated ?? false);
 
   // 주차를 바꾸거나 축을 바꾸면 펼쳐 둔 상세는 좌표가 다른 것이라 닫는다.
   // 「전체보기」만은 좌표가 없어 어느 주차·축에서도 같은 모수라 열어 둔다.
@@ -495,13 +515,19 @@ export default function WeeklyBoardPage() {
         '잔여율(금액가중, %)': row.avgRemainRate === null ? null : Math.round(row.avgRemainRate),
         '소진필요(75%미만)': Math.round(row.riskValue),
         '소진필요 비중(%)': Math.round(row.riskRatio * 100),
-        ...WEEKLY_BUCKET_KEYS.reduce<Record<string, number | null>>((acc, key) => {
+        ...WEEKLY_BUCKET_KEYS.reduce<Record<string, number | string | null>>((acc, key) => {
           const name = WEEKLY_BUCKET_LABELS[key].split(' [')[0];
           // 구간 수량은 열이 없던 주차에서 0 으로 채워져 있다. 0 과 「모름」을 섞지 않는다.
           acc[`${name} 수량`] = row.hasBucketQuantities ? Math.round(row.bucketQuantities[key]) : null;
           acc[`${name} 금액`] = Math.round(row.buckets[key]);
           // 50% 미만 바로 뒤에 세부 구간을 붙인다. 세부 열이 없던 주차는 0 이 아니라 빈칸이다.
           if (key === 'under50') {
+            // 세부 구간 값이 실측인지 추정인지. 받아서 쓸 때 추정치를 걸러낼 수 있게 근거를 함께 내린다.
+            acc['50%미만 세부구간 근거'] = !row.hasUnder50Split
+              ? '미분해'
+              : row.under50SplitEstimated
+                ? '역산추정(MB51)'
+                : '실측';
             WEEKLY_UNDER50_KEYS.forEach((splitKey) => {
               const splitName = `50%미만 ${WEEKLY_UNDER50_LABELS[splitKey]}`;
               acc[`${splitName} 수량`] =
@@ -1066,6 +1092,7 @@ export default function WeeklyBoardPage() {
                           50% 미만
                           <span className="font-normal text-neutral-400">[내부소진]</span>
                           <InfoTooltip text={UNDER50_HINT} />
+                          {splitEstimated && <EstimateBadge />}
                         </span>
                       </th>
                       {OTHER_BUCKET_KEYS.map((key) => (
@@ -1286,6 +1313,12 @@ export default function WeeklyBoardPage() {
                   {data && data.unpricedItemCount > 0 && (
                     <span className="text-amber-700">단가 미확보 {data.unpricedItemCount}건</span>
                   )}
+                  {splitEstimated && (
+                    <span className="flex items-center gap-1 text-amber-700">
+                      50% 미만 세부 구간은 역산 추정치
+                      <InfoTooltip text={UNDER50_ESTIMATE_HINT} />
+                    </span>
+                  )}
                   {!splitAvailable && board.totals.buckets.under50 > 0 && (
                     <span className="flex items-center gap-1 text-amber-700">
                       50% 미만 세부 구간 미분해
@@ -1394,6 +1427,11 @@ export default function WeeklyBoardPage() {
                     <span className="ml-1.5 font-normal text-neutral-400">
                       {detail ? `${detail.totals.itemCount.toLocaleString('ko-KR')}품목` : ''}
                     </span>
+                    {detail?.under50SplitEstimated && (
+                      <span className="ml-1.5 align-middle">
+                        <EstimateBadge label="50% 미만 세부 구간 역산 추정" />
+                      </span>
+                    )}
                   </h2>
 
                   {/* 정렬 — 금액 기준과 소비기한 임박 기준을 나란히 둔다 */}
@@ -1865,6 +1903,14 @@ export default function WeeklyBoardPage() {
                   </tbody>
                 </table>
               </div>
+              {board.movement.splitComparable &&
+                (board.movement.splitEstimated || board.movement.splitPreviousEstimated) && (
+                  <p className="mt-1 flex items-center gap-1 text-[10px] text-amber-700">
+                    <EstimateBadge />
+                    {board.movement.splitEstimated ? '당주' : '전주'} 0~20 · 20~40 · 40~50% 는 역산 추정치라
+                    세부 증감에 추정 오차가 섞여 있습니다. 50% 미만 계는 실측입니다.
+                  </p>
+                )}
               {splitAvailable && !board.movement.splitComparable && hasPrevious && (
                 <p className="mt-1 text-[10px] text-neutral-400">
                   전주는 세부 구간 적재 이전이라 0~20 · 20~40 · 40~50% 증감은 비워 둡니다. 50% 미만 계는 비교할 수 있습니다.
@@ -1889,6 +1935,7 @@ export default function WeeklyBoardPage() {
                   {axis === 'channel' ? '채널별' : '카테고리별'} · 0~20 / 20~40 / 40~50%
                 </span>
                 <InfoTooltip text={UNDER50_HINT} />
+                {splitEstimated && <EstimateBadge />}
               </h2>
               {splitAvailable ? (
                 <>
@@ -2008,6 +2055,7 @@ export default function WeeklyBoardPage() {
                   처분 판단 우선순위 · 상위 {board.criticalItems.length}
                 </span>
                 <InfoTooltip text="소비기한 잔여율 0~20% 재고금액이 큰 SKU 입니다(기한이 이미 지난 배치 포함). 잔여일은 그 SKU 에서 가장 임박한 배치 기준입니다. 품목을 누르면 위 상세 보기가 전체 목록 · 20% 미만 금액순으로 열리고 그 품목이 검색됩니다." />
+                {splitEstimated && <EstimateBadge label="역산 추정 · 품목별 오차 큼" />}
                 {splitAvailable && board.criticalItems.length > 0 && (
                   <button
                     onClick={() => openCriticalDetail()}

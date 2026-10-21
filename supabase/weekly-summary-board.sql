@@ -211,3 +211,11 @@ alter table public.snop_weekly_inventory_snapshots
   add column if not exists bucket_qty_under20 numeric,
   add column if not exists bucket_qty_20_40 numeric,
   add column if not exists bucket_qty_40_50 numeric;
+
+-- 세부 구간 값이 어디서 왔는지. null = 적재 시점 배치 재고로 직접 잰 값(정상 경로).
+-- 'MB51_ESTIMATE' = 열 추가 전 주차를 배치 이동 이력(MB51)으로 역산해 채운 **추정치**다.
+--   2026-10-18 주차 한 번만 scripts/backfill-under50-estimate.mjs 로 채웠다(실측 정합: 50% 미만 금액의 약 70% 가
+--   저장값과 5% 이내로 맞음, 물류센터 재고는 이력이 없어 같은 SKU·카테고리 비율을 빌려 씀).
+--   화면은 이 값이 있으면 「역산 추정」 표시를 붙인다. 더 오래된 주차는 정합이 40% 대로 떨어져 채우지 않는다.
+alter table public.snop_weekly_inventory_snapshots
+  add column if not exists under50_split_basis text;

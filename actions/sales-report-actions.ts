@@ -113,7 +113,8 @@ export async function getSalesReport(input: SalesReportParams): Promise<SalesRep
   const cacheKey = [
     // v3: 제품 구분(완제품/상품/기타) 필터 + 팀·채널 축을 추가하면서 집계 결과 자체가 바뀌었다.
     //     (v2: 월 추이를 당기·전년 각자의 구간에서 집계 + 제품 표를 자재코드로만 묶음)
-    'sales-report-v3',
+    // v4: 팀 축이 쓰는 주간 장표 임시 카테고리표 2차(35품목) 추가.
+    'sales-report-v4',
     params.from,
     params.to,
     params.vtweg,

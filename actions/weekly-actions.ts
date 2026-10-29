@@ -282,10 +282,12 @@ export async function getWeeklyBoard(
   try {
     return await unstable_cache(
       () => buildPayload(weekEnd || null, scopes),
+      // v16: 사업부 임시 카테고리표 2차(「미분류 반영.xlsx」 35품목) 추가.
       // v15: 세부 구간 역산 추정 표시. v14: 50% 미만 세부 구간(0~20 / 20~40 / 40~50%) 추가.
       // v13: 재고 비율의 분모를 당월 누적에서 완료된 전월 전체 출고·매출로 변경.
       //      (v12 = 상품 6 대역·DISPO 없는 SKU 매핑, v9 = 75% 미만 소진 기준·월 매출 比)
-      [`weekly-board-v15-under50-estimate-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      // ⚠️ Vercel 데이터 캐시는 배포를 넘어 남는다. 임시표를 갱신하면 여기 버전도 올릴 것.
+      [`weekly-board-v16-overrides2-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -406,8 +408,9 @@ export async function getWeeklyChannelBoard(
   try {
     return await unstable_cache(
       () => buildChannelPayload(weekEnd || null, scopes),
+      // v5: 임시 카테고리표 2차(채널 축 자체는 그대로지만 상세 분류근거가 바뀐다).
       // v3: 50% 미만 세부 구간 추가. v2: 재고 비율의 분모를 완료된 전월 전체 출고·매출로 변경.
-      [`weekly-channel-board-v4-under50-estimate-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      [`weekly-channel-board-v5-overrides2-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -536,8 +539,8 @@ export async function getWeeklyCategoryDetail(
         } satisfies WeeklyDetailPayload;
       },
       [
-        // v8: 50% 미만 세부 구간 추가. v7: 상세의 출고 비율을 완료된 전월 전체 출고 기준으로 변경.
-        `weekly-detail-v9-under50-estimate-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
+        // v10: 임시 카테고리표 2차 추가. v8: 50% 미만 세부 구간 추가. v7: 상세의 출고 비율을 완료된 전월 전체 출고 기준으로 변경.
+        `weekly-detail-v10-overrides2-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
           ...scopes,
         ]
           .sort()

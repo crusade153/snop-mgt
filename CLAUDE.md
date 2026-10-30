@@ -101,7 +101,8 @@ middleware.ts             전 경로 인증 게이트
 - 로그인은 ID + 6자리 PIN 방식(`lib/pin-auth.ts`) — 5회 실패 시 15분 잠금, 쉬운 PIN 거부, 실패 문구는 항상 동일.
 - `/api/mcp` 는 쿠키가 없는 클라이언트용이라 미들웨어를 통과시키고 라우트에서 `MCP_TOKEN` 으로 인증한다.
   `/.well-known/oauth-*` 는 **반드시 404** 로 끊어야 한다(로그인 페이지로 리다이렉트하면 MCP 커넥터 등록이 실패한다).
-- `/api/cron/*` 은 `CRON_SECRET` Bearer 로 라우트 내부에서 인증한다. Vercel Cron 은 `vercel.json` 에 정의(매일 21:45 UTC 일별 재고 스냅샷, 일요일 20:40 UTC = 월요일 05:40 KST 주간 스냅샷).
+- `/api/cron/*` 은 `CRON_SECRET` Bearer 로 라우트 내부에서 인증한다. Vercel Cron 은 `vercel.json` 에 정의(매일 21:45 UTC 일별 재고 스냅샷, 일요일 20:40 UTC = 월요일 05:40 KST 주간 스냅샷,
+  매일 21:00 UTC = 06:00 KST 진행 중인 주차 잠정 적재 `weekly-snapshot-current` — `/weekly` 「적재」 버튼과 같은 동작).
 
 ### MCP 서버
 

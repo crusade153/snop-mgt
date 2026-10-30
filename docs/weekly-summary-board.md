@@ -28,7 +28,8 @@
 | 재고 기준일 | **일요일 마감** (주차 종료일) |
 | 주차 키 | 종료 일요일 날짜 (예: `2026-08-16`) |
 | BigQuery 갱신 | 월요일 새벽 **04:00 KST** |
-| 주간 적재 cron | **월요일 05:40 KST** = `40 20 * * 0` (UTC 기준, 일요일 20:40) |
+| 주간 적재 cron | **월요일 05:40 KST** = `40 20 * * 0` (UTC 기준, 일요일 20:40) — 직전 주차 마감 |
+| 잠정 적재 cron | **매일 06:00 KST** = `0 21 * * *` — 진행 중인 이번 주(적재 버튼과 같은 동작) |
 | 출고·생산 집계 구간 | 해당 주 월요일 00:00 ~ 일요일 24:00 (`VDATU` / `BUDAT`) |
 
 ### 적재 개시 시점 (확정)
@@ -437,6 +438,7 @@ CM × 공장 × 카테고리 행에 대해 `판매` / `판촉` / `기부` / `합
 | `lib/weekly-snapshot.ts` | Supabase 적재 (`next/headers` 를 무는 쪽을 여기로 격리) |
 | `actions/weekly-actions.ts` | 조회 + 관리자 수동 적재. **BigQuery 를 읽지 않는다** |
 | `app/api/cron/weekly-snapshot/route.ts` | 주간 cron (`?week=YYYY-MM-DD` 로 수동 재적재) |
+| `app/api/cron/weekly-snapshot-current/route.ts` | 매일 06:00 KST 이번 주 잠정 적재 cron |
 | `app/weekly/page.tsx` | 화면 |
 | `components/charts/canvas-stacked-bar-chart.tsx` | 카테고리별 누적 막대 |
 | `supabase/weekly-summary-board.sql` | 스키마 3개 (스냅샷 / CM 매핑 / 비고) |
@@ -593,6 +595,7 @@ H01 외의 코드는 받지 않는다. 여기를 넓히면 영업 코드가 생�
 
 1. **Supabase 스키마는 실행 완료**(`supabase/weekly-summary-board.sql`).
 2. 첫 적재는 화면의 **적재 버튼**을 쓴다. cron 은 매주 월요일 05:40 KST 에 직전 주차를 적재한다.
+   - 매일 06:00 KST 에는 별도 cron 이 진행 중인 이번 주를 잠정 적재한다(버튼을 매일 아침 대신 누르는 것). 마감 재고 교체는 여전히 월요일 05:40 cron 이 한다.
    - 진행 중인 주차도 적재할 수 있고, 이때는 **잠정치**라 누를 때마다 재고까지 갱신된다.
    - 마감된 주차는 재고를 다시 쓰지 않고 출고·생산·매출만 갱신한다.
 3. ⚠️ **적재는 반드시 서버 액션(적재 버튼)이나 cron 으로 한다.** 스크립트로 DB 를 직접 고치면

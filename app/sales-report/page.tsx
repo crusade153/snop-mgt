@@ -62,7 +62,7 @@ const DEFAULT_DIMENSION: SalesDimension = 'team';
 /** 축마다 「무엇으로 판정했는가」를 옆에 붙인다 — 채널이 둘이라 설명 없이는 구분이 안 된다. */
 const DIMENSION_HINTS: Record<SalesDimension, string> = {
   team: '자재마스터 DISPO 로 판정한 생산 CM × 카테고리입니다. 「주간 요약」 장표의 「팀별」과 같은 기준입니다.',
-  salesChannel: '제품계층 2레벨로 판정한 영업 채널(B2C·B2B·수출·NPB/PB)입니다. 「주간 요약」 장표의 「채널별」과 같은 기준입니다.',
+  salesChannel: '제품계층 2레벨로 판정한 영업 채널(B2C·B2B·수출·NPB/PB)입니다. 「주간 요약」 장표의 「채널별」과 같은 기준이며, 사업부가 지정한 자소용 반제품·굿즈·플래그쉽/파트너스 상품 81품목은 기타로 셉니다.',
   channel: 'SAP 고객그룹1(KVGR1) 내역입니다 — 온라인·대형마트·CVS·SSM 처럼 파는 곳의 성격이고, 위의 「채널」과는 다른 축입니다.',
   brand: '제품계층 1레벨(브랜드)입니다.',
   matkl: 'SAP 자재그룹(MATKL) 내역입니다.',

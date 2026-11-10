@@ -11,7 +11,7 @@
 // 아직 없어서 제품계층 4레벨로 올라올 때까지 비워 둔 것이다). 그래서 오늘은 두 화면의 값이 같다.
 // 표에 행이 생기면 이 화면도 같이 읽어야 갈리지 않는다 — 그때 이 주석을 지우고 매핑을 넘길 것.
 
-import { channelOfLv2, type WeeklyChannel } from '@/lib/weekly/channel';
+import { channelOfMaterial, type WeeklyChannel } from '@/lib/weekly/channel';
 import {
   categoryOfMaterial,
   cmOfCategory,
@@ -64,8 +64,9 @@ export function teamSortWeight(cm: WeeklyCm, category: WeeklyCategory): number {
  * 자재 하나의 팀·채널 판정.
  *
  * 카테고리 판정 순서(자재코드 6 대역 → DISPO → 사업부 임시 매핑)는 `categoryOfMaterial` 그대로다.
- * 채널은 제품계층 LV2 한 값으로만 정한다(`channelOfLv2`) — 표에 없는 LV2 는 `미분류` 로 남겨
- * 「진짜 기타」와 「매핑 누락」이 섞이지 않게 한다.
+ * 채널은 `/weekly` 「채널별」과 같은 `channelOfMaterial` 이다 — 사업부가 「항상 기타」로 지정한 자재
+ * (`lib/weekly/channel-overrides.ts`, 81품목)를 먼저 보고, 나머지는 제품계층 LV2 로 정한다.
+ * 표에 없는 LV2 는 `미분류` 로 남겨 「진짜 기타」와 「매핑 누락」이 섞이지 않게 한다.
  *
  * ⚠️ 완제품·상품 대역(5·6) 밖의 자재는 DISPO·LV2 마스터 조회 대역 자체에 없어 둘 다 빈 값이다.
  * 그래서 팀은 `미분류`, 채널은 `미분류` 가 된다 — 지어내지 않고 그대로 드러낸다.
@@ -82,7 +83,7 @@ export function resolveSalesSegment(
     cm,
     category,
     team: teamLabelOf(cm, category),
-    channel: channelOfLv2(lv2),
+    channel: channelOfMaterial(materialCode, lv2),
     dispo,
     lv2,
   };

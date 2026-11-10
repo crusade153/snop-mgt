@@ -11,11 +11,12 @@
  * 반대 방향인 것이 의도다 — 거기는 「기준정보가 비어 있을 때만」 채우지만, 여기는 마스터 LV2 가
  * 채워져 있어도 사업부가 「기타로 본다」고 지정한 것이라 마스터 값이 이기면 안 된다.
  *
- * ⚠️ **채널 축에만 적용한다.** 팀별 축(CM·카테고리)과 매출 리포트(`/sales-report`)의 채널은 건드리지 않는다.
- * 그래도 재고를 옮기는 것뿐이라 **두 탭의 합계는 그대로 같다**(`verify:weekly` [7]).
+ * ⚠️ **채널 축에만 적용한다** — `/weekly` 「채널별」과 `/sales-report` 의 채널(사용자 확인 2026-11-10, 「매출도 기타로」).
+ * 팀별 축(CM·카테고리)은 건드리지 않는다. 재고·매출을 옮기는 것뿐이라 **합계는 그대로 같다**(`verify:weekly` [7]).
  *
  * 조회 시점에 판정하므로 이 표에 줄을 더하면 재적재 없이 과거 주차까지 같이 옮겨간다.
- * 줄을 더하거나 빼면 `actions/weekly-actions.ts` 의 `weekly-channel-board`·`weekly-detail` 캐시 키 버전을 올릴 것.
+ * 줄을 더하거나 빼면 `actions/weekly-actions.ts` 의 `weekly-channel-board`·`weekly-detail` 과
+ * `actions/sales-report-actions.ts` 의 `sales-report` 캐시 키 버전을 올릴 것.
  */
 
 /** 항상 `기타` 채널로 보내는 자재코드. 품명은 확인용 주석이다 */

@@ -308,9 +308,9 @@ middleware.ts             전 경로 인증 게이트
   갱신은 주간 적재(`lib/weekly-snapshot.ts`)가 매번 함께 돌리고, 관리자가 화면에서 「제품계층 갱신」으로 따로 누를 수도 있다.
   ⚠️ **사업부가 「항상 기타」로 지정한 자재 81품목(`lib/weekly/channel-overrides.ts`, 2026-11)은 LV2 보다 먼저 판정한다**(`channelOfMaterial`).
   자소용 반제품(엑기스·육수·액상스프)·굿즈·플래그쉽/파트너스 상품이고, LV2 로는 전부 B2B 에 잡히던 것이다(실측 재고 5.49억).
-  팀별 임시표와 달리 **폴백이 아니라 우선순위다** — 마스터 LV2 가 있어도 사업부 지정이 이긴다. **채널 축(`/weekly`)에만 적용**하고
-  `/sales-report` 의 채널(`channelOfLv2`)은 건드리지 않았다. 채널 축 판정은 메인 표·상세 모두 `channelOfMaterial` 로만 할 것 — `channelOfLv2` 를 직접 부르면 그 자리만 B2B 로 남아 합계가 갈린다.
-  목록을 바꾸면 `weekly-channel-board`·`weekly-detail` 캐시 키 버전을 올린다. 적용 금액은 화면에 별도 안내(`board.channelOverride`)로 드러낸다.
+  팀별 임시표와 달리 **폴백이 아니라 우선순위다** — 마스터 LV2 가 있어도 사업부 지정이 이긴다. **채널 축에만 적용**하고(`/weekly` 「채널별」 + `/sales-report` 채널 — 두 화면 채널 기준을 같게 유지) 팀 축은 건드리지 않는다.
+  채널 판정은 어디서든 `channelOfMaterial` 로만 할 것 — `channelOfLv2` 를 직접 부르면 그 자리만 B2B 로 남아 합계·화면이 갈린다.
+  목록을 바꾸면 `weekly-channel-board`·`weekly-detail`·`sales-report` 캐시 키 버전을 올린다. 적용 금액은 화면에 별도 안내(`board.channelOverride`)로 드러낸다.
   ⚠️ 이 표는 완제품 대역 전체라 **6천 행에 가깝다.** PostgREST 서버 상한(max-rows = 1000)에 잘리면 뒤쪽 자재가 통째로 미분류가 되므로 `loadLv2Map` 은 `range()` 페이징으로 읽는다 — 한 방 `select` 로 되돌리지 말 것.
 - 자재 공용/전용(`SHARED`/`DEDICATED`)은 **BOM 사실**로, 담당자 지분은 **최근 실적**으로 판정한다. 서로 다른 기준이며 의도된 것이다.
 

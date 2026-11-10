@@ -18,7 +18,9 @@
  * 공백을 정리하거나 정규화하면 그 줄이 통째로 `미분류` 로 떨어진다.
  */
 
-export type WeeklyChannel = 'B2C' | 'B2B' | '수출' | 'NPB/PB' | '기타' | '미분류';
+import { isChannelEtcMaterial } from '@/lib/weekly/channel-overrides';
+
+export type WeeklyChannel ='B2C' | 'B2B' | '수출' | 'NPB/PB' | '기타' | '미분류';
 
 /**
  * 화면 표의 행 순서. 사업부가 지정한 순서 그대로다(B2C → B2B → 수출 → NPB/PB → 기타).
@@ -154,6 +156,17 @@ export function channelOfLv2(lv2?: string | null): WeeklyChannel {
   const key = String(lv2 ?? '').trim();
   if (!key) return '미분류';
   return CHANNEL_BY_LV2[key] || '미분류';
+}
+
+/**
+ * 자재코드 + LV2 → 채널. **주간 장표 채널 축은 이 함수만 쓴다.**
+ *
+ * 사업부가 「항상 기타」로 지정한 자재(`lib/weekly/channel-overrides.ts`)가 LV2 보다 먼저다.
+ * 나머지는 `channelOfLv2` 그대로다. 메인 표·상세·위험 품목이 전부 이 함수를 거쳐야 합계가 안 갈린다.
+ */
+export function channelOfMaterial(materialCode: string | null | undefined, lv2?: string | null): WeeklyChannel {
+  if (isChannelEtcMaterial(materialCode)) return '기타';
+  return channelOfLv2(lv2);
 }
 
 /** 표 행 정렬 가중치. `WEEKLY_CHANNEL_ORDER` 순서를 그대로 쓴다 */

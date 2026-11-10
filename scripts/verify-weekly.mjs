@@ -83,7 +83,8 @@ const {
   buildWeeklyBoard, buildWeeklyChannelBoard, buildWeeklyDetail, resolveCm, sumBuckets,
   weeklyBucketKeyOf, weeklyUnder50KeyOf, buildBucketMovementNote,
 } = await import('@/lib/weekly/board');
-const { CHANNEL_BY_LV2, WEEKLY_CHANNEL_ORDER, channelOfLv2 } = await import('@/lib/weekly/channel');
+const { CHANNEL_BY_LV2, WEEKLY_CHANNEL_ORDER, channelOfLv2, channelOfMaterial } = await import('@/lib/weekly/channel');
+const { CHANNEL_ETC_MATERIALS } = await import('@/lib/weekly/channel-overrides');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -532,6 +533,12 @@ console.log('\n[7] 채널 축 (제품계층 LV2)');
     WEEKLY_CHANNEL_ORDER.join(',') === 'B2C,B2B,수출,NPB/PB,기타,미분류',
     WEEKLY_CHANNEL_ORDER.join(' → '));
 
+  // 사업부 지정 「항상 기타」 자재는 LV2 가 무엇이든 기타다(LV2 보다 우선).
+  check('기타 지정 자재는 LV2 와 상관없이 기타',
+    [...CHANNEL_ETC_MATERIALS].every((code) => channelOfMaterial(code, 'The미식 라면') === '기타') &&
+      channelOfMaterial('50000001', 'The미식 라면') === 'B2C',
+    `${CHANNEL_ETC_MATERIALS.size}품목`);
+
   check('매핑표가 5개 채널만 쓴다',
     Object.values(CHANNEL_BY_LV2).every((channel) => WEEKLY_CHANNEL_ORDER.includes(channel) && channel !== '미분류'),
     `${Object.keys(CHANNEL_BY_LV2).length}개 LV2`);
@@ -563,6 +570,23 @@ console.log('\n[7] 채널 축 (제품계층 LV2)');
     `출고 ${Math.round(channelBoard.totals.shippedValue).toLocaleString('ko-KR')} · 생산 ${Math.round(channelBoard.totals.producedValue).toLocaleString('ko-KR')} 원`);
   check('두 축의 구간별 금액 일치',
     Math.abs(sumBuckets(teamBoard.totals.buckets) - sumBuckets(channelBoard.totals.buckets)) < 5);
+
+  // 기타 지정 자재가 원래 어느 채널에 있었는지 — 이번 지정의 영향도.
+  {
+    const moved = new Map();
+    let movedValue = 0;
+    rows
+      .filter((row) => scopes.includes(row.storage_scope) && CHANNEL_ETC_MATERIALS.has(row.material_code))
+      .forEach((row) => {
+        const from = channelOfLv2(lv2Map.get(row.material_code));
+        moved.set(from, (moved.get(from) || 0) + (row.stock_value || 0));
+        movedValue += row.stock_value || 0;
+      });
+    check('기타 지정 금액 = 화면 안내 금액',
+      Math.abs(movedValue - channelBoard.channelOverride.value) < 5,
+      `${channelBoard.channelOverride.itemCount}품목 · ${Math.round(movedValue).toLocaleString('ko-KR')} 원 ← ` +
+        [...moved.entries()].map(([from, value]) => `${from} ${Math.round(value).toLocaleString('ko-KR')}`).join(' / '));
+  }
 
   // 7-3. 커버리지. 미분류가 커지면 매핑표에 줄을 더해야 한다는 신호다.
   const unmappedValue =

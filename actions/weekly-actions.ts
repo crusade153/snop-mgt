@@ -408,9 +408,10 @@ export async function getWeeklyChannelBoard(
   try {
     return await unstable_cache(
       () => buildChannelPayload(weekEnd || null, scopes),
+      // v6: 사업부 지정 「기타 채널」 자재 81품목(lib/weekly/channel-overrides.ts) + channelOverride 필드.
       // v5: 임시 카테고리표 2차(채널 축 자체는 그대로지만 상세 분류근거가 바뀐다).
       // v3: 50% 미만 세부 구간 추가. v2: 재고 비율의 분모를 완료된 전월 전체 출고·매출로 변경.
-      [`weekly-channel-board-v5-overrides2-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
+      [`weekly-channel-board-v6-channeletc-${weekEnd || 'latest'}-${[...scopes].sort().join('+')}`],
       { revalidate: 600, tags: ['report-data'] }
     )();
   } catch (error) {
@@ -539,8 +540,8 @@ export async function getWeeklyCategoryDetail(
         } satisfies WeeklyDetailPayload;
       },
       [
-        // v10: 임시 카테고리표 2차 추가. v8: 50% 미만 세부 구간 추가. v7: 상세의 출고 비율을 완료된 전월 전체 출고 기준으로 변경.
-        `weekly-detail-v10-overrides2-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
+        // v11: 사업부 지정 「기타 채널」 자재. v10: 임시 카테고리표 2차 추가. v8: 50% 미만 세부 구간 추가. v7: 상세의 출고 비율을 완료된 전월 전체 출고 기준으로 변경.
+        `weekly-detail-v11-channeletc-${weekEnd}-${category || 'ALL'}-${cm || 'ALL'}-${channel || 'ALL'}-${[
           ...scopes,
         ]
           .sort()

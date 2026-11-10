@@ -2188,6 +2188,19 @@ export default function WeeklyBoardPage() {
             </section>
           )}
 
+          {/* 3-1-1. 사업부 지정으로 기타에 넣은 재고 — 제품계층이 아니라 손으로 정한 값임을 숨기지 않는다 */}
+          {axis === 'channel' && channelBoard && channelBoard.channelOverride.itemCount > 0 && (
+            <section className="rounded-lg border border-sky-200 bg-sky-50 p-2.5 text-[11px] text-sky-900">
+              <h2 className="mb-1 flex items-center gap-1 text-xs font-bold">
+                <Info size={13} />
+                기타 채널 지정 품목 적용 중
+              </h2>
+              자소용 반제품·굿즈·플래그쉽/파트너스 상품 {channelBoard.channelOverride.itemCount}품목 ·{' '}
+              <b>{formatNoteAmount(channelBoard.channelOverride.value)}</b> 은 사업부 지정에 따라 제품계층과
+              상관없이 기타 채널로 집계했습니다(팀별 탭 분류는 그대로입니다).
+            </section>
+          )}
+
           {/* 3-2. 제품계층 마스터에 아예 없는 SKU — 매핑 누락과 원인이 다르므로 따로 알린다 */}
           {axis === 'channel' && channelBoard && channelBoard.missingHierarchy.itemCount > 0 && (
             <section className="rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 text-[11px] text-neutral-700">

@@ -7,8 +7,9 @@
  */
 
 import { isOverriddenMaterial } from '@/lib/weekly/category-overrides';
+import { isChannelEtcMaterial } from '@/lib/weekly/channel-overrides';
 import {
-  channelOfLv2,
+  channelOfMaterial,
   channelSortWeight,
   WEEKLY_CHANNEL_ORDER,
   type WeeklyChannel,
@@ -768,6 +769,11 @@ export interface WeeklyChannelBoardResult {
    * 이 값이 전액이면 `snop_material_hierarchy` 가 비어 있다는 뜻이다(적재 한 번이면 채워진다).
    */
   missingHierarchy: { value: number; itemCount: number };
+  /**
+   * 사업부 지정으로 LV2 와 상관없이 `기타` 에 넣은 SKU 의 재고금액(`lib/weekly/channel-overrides.ts`).
+   * 기준정보가 아니라 손으로 정한 값이라 화면에 따로 드러낸다(팀별 축의 `overrideMapped` 와 같은 원칙).
+   */
+  channelOverride: { value: number; itemCount: number };
 }
 
 /**
@@ -790,8 +796,9 @@ export function buildWeeklyChannelBoard({
   const byChannel = new Map<WeeklyChannel, WeeklyChannelRow>();
   const unmapped = new Map<string, { value: number; codes: Set<string> }>();
   const missing = { value: 0, codes: new Set<string>() };
+  const overridden = { value: 0, codes: new Set<string>() };
 
-  const channelOf = (row: WeeklySnapshotRow) => channelOfLv2(lv2Map.get(row.material_code));
+  const channelOf = (row: WeeklySnapshotRow) => channelOfMaterial(row.material_code, lv2Map.get(row.material_code));
 
   const touch = (row: WeeklySnapshotRow) => {
     const channel = channelOf(row);
@@ -810,6 +817,11 @@ export function buildWeeklyChannelBoard({
   current.filter(inScope).forEach((row) => {
     accumulateCurrent(touch(row), row);
 
+    if (isChannelEtcMaterial(row.material_code)) {
+      overridden.value += row.stock_value || 0;
+      overridden.codes.add(row.material_code);
+      return;
+    }
     if (channelOf(row) !== '미분류') return;
 
     const lv2 = String(lv2Map.get(row.material_code) ?? '').trim();
@@ -881,6 +893,7 @@ export function buildWeeklyChannelBoard({
       .map(([lv2, bucket]) => ({ lv2, value: bucket.value, itemCount: bucket.codes.size }))
       .sort((a, b) => b.value - a.value),
     missingHierarchy: { value: missing.value, itemCount: missing.codes.size },
+    channelOverride: { value: overridden.value, itemCount: overridden.codes.size },
   };
 }
 
@@ -1195,7 +1208,7 @@ export function buildWeeklyDetail({
     if (category && rowCategory !== category) return false;
     if (cm && resolveCm(row.material_code, rowCategory, cmMapping) !== cm) return false;
     // 채널 필터는 메인 채널 표와 **같은 판정 함수**를 쓴다. 여기서만 다르게 걸면 합계가 갈린다.
-    if (channel && channelOfLv2(lv2Of(row.material_code)) !== channel) return false;
+    if (channel && channelOfMaterial(row.material_code, lv2Of(row.material_code)) !== channel) return false;
     return true;
   };
 
@@ -1211,7 +1224,7 @@ export function buildWeeklyDetail({
         plant: plantOfCategory(rowCategory),
         category: rowCategory,
         lv2: lv2Of(row.material_code),
-        channel: channelOfLv2(lv2Of(row.material_code)),
+        channel: channelOfMaterial(row.material_code, lv2Of(row.material_code)),
         unit: row.unit || 'EA',
         stockQty: 0,
         stockValue: 0,
